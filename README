@@ -1,0 +1,5 @@
+this package depends on "cgi", for "ohttp.m" (though this will change in the future).
+
+to install, bind/symlink a mkconfig (e.g. from your inferno install), and:
+
+	mk install
