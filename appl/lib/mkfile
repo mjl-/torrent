@@ -1,0 +1,15 @@
+<../../mkconfig
+
+TARG=\
+	bitarray.dis\
+	bittorrent.dis\
+
+MODULES=\
+
+SYSMODULES=\
+	sys.m\
+	bufio.m\
+
+DISBIN=$ROOT/dis/lib
+
+<$ROOT/mkfiles/mkdis

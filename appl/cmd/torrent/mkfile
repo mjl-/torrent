@@ -1,0 +1,43 @@
+<../../../mkconfig
+
+DISBIN=$ROOT/dis
+
+TARG=\
+	parse.dis\
+	trackerget.dis\
+	get.dis\
+
+MODULES=\
+
+SYSMODULES=\
+	bufio.m\
+	bundle.m\
+	daytime.m\
+	draw.m\
+	env.m\
+	filepat.m\
+	filter.m\
+	fslib.m\
+	ir.m\
+	keyring.m\
+	man.m\
+	newns.m\
+	prefab.m\
+	readdir.m\
+	regex.m\
+	security.m\
+	sh.m\
+	srv.m\
+	string.m\
+	styx.m\
+	styxlib.m\
+	sys.m\
+	tk.m\
+	tkclient.m\
+	url.m\
+	webget.m\
+	workdir.m\
+
+DISBIN=$ROOT/dis/torrent
+
+<$ROOT/mkfiles/mkdis
