@@ -25,7 +25,7 @@ Torrentget: module {
 Dflag: int;
 
 torrent: ref Torrent;
-fd: ref Sys->FD;
+dstfd: ref Sys->FD;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -61,8 +61,8 @@ init(nil: ref Draw->Context, args: list of string)
 	say("trackget okay");
 
 	f := "torrentdata";
-	fd = sys->create(f, Sys->OWRITE, 8r666);
-	if(fd == nil)
+	dstfd = sys->create(f, Sys->OWRITE, 8r666);
+	if(dstfd == nil)
 		fail(sprint("create %s: %r", f));
 
 	print("interval=%d\n", interval);
@@ -73,6 +73,8 @@ init(nil: ref Draw->Context, args: list of string)
 	#peers = array[] of {("knaagkever.ueber.net", 22, array of byte "T03H-----eeuYHUFifYr")};
 	#if(len peers[0].t2 != 20)
 	#	fail("blah");
+
+	sys->pctl(Sys->NEWPGRP, nil);
 
 	for(i := 0; i < len peers; i++) {
 		(ip, port, peerid) := peers[i];
@@ -168,11 +170,14 @@ dopeer(ip: string, port: int, peerid: array of byte): string
 			piece.have.set(m.begin/Bitelength);
 
 			if(piecedone(piece)) {
-				n = sys->pwrite(fd, piece.d, len piece.d, big piece.index * big torrent.piecelen);
+				n = sys->pwrite(dstfd, piece.d, len piece.d, big piece.index * big torrent.piecelen);
 				if(n != len piece.d)
 					fail(sprint("writing piece: %r"));
-				if(piece.index+1 == len torrent.piecehashes)
-					fail(sprint("done!!!"));
+				if(piece.index+1 == len torrent.piecehashes) {
+					print("done!\n");
+					killgrp(sys->pctl(0, nil));
+					exit;
+				}
 				piece = torrent.mkpiece(piece.index+1);
 			}
 			(begin, length) = nextbite(piece);
@@ -227,6 +232,14 @@ pwriter(pfd: ref Sys->FD, mchan: chan of ref Msg)
 	}
 }
 
+
+killgrp(pid: int)
+{
+	path := sprint("/prog/%d/ctl", pid);
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd != nil)
+		fprint(fd, "killgrp");
+}
 
 fail(s: string)
 {

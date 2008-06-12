@@ -2,6 +2,7 @@
 
 MODS=\
 	bittorrent.m\
+	bitarray.m\
 
 MODDIR=$ROOT/module
 

@@ -6,6 +6,7 @@ TARG=\
 	parse.dis\
 	trackerget.dis\
 	get.dis\
+	verify.dis\
 
 MODULES=\
 
