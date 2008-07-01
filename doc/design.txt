@@ -81,7 +81,7 @@ state:
 - which peer addresses do we know
 - which peers are we connected to
 - what is the chokeness/interestedness status of the connected peers, remote and local
-- how many bites of a piece do we have?
+- how many blocks of a piece do we have?
 - for each peer, how much did we transfer in the past n (10) seconds?
 - last activity at all from peer
 
@@ -90,9 +90,9 @@ state:
 considerations:
 - we assign pieces to peers.  we don't let multiple peers deliver parts of the same piece.  this is to detect fraudulent peers later on.  we don't want to invalidate our entire piece.
 - the procs reading pieces from peers need to be directly connected to the procs that write to disk.  and vice versa (procs writing pieces from disk need to be connect to procs that read from disk).  if this weren't so, we could be building up huge buffers (e.g. for very slow disk):  we read more from the network than we write to disk.  by directly connecting them (through a buffered channel probably), the procs get some leeway but the situation does not get out of hand.
-- we send multiple bites to peers, queued.  we need to keep track of a queue of bites the remote side wants (if they queue too many request, we'll just have to disconnect them).  the queue has to be accessible because it may need to be flushed.
+- we send multiple blocks to peers, queued.  we need to keep track of a queue of blocks the remote side wants (if they queue too many request, we'll just have to disconnect them).  the queue has to be accessible because it may need to be flushed.
 - for a first implementation, we don't have to implement the end-game.  it's just an optimisation.
-- we might want to keep the main event-loop agnostic of bites.  and have the procs handling peer comm only send events when a whole piece is in.  nehh, i think not.  we also have to keep track of upload/download bytes, and we don't want to introduce special locking/channels to that end.
+- we might want to keep the main event-loop agnostic of blocks.  and have the procs handling peer comm only send events when a whole piece is in.  nehh, i think not.  we also have to keep track of upload/download bytes, and we don't want to introduce special locking/channels to that end.
 - for rarest-first, we have to keep track of how many peers have a piece.  it sounds reasonable to keep an array of piece-counts, each element the count for that piece.  we only need to keep track of it while in rarest-first mode.  at the very first, we can do without.
 
 
@@ -100,7 +100,7 @@ writing/reading from the network/disk is a big issue, so it gets its own "sectio
 
 reading from peer/writing to disk:
 - done in a proc, "peer net reader".  messages are read, and sent on a buffered channel with low capacity, say 4 messages.  the other proc is called "peer disk writer".
-- "peer disk writer" checks if message is a bite.  if so, it checks whether it is expected.  if so, it writes it to disk.  if not it discards the message, making sure it doesn't count as download traffic.  now it forwards the message to the main event loop.
+- "peer disk writer" checks if message is a block.  if so, it checks whether it is expected.  if so, it writes it to disk.  if not it discards the message, making sure it doesn't count as download traffic.  now it forwards the message to the main event loop.
 - peerdiskwriter checks whether a message is allowed by asking piecekeeper, over a channel.  piecekeepers data is kept updated by main.
 - all messages from peernetreader go through peerdiskwriter.  this is to ensure messages are delivered in-order.
 - the channel between peerdiskwriter and main is not buffered.  main should always be available.
@@ -111,10 +111,10 @@ writing to peer/reading from disk:
 - we want to keep peer updated on chokeness/interestedness, cancels and requests
 - data we send is much bulkier and does not have such a high priority.  thus we create two channels to send on, one for pieces/bulk/low-priority, one for meta/small/high-priority
 - main will have to queue new requests and dequeue when receiving cancel messages
-- proc peernetwriter will receive messages from the two channels and write to the peer.  messages with bites already contain their data, which has been read from disk.
+- proc peernetwriter will receive messages from the two channels and write to the peer.  messages with blocks already contain their data, which has been read from disk.
 - once data has been read from disk, we always send it.  the worst we do is that the peer receives data he no longer wants, and probably won't count it for reciprocation.  if we were to drop the data, we might have a denial of service:  the peer can time messages so that we drop it just after reading it from disk, wasting our disk bandwidth.
-- the channel with the bulk/bite/data messages, read by peernetwriter, is filled by peerdiskreader on the other side.  non-bite messages do not pass through this proc.  the channel is buffered for a few data messages.
-- peerdiskreader requests info for next bite to read from main, over channel.  main will keep channel when no next bite has been requested.  where there is a next bite (either because it came in or it was already in the queue), the request is responded to with the new bite info, over a response channel given in the original request.
+- the channel with the bulk/block/data messages, read by peernetwriter, is filled by peerdiskreader on the other side.  non-block messages do not pass through this proc.  the channel is buffered for a few data messages.
+- peerdiskreader requests info for next block to read from main, over channel.  main will keep channel when no next block has been requested.  where there is a next block (either because it came in or it was already in the queue), the request is responded to with the new block info, over a response channel given in the original request.
 - xxx perhaps we should drop messages when peer chokes us and later unchokes us?  makes sense.  on choke, we can probably send a special "flush data messages from peerdiskreader"-message.
 
 

@@ -82,7 +82,7 @@ Peersmax: con 40;
 Peeridlen:	con 20;
 Listenport:	con 6881;
 MinInterval:	con 30;
-Bitelength:	con 1<<14;
+Blocklength:	con 1<<14;
 DefaultInterval:	con 1800;
 WantUnchokedCount:	con 4;
 Stablesecs:	con 10;
@@ -414,12 +414,12 @@ main()
 
 			piece := peer.curpiece;
 
-			(begin, length) := nextbite(piece);
+			(begin, length) := nextblock(piece);
 			if(m.begin != begin || len m.d != length)
 				fail(sprint("%s sent bad begin (have %d, want %d) or length (%d, %d)", peer.text(), m.begin, begin, len m.d, length));
 
 			piece.d[m.begin:] = m.d;
-			piece.have.set(m.begin/Bitelength);
+			piece.have.set(m.begin/Blocklength);
 
 			if(piece.isdone()) {
 				piecehave.set(piece.index);
@@ -441,7 +441,7 @@ main()
 			say(sprint("remote sent request, ignoring"));
 
 		Cancel =>
-			say(sprint("remote sent cancel for piece=%d bite=%d length=%d", m.index, m.begin, m.length));
+			say(sprint("remote sent cancel for piece=%d block=%d length=%d", m.index, m.begin, m.length));
 
 		}
 	}
@@ -583,8 +583,8 @@ setpiece(peer: ref Peer, index: int): ref Piece
 		if(piecelen == 0)
 			piecelen = torrent.piecelen;
 	}
-	nbites := (piecelen+Bitelength-1)/Bitelength;
-	piece := ref Piece(index, array[piecelen] of byte, Bits.new(nbites));
+	nblocks := (piecelen+Blocklength-1)/Blocklength;
+	piece := ref Piece(index, array[piecelen] of byte, Bits.new(nblocks));
 
 	say(sprint("assigned %s to %s", piece.text(), peer.text()));
 	peer.curpiece = piece;
@@ -612,18 +612,18 @@ schedreq(peer: ref Peer)
 	piece := peer.curpiece;
 
 	if(piece != nil) {
-		(begin, length) := nextbite(piece);
-		say(sprint("requesting next bite, begin %d, length %d, %s", begin, length, piece.text()));
+		(begin, length) := nextblock(piece);
+		say(sprint("requesting next block, begin %d, length %d, %s", begin, length, piece.text()));
 		peer.outmsgs <-= ref Msg.Request(piece.index, begin, length);
 	}
 }
 
 
-nextbite(p: ref Piece): (int, int)
+nextblock(p: ref Piece): (int, int)
 {
 	# request sequentially, may change
-	begin := Bitelength*p.have.have;
-	length := Bitelength;
+	begin := Blocklength*p.have.have;
+	length := Blocklength;
 	if(len p.d-begin < length)
 		length = len p.d-begin;
 	return (begin, length);
