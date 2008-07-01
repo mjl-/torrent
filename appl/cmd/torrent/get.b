@@ -34,18 +34,17 @@ piecechan: chan of (int, int, int, chan of int);
 Add, Remove, Request: con iota;
 
 # tracker
-trackchan: chan of (array of Trackerpeer, string);
+trackchan: chan of (array of (string, int, array of byte), string);
 
-Trackerpeer: adt {
-	ip:	string;
-	port:	int;
-	peerid:	array of byte;
+Newpeer: adt {
+	addr:	string;
+	peerid:	array of byte;  # may be nil, for incoming connections
 
-	text:	fn(tp: self Trackerpeer): string;
+	text:	fn(np: self Newpeer): string;
 };
 
-# dialer
-peerdialchan: chan of (Trackerpeer, ref Sys->FD, array of byte, array of byte, string);
+# dialer/listener
+newpeerchan: chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 
 Piece: adt {
 	index:	int;
@@ -59,7 +58,7 @@ Piece: adt {
 
 Peer: adt {
 	id:	int;
-	tp:	Trackerpeer;
+	np:	Newpeer;
 	fd:	ref Sys->FD;
 	extensions, peerid: array of byte;
 	outmsgs:	chan of ref Msg;
@@ -68,7 +67,7 @@ Peer: adt {
 	state:	int;
 	msgseq:	int;
 
-	new:	fn(tp: Trackerpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer;
+	new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer;
 	remotechoked:	fn(p: self ref Peer): int;
 	remoteinterested:	fn(p: self ref Peer): int;
 	localchoked:	fn(p: self ref Peer): int;
@@ -83,7 +82,9 @@ Dialtimeout: con 20;  # timeout for connecting to peer
 Peersmax: con 40;
 
 Peeridlen:	con 20;
+Listenhost:	con "*";
 Listenport:	con 6881;
+Listenportrange:	con 100;
 MinInterval:	con 30;
 Blocklength:	con 1<<14;
 DefaultInterval:	con 1800;
@@ -98,7 +99,7 @@ RemoteChoked, RemoteInterested, LocalChoked, LocalInterested: con (1<<iota);
 
 # progress/state
 ndialers: int;  # number of active dialers
-trackerpeers: list of Trackerpeer;  # peers we are not connected to
+trackerpeers: list of Newpeer;  # peers we are not connected to
 peers: list of ref Peer;  # peers we are connected to
 peergen: int;  # sequence number for peers
 piecehave: ref Bits;
@@ -145,8 +146,8 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP, nil);
 
 	piecechan = chan of (int, int, int, chan of int);
-	trackchan = chan of (array of Trackerpeer, string);
-	peerdialchan = chan of (Trackerpeer, ref Sys->FD, array of byte, array of byte, string);
+	trackchan = chan of (array of (string, int, array of byte), string);
+	newpeerchan = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 
 	peers = nil;
 	piecehave = Bits.new(len torrent.piecehashes);
@@ -156,16 +157,17 @@ init(nil: ref Draw->Context, args: list of string)
 
 	spawn piecekeeper();
 	spawn track();
+	spawn listener();
 	main();
 }
 
-trackerpeerdel(tp: Trackerpeer)
+trackerpeerdel(np: Newpeer)
 {
 	n := trackerpeers;
 	n = nil;
 	for(; trackerpeers != nil; trackerpeers = tl trackerpeers) {
 		e := hd trackerpeers;
-		if(e.ip == tp.ip && e.port == tp.port)
+		if(e.addr == np.addr)
 			;
 		else
 			n = hd trackerpeers::n;
@@ -173,30 +175,33 @@ trackerpeerdel(tp: Trackerpeer)
 	trackerpeers = n;
 }
 
-trackerpeeradd(tp: Trackerpeer)
+trackerpeeradd(np: Newpeer)
 {
-	trackerpeers = tp::trackerpeers;
+	trackerpeers = np::trackerpeers;
 }
 
-trackerpeertake(): Trackerpeer
+trackerpeertake(): Newpeer
 {
-	tp := hd trackerpeers;
+	np := hd trackerpeers;
 	trackerpeers = tl trackerpeers;
-	return tp;
+	return np;
 }
 
 
-Trackerpeer.text(tp: self Trackerpeer): string
+Newpeer.text(np: self Newpeer): string
 {
-	return sprint("(trackerpeer %s!%d peerid %s)", tp.ip, tp.port, string tp.peerid);
+	peerid := "nil";
+	if(np.peerid != nil)
+		peerid = string np.peerid;
+	return sprint("(newpeer %s peerid %s)", np.addr, peerid);
 }
 
 
-peerconnected(ip: string, port: int): int
+peerconnected(addr: string): int
 {
 	for(l := peers; l != nil; l = tl l) {
 		e := hd l;
-		if(e.tp.ip == ip && e.tp.port == port)
+		if(e.np.addr == addr)
 			return 1;
 	}
 	return 0;
@@ -224,21 +229,21 @@ dialpeers()
 	say(sprint("dialpeers, %d trackerpeers %d peers", len trackerpeers, len peers));
 
 	while(trackerpeers != nil && ndialers < Dialersmax && len peers < Peersmax) {
-		tp := trackerpeertake();
-		say("spawning dialproc for "+tp.text());
-		spawn dialer(tp);
+		np := trackerpeertake();
+		say("spawning dialproc for "+np.text());
+		spawn dialer(np);
 		ndialers++;
 	}
 }
 
 
 
-Peer.new(tp: Trackerpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer
+Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer
 {
 	outmsgs := chan of ref Msg;
 	state := RemoteChoked|LocalChoked;
 	msgseq := 0;
-	return ref Peer(peergen++, tp, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq);
+	return ref Peer(peergen++, np, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq);
 }
 
 Peer.remotechoked(p: self ref Peer): int
@@ -263,12 +268,12 @@ Peer.localinterested(p: self ref Peer): int
 
 Peer.text(p: self ref Peer): string
 {
-	return sprint("<peer %s!%d id %d>", p.tp.ip, p.tp.port, p.id);
+	return sprint("<peer %s id %d>", p.np.addr, p.id);
 }
 
 Peer.fulltext(p: self ref Peer): string
 {
-	return sprint("<peer %s, id %d, peerid %s>", p.tp.text(), p.id, string p.peerid);
+	return sprint("<peer %s, id %d, peerid %s>", p.np.text(), p.id, string p.peerid);
 }
 
 
@@ -300,32 +305,35 @@ main()
 		} else {
 			say("main, new peers");
 			for(i := 0; i < len newpeers; i++) {
-				tp := Trackerpeer newpeers[i];
-				say("new: "+tp.text());
-				trackerpeerdel(tp);
-				if(!peerconnected(tp.ip, tp.port))
-					trackerpeeradd(tp);
+				(ip, port, peerid) := newpeers[i];
+				np := Newpeer(sprint("%s!%d", ip, port), peerid);
+				say("new: "+np.text());
+				trackerpeerdel(np);
+				if(!peerconnected(np.addr))
+					trackerpeeradd(np);
 				else
-					say("already connected to "+tp.text());
+					say("already connected to "+np.text());
 			}
 		}
 		dialpeers();
 
-	(tp, peerfd, extensions, peerid, dialerr) := <-peerdialchan =>
-		if(dialerr != nil) {
-			warn(sprint("dial peer %s: %s", string tp.peerid, dialerr));
+	(dialed, np, peerfd, extensions, peerid, err) := <-newpeerchan =>
+		if(err != nil) {
+			warn(sprint("%s: %s", np.text(), err));
 		} else {
-			peer := Peer.new(tp, peerfd, extensions, peerid);
+			peer := Peer.new(np, peerfd, extensions, peerid);
 			spawn peernetreader(peer);
 			spawn peernetwriter(peer);
 			peeradd(peer);
-			say("dialed peer "+peer.fulltext());
+			say("new peer "+peer.fulltext());
 
 			# xxx should send our bitfield instead
 			peer.outmsgs <-= ref Msg.Keepalive();
 		}
-		ndialers--;
-		dialpeers();
+		if(dialed) {
+			ndialers--;
+			dialpeers();
+		}
 
 	(peer, msg) := <-peerinmsgchan =>
 		# xxx fix this code.  it can easily block now
@@ -485,6 +493,55 @@ track()
 	}
 }
 
+listener()
+{
+	aok := -1;
+	aconn: Sys->Connection;
+	listenaddr: string;
+
+	for(i := 0; i < Listenportrange; i++) {
+		listenaddr = sprint("net!%s!%d", Listenhost, Listenport+i);
+		(aok, aconn) = sys->announce(listenaddr);
+		if(aok == 0)
+			break;
+	}
+
+	if(aok != 0) {
+		say("could not listen on any port, incoming connections will not be possible...");
+		return;
+	}
+
+	say(sprint("listening on addr %s", listenaddr));
+
+	for(;;) {
+		(ok, conn) := sys->listen(aconn);
+		if(ok != 0) {
+			warn(sprint("listen: %r"));
+			continue;
+		}
+
+		remote := conn.dir+"/remote";
+		(remaddr, rerr) := readfile(remote);
+		if(rerr != nil) {
+			warn(sprint("reading %s: %s", remote, rerr));
+			continue;
+		}
+
+		f := conn.dir+"/data";
+		fd := sys->open(f, Sys->ORDWR);
+		if(fd == nil) {
+			warn(sprint("new connection, open %s: %r", f));
+			continue;
+		}
+
+		(extensions, peerid, err) := handshake(fd);
+		np := Newpeer(remaddr, nil);
+		if(err != nil)
+			say("error handshaking incoming connection: "+err);
+		newpeerchan <-= (0, np, fd, extensions, peerid, err);
+	}
+}
+
 
 piecekeeper()
 {
@@ -519,25 +576,27 @@ nextreq:
 }
 
 
-dialer(tp: Trackerpeer)
-{
-	err := _dialer(tp);
-	if(err != nil)
-		peerdialchan <-= (tp, nil, nil, nil, err);
-	# otherwise, _dialer sent success
-}
-
-_dialer(tp: Trackerpeer): string
+dialer(np: Newpeer)
 {
 	# xxx use timeout
-	addr := sprint("net!%s!%d", tp.ip, tp.port);
+	addr := sprint("net!%s", np.addr);
 	(ok, conn) := sys->dial(addr, nil);
-	if(ok < 0)
-		return sprint("dial %s: %r", addr);
+	if(ok < 0) {
+		newpeerchan <-= (1, np, nil, nil, nil, sprint("dial %s: %r", addr));
+		return;
+	}
 
 	say("dialed "+addr);
 	fd := conn.dfd;
 
+	(extensions, peerid, err) := handshake(fd);
+	if(err != nil)
+		fd = nil;
+	newpeerchan <-= (1, np, fd, extensions, peerid, err);
+}
+
+handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
+{
 	d := array[20+8+20+20] of byte;
 	i := 0;
 	d[i++] = byte 19;
@@ -554,20 +613,19 @@ _dialer(tp: Trackerpeer): string
 
 	n := sys->write(fd, d, len d);
 	if(n != len d)
-		return sprint("writing peer header: %r");
+		return (nil, nil, sprint("writing peer header: %r"));
 
 	rd := array[len d] of byte;
 	n = sys->readn(fd, rd, len rd);
 	if(n < 0)
-		return sprint("reading peer header: %r");
+		return (nil, nil, sprint("reading peer header: %r"));
 	if(n != len rd)
-		return sprint("short read on peer header (%d)", n);
+		return (nil, nil, sprint("short read on peer header (%d)", n));
 
 	extensions := rd[20:20+8];
 	peerid := rd[20+8+20:];
 
-	peerdialchan <-= (tp, fd, extensions, peerid, nil);
-	return nil;
+	return (extensions, peerid, nil);
 }
 
 wantpeerpieces(p: ref Peer): ref Bits
@@ -673,6 +731,17 @@ peernetwriter(peer: ref Peer)
 	}
 }
 
+
+readfile(f: string): (string, string)
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return (nil, sprint("open: %r"));
+	n := sys->readn(fd, buf := array[Sys->ATOMICIO] of byte, len buf);
+	if(n < 0)
+		return (nil, sprint("read: %r"));
+	return (string buf[:n], nil);
+}
 
 hex(d: array of byte): string
 {
