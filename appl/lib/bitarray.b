@@ -4,7 +4,7 @@ include "bitarray.m";
 
 Bits.new(n: int): ref Bits
 {
-	return ref Bits(array[(n+8-1)/8] of { * => byte 0}, n, 0);
+	return ref Bits(array[(n+8-1)/8] of {* => byte 0}, n, 0);
 }
 
 Bits.clone(b: self ref Bits): ref Bits
@@ -53,4 +53,15 @@ Bits.and(b1, b2: ref Bits): ref Bits
 		if(b.get(i))
 			b.have++;
 	return b;
+}
+
+Bits.text(b: self ref Bits): string
+{
+	s := "";
+	for(i := 0; i < b.n; i++)
+		if(b.get(i))
+			s += "1";
+		else
+			s += "0";
+	return s;
 }

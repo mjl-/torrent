@@ -12,5 +12,6 @@ Bitarray: module {
 		clear:	fn(b: self ref Bits, i: int);
 		invert:	fn(b: self ref Bits);
 		and:	fn(b1, b2: ref Bits): ref Bits;
+		text:	fn(b: self ref Bits): string;
 	};
 };
