@@ -17,7 +17,7 @@ keyring: Keyring;
 bittorrent: Bittorrent;
 
 print, sprint, fprint, fildes: import sys;
-Bee, Msg, Torrent, Bitelength: import bittorrent;
+Bee, Msg, Torrent: import bittorrent;
 
 
 Torrentverify: module {

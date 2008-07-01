@@ -15,7 +15,7 @@ sys: Sys;
 bittorrent: Bittorrent;
 
 print, sprint, fprint, fildes: import sys;
-Bee, Msg, Torrent, Bitelength: import bittorrent;
+Bee, Msg, Torrent: import bittorrent;
 
 
 Torrentget: module {
@@ -50,6 +50,7 @@ Piece: adt {
 	d:	array of byte;
 	have:	ref Bits;
 
+	isdone:	fn(p: self ref Piece): int;
 	text:	fn(p: self ref Piece): string;
 };
 
@@ -60,8 +61,15 @@ Peer: adt {
 	extensions, peerid: array of byte;
 	outmsgs:	chan of ref Msg;
 	curpiece:	ref Piece;
+	piecehave:	ref Bits;
+	state:	int;
+	msgseq:	int;
 
 	new:	fn(tp: Trackerpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer;
+	remotechoked:	fn(p: self ref Peer): int;
+	remoteinterested:	fn(p: self ref Peer): int;
+	localchoked:	fn(p: self ref Peer): int;
+	localinterested:	fn(p: self ref Peer): int;
 	text:	fn(p: self ref Peer): string;
 	fulltext:	fn(p: self ref Peer): string;
 };
@@ -70,6 +78,20 @@ Peer: adt {
 Dialersmax: con 5;  # max number of dialer procs
 Dialtimeout: con 20;  # timeout for connecting to peer
 Peersmax: con 40;
+
+Peeridlen:	con 20;
+Listenport:	con 6881;
+MinInterval:	con 30;
+Bitelength:	con 1<<14;
+DefaultInterval:	con 1800;
+WantUnchokedCount:	con 4;
+Stablesecs:	con 10;
+Minscheduled:	con 6;
+Maxdialedpeers:	con 20;
+
+# Peer.state
+RemoteChoked, RemoteInterested, LocalChoked, LocalInterested: con (1<<iota);
+
 
 # progress/state
 ndialers: int;  # number of active dialers
@@ -210,7 +232,29 @@ dialpeers()
 Peer.new(tp: Trackerpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer
 {
 	outmsgs := chan of ref Msg;
-	return ref Peer(peergen++, tp, fd, extensions, peerid, outmsgs, nil);
+	state := RemoteChoked|LocalChoked;
+	msgseq := 0;
+	return ref Peer(peergen++, tp, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq);
+}
+
+Peer.remotechoked(p: self ref Peer): int
+{
+	return p.state & RemoteChoked;
+}
+
+Peer.remoteinterested(p: self ref Peer): int
+{
+	return p.state & RemoteInterested;
+}
+
+Peer.localchoked(p: self ref Peer): int
+{
+	return p.state & LocalChoked;
+}
+
+Peer.localinterested(p: self ref Peer): int
+{
+	return p.state & LocalInterested;
 }
 
 Peer.text(p: self ref Peer): string
@@ -224,6 +268,11 @@ Peer.fulltext(p: self ref Peer): string
 }
 
 
+
+Piece.isdone(p: self ref Piece): int
+{
+	return p.have.n == p.have.have;
+}
 
 Piece.text(p: self ref Piece): string
 {
@@ -275,43 +324,87 @@ main()
 			continue;
 		}
 
+		peer.msgseq++;
+
 		pick m := msg {
                 Keepalive =>
 			say("keepalive");
 
 		Choke =>
-			say("we are choked");
+			if(peer.remotechoked()) {
+				say(sprint("%s choked us twice...", peer.text()));
+				continue;
+			}
+
+			say(sprint("%s choked us...", peer.text()));
+			peer.state |= RemoteChoked;
 
 		Unchoke =>
-			say("we are unchoked");
-			if(peer.curpiece == nil) {
-				peer.curpiece = getpiece();
-				say("starting with new piece after unchoke: "+peer.curpiece.text());
+			if(!peer.remotechoked()) {
+				say(sprint("%s unchoked us twice...", peer.text()));
+				continue;
 			}
 
-			piece := peer.curpiece;
-			if(piece != nil) {
-				(begin, length) := nextbite(piece);
-				say(sprint("requesting next bite, begin %d length %d", begin, length));
-				peer.outmsgs <-= ref Msg.Request(piece.index, begin, length);
-			}
+			say(sprint("%s unchoked us", peer.text()));
+			peer.state &= ~RemoteChoked;
+
+			if(peer.curpiece == nil)
+				getpiece(peer);
+
+			schedreq(peer);
 
 		Interested =>
-			say("remote is interested");
+			if(peer.remoteinterested()) {
+				say(sprint("%s is interested again...", peer.text()));
+				continue;
+			}
+
+			say(sprint("%s is interested", peer.text()));
+			peer.state |= RemoteInterested;
 
 		Notinterested =>
-			say("remote not interested");
+			if(!peer.remoteinterested()) {
+				say(sprint("%s is uninterested again...", peer.text()));
+				continue;
+			}
+
+			say(sprint("%s is no longer interested", peer.text()));
+			peer.state &= ~RemoteInterested;
 
                 Have =>
-			say(sprint("remote now has index=%d", m.index));
+			if(m.index >= len torrent.piecehashes) {
+				say(sprint("%s sent 'have' for invalid piece %d", peer.text(), m.index));
+				# xxx close connection?
+				continue;
+			}
+			if(peer.piecehave.get(m.index))
+				say(sprint("%s already had piece %d", peer.text(), m.index));
+
+			say(sprint("remote now has piece %d", m.index));
+			peer.piecehave.set(m.index);
+
+			interesting(peer);
+			if(!peer.remotechoked() && peer.curpiece == nil) {
+				getpiece(peer);
+				schedreq(peer);
+			}
 
                 Bitfield =>
-			s := "";
-			for(i := 0; i < len m.d; i++)
-				s += sprint("%02x", int m.d[i]);
-			say("remote sent bitfield: "+s);
-			say("assuming it has all pieces..."); # xxx
-			peer.outmsgs <-= ref Msg.Interested();
+			if(peer.msgseq != 1) {
+				say(sprint("%s sent bitfield after first message, ignoring...", peer.text()));
+				continue;
+			}
+
+			err: string;
+			(peer.piecehave, err) = Bits.mk(len torrent.piecehashes, m.d);
+			if(err != nil) {
+				say(sprint("%s sent bogus bitfield message: %s", peer.text(), err));
+				# xxx
+				continue;
+			}
+			say("remote sent bitfield, haves "+peer.piecehave.text());
+
+			interesting(peer);
 
                 Piece =>
 			# xxx check if we are expecting piece
@@ -328,7 +421,7 @@ main()
 			piece.d[m.begin:] = m.d;
 			piece.have.set(m.begin/Bitelength);
 
-			if(piecedone(piece)) {
+			if(piece.isdone()) {
 				piecehave.set(piece.index);
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
@@ -336,15 +429,10 @@ main()
 				n := sys->pwrite(dstfd, piece.d, len piece.d, big piece.index * big torrent.piecelen);
 				if(n != len piece.d)
 					fail(sprint("writing piece: %r"));
-				peer.curpiece = piece = getpiece();
-				if(piece != nil)
-					say("starting on next piece after piece done: "+piece.text());
+
+				piece = getpiece(peer);
 			}
-			if(piece != nil) {
-				(begin, length) = nextbite(piece);
-				say(sprint("requesting next bite, begin %d, length %d, %s", begin, length, piece.text()));
-				peer.outmsgs <-= ref Msg.Request(piece.index, begin, length);
-			}
+			schedreq(peer);
 
 			if(piecehave.n == piecehave.have)
 				print("DONE!\n");
@@ -464,20 +552,31 @@ _dialer(tp: Trackerpeer): string
 	return nil;
 }
 
-
-getpiece(): ref Piece
+wantpeerpieces(p: ref Peer): ref Bits
 {
-	index := -1;
-	for(i := 0; i < piecehave.n; i++)
-		if(!piecehave.get(i) && !piecebusy.get(i)) {
-			index = i;
-			break;
-		}
-	if(index < 0)
-		return nil;
+	b := Bits.union(array[] of {piecehave, piecebusy});
+	b.invert();
+	b = Bits.and(array[] of {p.piecehave, b});
 
-	piecebusy.set(index);
+	say("pieces peer has and we are interested in: "+b.text());
+	return b;
+}
 
+interesting(p: ref Peer)
+{
+	if(p.localinterested())
+		return;
+
+	b := wantpeerpieces(p);
+	if(!b.isempty()) {
+		say("we are now interested in "+p.text());
+		p.state |= LocalInterested;
+		p.outmsgs <-= ref Msg.Interested();
+	}
+}
+
+setpiece(peer: ref Peer, index: int): ref Piece
+{
 	piecelen := torrent.piecelen;
 	if(index+1 == len torrent.piecehashes) {
 		piecelen = int (torrent.length % big torrent.piecelen);
@@ -485,13 +584,40 @@ getpiece(): ref Piece
 			piecelen = torrent.piecelen;
 	}
 	nbites := (piecelen+Bitelength-1)/Bitelength;
-	return ref Piece(index, array[piecelen] of byte, Bits.new(nbites));
+	piece := ref Piece(index, array[piecelen] of byte, Bits.new(nbites));
+
+	say(sprint("assigned %s to %s", piece.text(), peer.text()));
+	peer.curpiece = piece;
+	piecebusy.set(index);
+
+	return piece;
 }
 
-piecedone(p: ref Piece): int
+getpiece(peer: ref Peer): ref Piece
 {
-	return p.have.n == p.have.have;
+	b := wantpeerpieces(peer);
+	if(!b.isempty()) {
+		for(i := 0; i < b.n; i++)
+			if(b.get(i))
+				return setpiece(peer, i);
+	}
+
+	say("no piece to get from "+peer.text());
+	peer.curpiece = nil;
+	return nil;
 }
+
+schedreq(peer: ref Peer)
+{
+	piece := peer.curpiece;
+
+	if(piece != nil) {
+		(begin, length) := nextbite(piece);
+		say(sprint("requesting next bite, begin %d, length %d, %s", begin, length, piece.text()));
+		peer.outmsgs <-= ref Msg.Request(piece.index, begin, length);
+	}
+}
+
 
 nextbite(p: ref Piece): (int, int)
 {

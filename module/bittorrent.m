@@ -1,19 +1,6 @@
 Bittorrent: module {
 	PATH:	con "/dis/lib/bittorrent.dis";
 
-        Peeridlen:	con 20;
-        Listenport:	con 6881;
-        MinInterval:	con 30;
-        Bitelength:	con 1<<14;
-        DefaultInterval:	con 1800;
-        WantUnchokedCount:	con 4;
-        Stablesecs:	con 10;
-        Minscheduled:	con 6;
-        Maxdialedpeers:	con 20;
-        Maxpeers:	con 40;
-
-        Connecting, Valid, Bad, RemoteChoked, RemoteInterested, LocalChoked, LocalInterested: con (1<<iota);
-
 	init:	fn(bitarray: Bitarray);
 
 	Bee: adt {
