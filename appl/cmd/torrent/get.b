@@ -6,12 +6,14 @@ include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "arg.m";
+include "keyring.m";
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
 
 sys: Sys;
+keyring: Keyring;
 bittorrent: Bittorrent;
 
 print, sprint, fprint, fildes: import sys;
@@ -51,6 +53,7 @@ Piece: adt {
 	have:	ref Bits;
 
 	isdone:	fn(p: self ref Piece): int;
+	hash:	fn(p: self ref Piece): array of byte;
 	text:	fn(p: self ref Piece): string;
 };
 
@@ -110,6 +113,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
+	keyring = load Keyring Keyring->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init(bitarray);
@@ -274,6 +278,13 @@ Piece.isdone(p: self ref Piece): int
 	return p.have.n == p.have.have;
 }
 
+Piece.hash(p: self ref Piece): array of byte
+{
+	hash := array[Keyring->SHA1dlen] of byte;
+	keyring->sha1(p.d, len p.d, hash, nil);
+	return hash;
+}
+
 Piece.text(p: self ref Piece): string
 {
 	return sprint("<piece %d have %s>", p.index, p.have.text());
@@ -422,6 +433,13 @@ main()
 			piece.have.set(m.begin/Blocklength);
 
 			if(piece.isdone()) {
+				wanthash := hex(torrent.piecehashes[piece.index]);
+				havehash := hex(piece.hash());
+				if(wanthash != havehash) {
+					say(sprint("%s from %s did not check out, want %s, have %s", piece.text(), peer.text(), wanthash, havehash));
+					# xxx disconnect peer?
+					continue;
+				}
 				piecehave.set(piece.index);
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
@@ -655,6 +673,14 @@ peernetwriter(peer: ref Peer)
 	}
 }
 
+
+hex(d: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len d; i++)
+		s += sprint("%02x", int d[i]);
+	return s;
+}
 
 killgrp(pid: int)
 {
