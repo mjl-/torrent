@@ -1,0 +1,149 @@
+program lifetime:
+- parse torrent file
+- open/create destination file
+	if open existing, also check .torrent.pieces file.
+		if it exists, use it to determine progress
+		else, read all data to determine current state
+- spawn proc that keeps track of pieces
+- spawn proc that connects to tracker
+- spawn proc that accepts incoming connections
+- start main event loop
+
+
+events:
+every 10 seconds:
+	determine highest up/down speed, change chokedness accordingly
+every 30 seconds:
+	determine new optimistic unchoke
+every n minutes:
+	send new tracker request
+new list of peers from tracker:
+	merge in list of known peer to which we are not connected
+	if below max number of connections, spawn proc to dial peers
+error from tracker:
+	log it somewhere, not much else to do
+dialed new peer:
+	spawn proc to initialize connection, sending bitstring of pieces we have, and reading response from remote
+initialized peer:
+	set state (choked/unchoked), possibly request pieces?  perhaps that should be handled in one place at another event
+incoming from remote peer:
+	unchoke:
+		we can send requests now.
+		based on gamestate (endgame, rarest-first, random, seeding), we start sending out requests.  more than one, to keep the pipeline filled.
+	choke:
+		arrr, peer didn't like us.  what to do when we were halfway through a piece?  let it finish by new peer?  or just discard?  finishing is most efficient for now, at least as long as do don't retaliate
+	interested:
+		we have something peer wants.  perhaps he is lucky and gets a piece soon, at next chokeround.
+	not interested:
+		peer got a piece and no longer thinks we are interesting.
+		cancel all his pieces.  keep connected, he may still send us data.
+	have:
+		peer has some piece.  perhaps we want it.  if we are unchoked by remote, and are not currently busy with a piece, we should start requesting that piece.
+	request:
+		peer wants a part of some piece.
+		check if he is really unchoked (if not, discard message)
+		check if we have this piece (if not, discard message)
+		queue request somewhere, making sure it gets send to the remote peer eventually
+	cancel:
+		peer no longer wants a part of some piece he previously requested
+		remote from the queue (if it is there at all)
+	piece:
+		we have a part of a piece from the peer
+		verify we requested it from the peer
+		verify we still need it
+		make sure it gets written to disk
+		if last piece, check if piece is correct.
+			if not, disconnect peer (blacklist for some time in the future?)
+		write piece to file
+		pick next piece to request from peer, and queue requests.
+	keepalive:
+		peer says it is still alive, nothing to do...
+	
+
+processes:
+
+- main
+- tracker
+- peer dialer
+- peer net reader (many)
+- peer net writer (many)
+- peer disk reader
+- peer disk writer
+- piecekeeper
+
+
+state:
+- pieces we currently have
+- pieces we still need
+- which peer has which pieces
+- whom we are currently requesting which pieces from
+- which pieces have not yet been requested
+- which peer addresses do we know
+- which peers are we connected to
+- what is the chokeness/interestedness status of the connected peers, remote and local
+- how many bites of a piece do we have?
+- for each peer, how much did we transfer in the past n (10) seconds?
+- last activity at all from peer
+
+
+
+considerations:
+- we assign pieces to peers.  we don't let multiple peers deliver parts of the same piece.  this is to detect fraudulent peers later on.  we don't want to invalidate our entire piece.
+- the procs reading pieces from peers need to be directly connected to the procs that write to disk.  and vice versa (procs writing pieces from disk need to be connect to procs that read from disk).  if this weren't so, we could be building up huge buffers (e.g. for very slow disk):  we read more from the network than we write to disk.  by directly connecting them (through a buffered channel probably), the procs get some leeway but the situation does not get out of hand.
+- we send multiple bites to peers, queued.  we need to keep track of a queue of bites the remote side wants (if they queue too many request, we'll just have to disconnect them).  the queue has to be accessible because it may need to be flushed.
+- for a first implementation, we don't have to implement the end-game.  it's just an optimisation.
+- we might want to keep the main event-loop agnostic of bites.  and have the procs handling peer comm only send events when a whole piece is in.  nehh, i think not.  we also have to keep track of upload/download bytes, and we don't want to introduce special locking/channels to that end.
+- for rarest-first, we have to keep track of how many peers have a piece.  it sounds reasonable to keep an array of piece-counts, each element the count for that piece.  we only need to keep track of it while in rarest-first mode.  at the very first, we can do without.
+
+
+writing/reading from the network/disk is a big issue, so it gets its own "section".
+
+reading from peer/writing to disk:
+- done in a proc, "peer net reader".  messages are read, and sent on a buffered channel with low capacity, say 4 messages.  the other proc is called "peer disk writer".
+- "peer disk writer" checks if message is a bite.  if so, it checks whether it is expected.  if so, it writes it to disk.  if not it discards the message, making sure it doesn't count as download traffic.  now it forwards the message to the main event loop.
+- peerdiskwriter checks whether a message is allowed by asking piecekeeper, over a channel.  piecekeepers data is kept updated by main.
+- all messages from peernetreader go through peerdiskwriter.  this is to ensure messages are delivered in-order.
+- the channel between peerdiskwriter and main is not buffered.  main should always be available.
+- multiple peerdiskwriter (one per peer even) exist.  this is okay, writes to the destination files never overlap.
+
+
+writing to peer/reading from disk:
+- we want to keep peer updated on chokeness/interestedness, cancels and requests
+- data we send is much bulkier and does not have such a high priority.  thus we create two channels to send on, one for pieces/bulk/low-priority, one for meta/small/high-priority
+- main will have to queue new requests and dequeue when receiving cancel messages
+- proc peernetwriter will receive messages from the two channels and write to the peer.  messages with bites already contain their data, which has been read from disk.
+- once data has been read from disk, we always send it.  the worst we do is that the peer receives data he no longer wants, and probably won't count it for reciprocation.  if we were to drop the data, we might have a denial of service:  the peer can time messages so that we drop it just after reading it from disk, wasting our disk bandwidth.
+- the channel with the bulk/bite/data messages, read by peernetwriter, is filled by peerdiskreader on the other side.  non-bite messages do not pass through this proc.  the channel is buffered for a few data messages.
+- peerdiskreader requests info for next bite to read from main, over channel.  main will keep channel when no next bite has been requested.  where there is a next bite (either because it came in or it was already in the queue), the request is responded to with the new bite info, over a response channel given in the original request.
+- xxx perhaps we should drop messages when peer chokes us and later unchokes us?  makes sense.  on choke, we can probably send a special "flush data messages from peerdiskreader"-message.
+
+
+file system:
+ctl
+	for setting up/down speeds
+	command to read new info from tracker
+	stop seeding/quit?
+	disconnect some peer
+
+event
+	for reading:
+	- connected to peer
+	- disconnected from peer
+	- have new peers from tracker
+	- have piece x
+	- have pieces <bitstring> (read once, for first read)
+
+stats
+	for reading, at read stats are generated:
+		eta, up/down speed, up/down bytes, etc
+
+pieces
+	read bitstring of pieces?
+
+peers/list
+	read list of peers as received from tracker
+peers/n/
+        ctl
+		for disconnecting?
+        state
+		for reading up/down speed/bytes, local/remote interested/chokeness, which pieces
