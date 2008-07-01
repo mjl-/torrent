@@ -71,20 +71,6 @@ Bittorrent: module {
 		length:	big;
 
 		open:	fn(path: string): (ref Torrent, string);
-		mkpiece:	fn(t: self ref Torrent, index: int): ref Piece;
-	};
-
-	Peer: adt {
-		host:	string;
-		port:	int;
-		id:	array of byte;
-		pieces:	ref Bits;
-	};
-
-	Piece: adt {
-		index:	int;
-		d:	array of byte;
-		have:	ref Bits;
 	};
 
 	trackerget:	fn(t: ref Torrent, event: string): (int, array of (string, int, array of byte), ref Bee, string);

@@ -15,7 +15,7 @@ sys: Sys;
 bittorrent: Bittorrent;
 
 print, sprint, fprint, fildes: import sys;
-Bee, Piece, Peer, Msg, Torrent, Bitelength: import bittorrent;
+Bee, Piece, Msg, Torrent, Bitelength: import bittorrent;
 
 
 Torrentget: module {

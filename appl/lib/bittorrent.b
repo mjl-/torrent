@@ -529,18 +529,6 @@ say("have unpacked bee");
 	return (ref Torrent(string bannoun.a, lport, int bpiecelen.i, hash, peerid, ul, dl, left, pieces, length), nil);
 }
 
-Torrent.mkpiece(t: self ref Torrent, index: int): ref Piece
-{
-	piecelen := t.piecelen;
-	if(index+1 == len t.piecehashes) {
-		piecelen = int (t.length % big t.piecelen);
-		if(piecelen == 0)
-			piecelen = t.piecelen;
-	}
-	nbites := (piecelen+Bitelength-1)/Bitelength;
-	return ref Piece(index, array[piecelen] of byte, Bits.new(nbites));
-}
-
 readfile(fd: ref Sys->FD): array of byte
 {
 	d := array[0] of byte;
