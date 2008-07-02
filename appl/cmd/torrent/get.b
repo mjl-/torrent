@@ -30,13 +30,15 @@ Dflag: int;
 
 torrent: ref Torrent;
 dstfd: ref Sys->FD;
+starttime: int;
 
 # piecekeeper
 piecechan: chan of (int, int, int, chan of int);
 Add, Remove, Request: con iota;
 
 # tracker
-trackchan: chan of (array of (string, int, array of byte), string);
+trackkickchan:	chan of int;
+trackchan: chan of (int, array of (string, int, array of byte), string);  # interval, peers, error
 
 Newpeer: adt {
 	addr:	string;
@@ -99,14 +101,20 @@ Dialtimeout: con 20;  # timeout for connecting to peer
 Peersmax: con 40;
 
 Peeridlen:	con 20;
+
 Listenhost:	con "*";
 Listenport:	con 6881;
 Listenportrange:	con 100;
-MinInterval:	con 30;
+
+Intervalmin:	con 30;
+Intervalmax:	con 24*3600;
+Intervalneed:	con 10;  # when we need more peers during startup period
+Intervaldefault:	con 1800;
+Intervalstartupperiod:	con 120;
+
 Blocklength:	con 1<<14;
-DefaultInterval:	con 1800;
 WantUnchokedCount:	con 4;
-Stablesecs:	con 10;
+Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
 Minscheduled:	con 6;
 Maxdialedpeers:	con 20;
 TrafficHistorysize:	con 10;
@@ -167,7 +175,8 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP, nil);
 
 	piecechan = chan of (int, int, int, chan of int);
-	trackchan = chan of (array of (string, int, array of byte), string);
+	trackkickchan = chan of int;
+	trackchan = chan of (int, array of (string, int, array of byte), string);
 	newpeerchan = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 	tickchan = chan of int;
 
@@ -178,10 +187,17 @@ init(nil: ref Draw->Context, args: list of string)
 	peerinmsgchan = chan of (ref Peer, ref Msg);
 
 	spawn piecekeeper();
-	spawn track();
 	spawn listener();
 	spawn ticker();
+	spawn track();
+	trackkickchan <-= 1;
+	starttime = daytime->now();
 	main();
+}
+
+isdone(): int
+{
+	return piecehave.n == piecehave.have;
 }
 
 trackerpeerdel(np: Newpeer)
@@ -395,7 +411,7 @@ main()
 			say(sprint("%s: up %s, down %s, meta %s %s", peer.text(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
 		}
 
-	(newpeers, trackerr) := <-trackchan =>
+	(interval, newpeers, trackerr) := <-trackchan =>
 		if(trackerr != nil) {
 			warn(sprint("tracker error: %s", trackerr));
 		} else {
@@ -412,6 +428,17 @@ main()
 			}
 		}
 		dialpeers();
+
+		# schedule next call to tracker
+		if(interval < Intervalmin)
+			interval = Intervalmin;
+		if(interval > Intervalmax)
+			interval = Intervalmax;
+		if(daytime->now() < starttime+Intervalstartupperiod && !isdone() && len peers+len trackerpeers < Peersmax && interval > Intervalneed)
+			interval = Intervalneed;
+
+		say(sprint("next call to tracker will be in %d seconds", interval));
+		spawn trackkick(interval);
 
 	(dialed, np, peerfd, extensions, peerid, err) := <-newpeerchan =>
 		if(err != nil) {
@@ -565,7 +592,7 @@ main()
 			}
 			schedreq(peer);
 
-			if(piecehave.n == piecehave.have)
+			if(isdone())
 				print("DONE!\n");
 
                 Request =>
@@ -578,23 +605,24 @@ main()
 	}
 }
 
+trackkick(n: int)
+{
+	sys->sleep(n*1000);
+	trackkickchan <-= 1;
+}
+
 track()
 {
 	for(;;) {
+		<-trackkickchan;
+
 		say("getting new tracker info");
 		(interval, newpeers, nil, terr) := bittorrent->trackerget(torrent, nil);
 		if(terr != nil)
 			say("trackerget: "+terr);
 		else
 			say("trackget okay");
-		trackchan <-= (newpeers, terr);
-
-		# xxx find something sane here
-		# it should be possible to make us wake up here, e.g. by main
-		if(interval < 60)
-			interval = 60;
-		say(sprint("track, sleeping for %d seconds", interval));
-		sys->sleep(interval*1000);
+		trackchan <-= (interval, newpeers, terr);
 	}
 }
 
