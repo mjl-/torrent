@@ -31,7 +31,7 @@ incoming from remote peer:
 		we can send requests now.
 		based on gamestate (endgame, rarest-first, random, seeding), we start sending out requests.  more than one, to keep the pipeline filled.
 	choke:
-		arrr, peer didn't like us.  what to do when we were halfway through a piece?  let it finish by new peer?  or just discard?  finishing is most efficient for now, at least as long as do don't retaliate
+		arrr, peer didn't like us.  what to do when we were halfway through a piece?  let it finish by new peer?  or just discard?  finishing is most efficient for now, at least as long as we don't retaliate
 	interested:
 		we have something peer wants.  perhaps he is lucky and gets a piece soon, at next chokeround.
 	not interested:
