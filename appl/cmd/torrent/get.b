@@ -6,6 +6,7 @@ include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "arg.m";
+include "daytime.m";
 include "keyring.m";
 include "bitarray.m";
 	bitarray: Bitarray;
@@ -13,6 +14,7 @@ include "bitarray.m";
 include "bittorrent.m";
 
 sys: Sys;
+daytime: Daytime;
 keyring: Keyring;
 bittorrent: Bittorrent;
 
@@ -56,6 +58,19 @@ Piece: adt {
 	text:	fn(p: self ref Piece): string;
 };
 
+Traffic: adt {
+	last:	int;  # last element in `d' that may have been used
+	d:	array of (int, int);  # time, bytes
+	winsum:	int;
+	sum:	big;
+
+	new:	fn(): ref Traffic;
+	add:	fn(t: self ref Traffic, bytes: int);
+	rate:	fn(t: self ref Traffic): int;
+	total:	fn(t: self ref Traffic): big;
+	text:	fn(t: self ref Traffic): string;
+};
+
 Peer: adt {
 	id:	int;
 	np:	Newpeer;
@@ -66,12 +81,14 @@ Peer: adt {
 	piecehave:	ref Bits;
 	state:	int;
 	msgseq:	int;
+	up, down, metaup, metadown: ref Traffic;
 
 	new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer;
 	remotechoked:	fn(p: self ref Peer): int;
 	remoteinterested:	fn(p: self ref Peer): int;
 	localchoked:	fn(p: self ref Peer): int;
 	localinterested:	fn(p: self ref Peer): int;
+	send:	fn(p: self ref Peer, m: ref Msg);
 	text:	fn(p: self ref Peer): string;
 	fulltext:	fn(p: self ref Peer): string;
 };
@@ -92,6 +109,7 @@ WantUnchokedCount:	con 4;
 Stablesecs:	con 10;
 Minscheduled:	con 6;
 Maxdialedpeers:	con 20;
+TrafficHistorysize:	con 10;
 
 # Peer.state
 RemoteChoked, RemoteInterested, LocalChoked, LocalInterested: con (1<<iota);
@@ -105,8 +123,10 @@ peergen: int;  # sequence number for peers
 piecehave: ref Bits;
 piecebusy: ref Bits;
 
-
 peerinmsgchan: chan of (ref Peer, ref Msg);
+
+# ticker
+tickchan: chan of int;
 
 
 init(nil: ref Draw->Context, args: list of string)
@@ -114,6 +134,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
+	daytime = load Daytime Daytime->PATH;
 	keyring = load Keyring Keyring->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
@@ -148,6 +169,7 @@ init(nil: ref Draw->Context, args: list of string)
 	piecechan = chan of (int, int, int, chan of int);
 	trackchan = chan of (array of (string, int, array of byte), string);
 	newpeerchan = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
+	tickchan = chan of int;
 
 	peers = nil;
 	piecehave = Bits.new(len torrent.piecehashes);
@@ -158,6 +180,7 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn piecekeeper();
 	spawn track();
 	spawn listener();
+	spawn ticker();
 	main();
 }
 
@@ -243,7 +266,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref P
 	outmsgs := chan of ref Msg;
 	state := RemoteChoked|LocalChoked;
 	msgseq := 0;
-	return ref Peer(peergen++, np, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq);
+	return ref Peer(peergen++, np, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq, Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new());
 }
 
 Peer.remotechoked(p: self ref Peer): int
@@ -264,6 +287,19 @@ Peer.localchoked(p: self ref Peer): int
 Peer.localinterested(p: self ref Peer): int
 {
 	return p.state & LocalInterested;
+}
+
+Peer.send(p: self ref Peer, msg: ref Msg)
+{
+	msize := msg.packedsize();
+	dsize := 0;
+	pick m := msg {
+	Piece =>
+		dsize = len m.d;
+		p.up.add(dsize);
+	}
+	p.metaup.add(msize-dsize);
+	p.outmsgs <-= msg;
 }
 
 Peer.text(p: self ref Peer): string
@@ -296,9 +332,69 @@ Piece.text(p: self ref Piece): string
 }
 
 
+Traffic.new(): ref Traffic
+{
+	return ref Traffic(0, array[TrafficHistorysize] of {* => (0, 0)}, 0, big 0);
+}
+
+Traffic.add(t: self ref Traffic, bytes: int)
+{
+	time := daytime->now();
+
+	if(t.d[t.last].t0 != time) {
+		reclaim(t, time);
+		t.last = (t.last+1) % len t.d;
+		t.winsum -= t.d[t.last].t1;
+		t.d[t.last] = (time, 0);
+	}
+	t.d[t.last].t1 += bytes;
+	t.winsum += bytes;
+	t.sum += big bytes;
+}
+
+reclaim(t: ref Traffic, time: int)
+{
+	first := t.last+1;
+	for(i := 0; t.d[pos := (first+i) % len t.d].t0 < time-TrafficHistorysize && i < TrafficHistorysize; i++) {
+		t.winsum -= t.d[pos].t1;
+		t.d[pos] = (0, 0);
+	}
+}
+
+Traffic.rate(t: self ref Traffic): int
+{
+	reclaim(t, daytime->now());
+	return t.winsum;
+}
+
+Traffic.total(t: self ref Traffic): big
+{
+	return t.sum;
+}
+
+Traffic.text(t: self ref Traffic): string
+{
+	return sprint("<rate %d total %bd>", t.rate(), t.total());
+}
+
+ticker()
+{
+	for(;;) {
+		sys->sleep(10*1000);
+		tickchan <-= 0;
+	}
+}
+
 main()
 {
 	for(;;) alt {
+	<-tickchan =>
+		say(sprint("ticking, %d peers", len peers));
+		for(l := peers; l != nil; l = tl l) {
+			peer := hd l;
+			say(sprint("%s: up %s, down %s, meta %s %s", peer.text(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
+		}
+
 	(newpeers, trackerr) := <-trackchan =>
 		if(trackerr != nil) {
 			warn(sprint("tracker error: %s", trackerr));
@@ -328,7 +424,7 @@ main()
 			say("new peer "+peer.fulltext());
 
 			# xxx should send our bitfield instead
-			peer.outmsgs <-= ref Msg.Keepalive();
+			peer.send(ref Msg.Keepalive());
 		}
 		if(dialed) {
 			ndialers--;
@@ -344,6 +440,15 @@ main()
 		}
 
 		peer.msgseq++;
+
+		msize := msg.packedsize();
+		dsize := 0;
+		pick m := msg {
+		Piece =>
+			dsize = len m.d;
+			peer.down.add(dsize);
+		}
+		peer.metadown.add(msize-dsize);
 
 		pick m := msg {
                 Keepalive =>
@@ -647,7 +752,7 @@ interesting(p: ref Peer)
 	if(!b.isempty()) {
 		say("we are now interested in "+p.text());
 		p.state |= LocalInterested;
-		p.outmsgs <-= ref Msg.Interested();
+		p.send(ref Msg.Interested());
 	}
 }
 
@@ -690,7 +795,7 @@ schedreq(peer: ref Peer)
 	if(piece != nil) {
 		(begin, length) := nextblock(piece);
 		say(sprint("requesting next block, begin %d, length %d, %s", begin, length, piece.text()));
-		peer.outmsgs <-= ref Msg.Request(piece.index, begin, length);
+		peer.send(ref Msg.Request(piece.index, begin, length));
 	}
 }
 
