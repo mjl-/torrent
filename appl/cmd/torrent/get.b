@@ -7,6 +7,7 @@ include "bufio.m";
 	Iobuf: import bufio;
 include "arg.m";
 include "daytime.m";
+include "string.m";
 include "keyring.m";
 include "bitarray.m";
 	bitarray: Bitarray;
@@ -15,6 +16,7 @@ include "bittorrent.m";
 
 sys: Sys;
 daytime: Daytime;
+str: String;
 keyring: Keyring;
 bittorrent: Bittorrent;
 
@@ -149,6 +151,7 @@ init(nil: ref Draw->Context, args: list of string)
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
 	daytime = load Daytime Daytime->PATH;
+	str = load String String->PATH;
 	keyring = load Keyring Keyring->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
@@ -258,11 +261,26 @@ trackerpeertake(): Newpeer
 }
 
 
+isascii(d: array of byte): int
+{
+	for(i := 0; i < len d; i++)
+		if(str->in(int d[i], " -~"))
+			return 0;
+	return 1;
+}
+
+peeridfmt(d: array of byte): string
+{
+	if(isascii(d))
+		return string d;
+	return hex(d);
+}
+
 Newpeer.text(np: self Newpeer): string
 {
 	peerid := "nil";
 	if(np.peerid != nil)
-		peerid = string np.peerid;
+		peerid = peeridfmt(np.peerid);
 	return sprint("(newpeer %s peerid %s)", np.addr, peerid);
 }
 
@@ -356,7 +374,7 @@ Peer.text(p: self ref Peer): string
 
 Peer.fulltext(p: self ref Peer): string
 {
-	return sprint("<peer %s, id %d, peerid %s>", p.np.text(), p.id, string p.peerid);
+	return sprint("<peer %s, id %d, peerid %s>", p.np.text(), p.id, peeridfmt(p.peerid));
 }
 
 
@@ -410,8 +428,15 @@ reclaim(t: ref Traffic, time: int)
 
 Traffic.rate(t: self ref Traffic): int
 {
-	reclaim(t, daytime->now());
-	return t.winsum;
+	time := daytime->now();
+	reclaim(t, time);
+
+	div := TrafficHistorysize;
+	if(time-starttime < TrafficHistorysize)
+		div = time-starttime;
+	if(div == 0)
+		div = 1;
+	return t.winsum/div;
 }
 
 Traffic.total(t: self ref Traffic): big
@@ -419,9 +444,22 @@ Traffic.total(t: self ref Traffic): big
 	return t.sum;
 }
 
+bytefmt(bytes: big): string
+{
+	suffix := array[] of {"b", "k", "m", "g", "t", "p"};
+	i := 0;
+	while(bytes >= big 10000) {
+		bytes /= big 1000;
+		i++;
+	}
+	if(i >= len suffix)
+		i = len suffix-1;
+	return sprint("%bd%s", bytes, suffix[i]);
+}
+
 Traffic.text(t: self ref Traffic): string
 {
-	return sprint("<rate %d total %bd>", t.rate(), t.total());
+	return sprint("<rate %s/s total %s>", bytefmt(big t.rate()), bytefmt(t.total()));
 }
 
 ticker()
