@@ -764,13 +764,25 @@ nextreq:
 }
 
 
+dialkiller(pidch: chan of int, pid: int, np: Newpeer)
+{
+	pidch <-= sys->pctl(0, nil);
+	sys->sleep(Dialtimeout*1000);
+	kill(pid);
+	newpeerchan <-= (1, np, nil, nil, nil, sprint("dial/handshake %s: timeout", np.addr));
+}
+
 dialer(np: Newpeer)
 {
-	# xxx use timeout
+	pid := sys->pctl(0, nil);
+	spawn dialkiller(pidch := chan of int, pid, np);
+	killerpid := <-pidch;
+	
 	addr := sprint("net!%s", np.addr);
 	(ok, conn) := sys->dial(addr, nil);
 	if(ok < 0) {
-		newpeerchan <-= (1, np, nil, nil, nil, sprint("dial %s: %r", addr));
+		kill(killerpid);
+		newpeerchan <-= (1, np, nil, nil, nil, sprint("dial %s: %r", np.addr));
 		return;
 	}
 
@@ -780,6 +792,7 @@ dialer(np: Newpeer)
 	(extensions, peerid, err) := handshake(fd);
 	if(err != nil)
 		fd = nil;
+	kill(killerpid);
 	newpeerchan <-= (1, np, fd, extensions, peerid, err);
 }
 
@@ -939,12 +952,22 @@ hex(d: array of byte): string
 	return s;
 }
 
-killgrp(pid: int)
+progctl(pid: int, s: string)
 {
 	path := sprint("/prog/%d/ctl", pid);
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd != nil)
-		fprint(fd, "killgrp");
+		fprint(fd, "%s", s);
+}
+
+killgrp(pid: int)
+{
+	progctl(pid, "killgrp");
+}
+
+kill(pid: int)
+{
+	progctl(pid, "kill");
 }
 
 fail(s: string)
