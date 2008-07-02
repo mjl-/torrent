@@ -31,6 +31,11 @@ Dflag: int;
 torrent: ref Torrent;
 dstfd: ref Sys->FD;
 starttime: int;
+totalupload := big 0;
+totaldownload := big 0;
+totalleft: big;
+listenport: int;
+localpeerid: array of byte;
 
 # piecekeeper
 piecechan: chan of (int, int, int, chan of int);
@@ -38,7 +43,8 @@ Add, Remove, Request: con iota;
 
 # tracker
 trackkickchan:	chan of int;
-trackchan: chan of (int, array of (string, int, array of byte), string);  # interval, peers, error
+trackreqchan:	chan of (big, big, big, int);  # up, down, left, listenport
+trackchan:	chan of (int, array of (string, int, array of byte), string);  # interval, peers, error
 
 Newpeer: adt {
 	addr:	string;
@@ -174,9 +180,14 @@ init(nil: ref Draw->Context, args: list of string)
 
 	sys->pctl(Sys->NEWPGRP, nil);
 
+	totalleft = torrent.length;
+	localpeerid = bittorrent->genpeerid();
+
 	piecechan = chan of (int, int, int, chan of int);
 	trackkickchan = chan of int;
+	trackreqchan = chan of (big, big, big, int);
 	trackchan = chan of (int, array of (string, int, array of byte), string);
+
 	newpeerchan = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 	tickchan = chan of int;
 
@@ -186,12 +197,32 @@ init(nil: ref Draw->Context, args: list of string)
 
 	peerinmsgchan = chan of (ref Peer, ref Msg);
 
+	# start listener, for incoming connections
+	ok := -1;
+	conn: Sys->Connection;
+	listenaddr: string;
+
+	for(i := 0; i < Listenportrange; i++) {
+		listenport = Listenport+i;
+		listenaddr = sprint("net!%s!%d", Listenhost, listenport);
+		(ok, conn) = sys->announce(listenaddr);
+		if(ok == 0)
+			break;
+	}
+	if(ok != 0) {
+		say("could not listen on any port, incoming connections will not be possible...");
+		listenport = 0;
+	} else {
+		say(sprint("listening on addr %s", listenaddr));
+	}
+
+	spawn listener(conn);
 	spawn piecekeeper();
-	spawn listener();
 	spawn ticker();
 	spawn track();
-	trackkickchan <-= 1;
+
 	starttime = daytime->now();
+	spawn trackkick(0);
 	main();
 }
 
@@ -411,6 +442,9 @@ main()
 			say(sprint("%s: up %s, down %s, meta %s %s", peer.text(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
 		}
 
+	<-trackkickchan =>
+		trackreqchan <-= (totalupload, totaldownload, totalleft, listenport);
+
 	(interval, newpeers, trackerr) := <-trackchan =>
 		if(trackerr != nil) {
 			warn(sprint("tracker error: %s", trackerr));
@@ -474,6 +508,7 @@ main()
 		Piece =>
 			dsize = len m.d;
 			peer.down.add(dsize);
+			totaldownload += big dsize;
 		}
 		peer.metadown.add(msize-dsize);
 
@@ -558,7 +593,6 @@ main()
 			interesting(peer);
 
                 Piece =>
-			# xxx check if we are expecting piece
 			# xxx check if block isn't too large
 
 			say(sprint("%s sent data for piece=%d begin=%d length=%d", peer.text(), m.index, m.begin, len m.d));
@@ -571,6 +605,7 @@ main()
 
 			piece.d[m.begin:] = m.d;
 			piece.have.set(m.begin/Blocklength);
+			totalleft -= big len m.d;
 
 			if(piece.isdone()) {
 				wanthash := hex(torrent.piecehashes[piece.index]);
@@ -614,38 +649,20 @@ trackkick(n: int)
 track()
 {
 	for(;;) {
-		<-trackkickchan;
+		(up, down, left, lport) := <-trackreqchan;
 
 		say("getting new tracker info");
-		(interval, newpeers, nil, terr) := bittorrent->trackerget(torrent, nil);
-		if(terr != nil)
-			say("trackerget: "+terr);
+		(interval, newpeers, nil, err) := bittorrent->trackerget(torrent, localpeerid, up, down, left, lport, nil);
+		if(err != nil)
+			say("trackerget: "+err);
 		else
 			say("trackget okay");
-		trackchan <-= (interval, newpeers, terr);
+		trackchan <-= (interval, newpeers, err);
 	}
 }
 
-listener()
+listener(aconn: Sys->Connection)
 {
-	aok := -1;
-	aconn: Sys->Connection;
-	listenaddr: string;
-
-	for(i := 0; i < Listenportrange; i++) {
-		listenaddr = sprint("net!%s!%d", Listenhost, Listenport+i);
-		(aok, aconn) = sys->announce(listenaddr);
-		if(aok == 0)
-			break;
-	}
-
-	if(aok != 0) {
-		say("could not listen on any port, incoming connections will not be possible...");
-		return;
-	}
-
-	say(sprint("listening on addr %s", listenaddr));
-
 	for(;;) {
 		(ok, conn) := sys->listen(aconn);
 		if(ok != 0) {
@@ -739,7 +756,7 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	i += 8;
 	d[i:] = torrent.hash;
 	i += 20;
-	d[i:] = torrent.peerid;
+	d[i:] = localpeerid;
 	i += 20;
 	if(i != len d)
 		fail("bad peer header, internal error");

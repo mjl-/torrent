@@ -49,16 +49,14 @@ Bittorrent: module {
 
 	Torrent: adt {
 		announce:	string;
-		lport:	int;
 		piecelen:	int;
 		hash:	array of byte;
-		peerid:	array of byte;
-		ul, dl, left: big;
 		piecehashes:	array of array of byte;
 		length:	big;
 
 		open:	fn(path: string): (ref Torrent, string);
 	};
 
-	trackerget:	fn(t: ref Torrent, event: string): (int, array of (string, int, array of byte), ref Bee, string);
+	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string);
+	genpeerid:	fn(): array of byte;
 };

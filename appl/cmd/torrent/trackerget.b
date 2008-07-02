@@ -51,7 +51,9 @@ init(nil: ref Draw->Context, args: list of string)
 	if(err != nil)
 		fail(sprint("%s: %s", hd args, err));
 
-	(interval, peers, nil, terr) := bittorrent->trackerget(t, nil);
+	localpeerid := bittorrent->genpeerid();
+
+	(interval, peers, nil, terr) := bittorrent->trackerget(t, localpeerid, big 0, big 0, big 0, 0, nil);
 	if(terr != nil)
 		fail("trackerget: "+terr);
 	say("trackget okay");

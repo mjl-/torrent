@@ -477,9 +477,6 @@ say("have unpacked bee");
 	if(bannoun == nil)
 		return (nil, sprint("%s: missing announce field", path));
 
-	# xxx
-	lport := 6882;
-
 	binfo := b.get("info"::nil);
 	if(binfo == nil)
 		return (nil, sprint("%s: missing info field", path));
@@ -521,12 +518,10 @@ say("have unpacked bee");
 		}
 	}
 
-	peerid := random->randombuf(Random->NotQuiteRandom, 20);
-	ul := dl := left := big 0;
 	#say("have torrent config");
 
 	# xxx sanity checks
-	return (ref Torrent(string bannoun.a, lport, int bpiecelen.i, hash, peerid, ul, dl, left, pieces, length), nil);
+	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, length), nil);
 }
 
 readfile(fd: ref Sys->FD): array of byte
@@ -547,7 +542,7 @@ readfile(fd: ref Sys->FD): array of byte
 }
 
 
-trackerget(t: ref Torrent, event: string): (int, array of (string, int, array of byte), ref Bee, string)
+trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string)
 {
 	(url, uerr) := Url.parse(t.announce);
 	if(uerr != nil)
@@ -555,11 +550,11 @@ trackerget(t: ref Torrent, event: string): (int, array of (string, int, array of
 
 	s := "";
 	s += "&info_hash="+encode(t.hash);
-	s += "&peer_id="+encode(t.peerid);
-	s += "&port="+string t.lport;
-	s += sprint("&uploaded=%bd", t.ul);
-	s += sprint("&downloaded=%bd", t.dl);
-	s += sprint("&left=%bd", t.left);
+	s += "&peer_id="+encode(peerid);
+	s += "&port="+string lport;
+	s += sprint("&uploaded=%bd", up);
+	s += sprint("&downloaded=%bd", down);
+	s += sprint("&left=%bd", left);
 	if(event != nil)
 		s += "&event="+http->encode(event);
 	if(url.searchpart == "")
@@ -596,6 +591,12 @@ trackerget(t: ref Torrent, event: string): (int, array of (string, int, array of
 	}
 	
 	return (int interval.i, p, b, nil);
+}
+
+genpeerid(): array of byte
+{
+	# xxx make it ascii-printable, and identifying client
+	return random->randombuf(Random->NotQuiteRandom, 20);
 }
 
 
