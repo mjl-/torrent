@@ -52,7 +52,7 @@ trackchan:	chan of (int, array of (string, int, array of byte), string);  # inte
 
 Newpeer: adt {
 	addr:	string;
-	peerid:	array of byte;  # may be nil, for incoming connections
+	peerid:	array of byte;  # may be nil, for incoming connections or compact track responses
 
 	text:	fn(np: self Newpeer): string;
 };

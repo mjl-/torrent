@@ -708,6 +708,7 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
 	s += sprint("&uploaded=%bd", up);
 	s += sprint("&downloaded=%bd", down);
 	s += sprint("&left=%bd", left);
+	s += "&compact=1";
 	if(event != nil)
 		s += "&event="+http->encode(event);
 	if(url.searchpart == "")
@@ -729,21 +730,38 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
         if(interval == nil)
                 return (0, nil, nil, "bad response, missing key interval");
 
-        peers := b.getl("peers"::nil);
-        if(peers == nil)
+        bpeers := b.get("peers"::nil);
+        if(bpeers == nil)
                 return (0, nil, nil, "bad response, missing key peers");
 
-	p := array[len peers.a] of (string, int, array of byte);
-	for(i := 0; i < len peers.a; i++) {
-		ip := peers.a[i].gets("ip"::nil);
-                port := peers.a[i].geti("port"::nil);
-                rpeerid := peers.a[i].gets("peer id"::nil);
-		if(ip == nil || port == nil || rpeerid == nil)
-			return (0, nil, nil, "bad response, missing key ip, port or peer id");
-		p[i] = (string ip.a, int port.i, rpeerid.a);
+	pick peers := bpeers {
+	List =>
+		say("received traditional, non-compact form tracker response");
+		p := array[len peers.a] of (string, int, array of byte);
+		for(i := 0; i < len peers.a; i++) {
+			ip := peers.a[i].gets("ip"::nil);
+			port := peers.a[i].geti("port"::nil);
+			rpeerid := peers.a[i].gets("peer id"::nil);
+			if(ip == nil || port == nil || rpeerid == nil)
+				return (0, nil, nil, "bad response, missing key ip, port or peer id");
+			p[i] = (string ip.a, int port.i, rpeerid.a);
+		}
+		return (int interval.i, p, b, nil);
+
+	String =>
+		say("received compact form tracker response");
+		if(len peers.a % 6 != 0)
+			return (0, nil, nil, "bad response, bad length for compact form for key peers");
+		p := array[len peers.a/6] of (string, int, array of byte);
+		i := 0;
+		for(o := 0; o+6 <= len peers.a; o += 6) {
+			ip := sprint("%d.%d.%d.%d", int peers.a[o], int peers.a[o+1], int peers.a[o+2], int peers.a[o+3]);
+			(port, nil) := g16(peers.a, o+4);
+			p[i++] = (ip, port, nil);
+		}
+		return (int interval.i, p, b, nil);
 	}
-	
-	return (int interval.i, p, b, nil);
+	return (0, nil, nil, "bad response, bad type for key peers");
 }
 
 genpeerid(): array of byte
@@ -891,9 +909,17 @@ p32(d: array of byte, i, v: int): int
 
 g32(d: array of byte, i: int): (int, int)
 {
-	v: int;
+	v := 0;
 	v = (v<<8)|int d[i++];
 	v = (v<<8)|int d[i++];
+	v = (v<<8)|int d[i++];
+	v = (v<<8)|int d[i++];
+	return (v, i);
+}
+
+g16(d: array of byte, i: int): (int, int)
+{
+	v := 0;
 	v = (v<<8)|int d[i++];
 	v = (v<<8)|int d[i++];
 	return (v, i);
