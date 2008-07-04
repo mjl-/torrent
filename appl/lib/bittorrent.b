@@ -23,6 +23,9 @@ fprint, fildes, sprint: import sys;
 Bits: import bitarray;
 Url, Rbuf: import http;
 
+version: con 0;
+Peeridlen: con 20;
+
 init(ba: Bitarray)
 {
 	sys = load Sys Sys->PATH;
@@ -745,8 +748,10 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
 
 genpeerid(): array of byte
 {
-	# xxx make it ascii-printable, and identifying client
-	return random->randombuf(Random->NotQuiteRandom, 20);
+	peerid := sprint("-in%04d-", version);
+	peerid += hex(random->randombuf(Random->NotQuiteRandom, (Peeridlen-len peerid)/2));
+	say("generated peerid "+string peerid);
+	return array of byte peerid;
 }
 
 bytefmt(bytes: big): string
@@ -924,6 +929,14 @@ join(l: list of string, s: string): string
 suffix(suf, s: string): int
 {
 	return len s >= len suf && suf == s[len s-len suf:];
+}
+
+hex(d: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len d; i++)
+		s += sprint("%02x", int d[i]);
+	return s;
 }
 
 say(s: string)
