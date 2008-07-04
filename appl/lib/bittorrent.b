@@ -581,7 +581,8 @@ say("have unpacked bee");
 	#say("have torrent config");
 
 	# xxx sanity checks
-	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, origfiles, length, path+".state"), nil);
+	statepath := hd revstr(sys->tokenize(path, "/").t1)+".state";
+	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, origfiles, length, statepath), nil);
 }
 
 

@@ -60,7 +60,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(oerr != nil)
 		fail(sprint("%s", oerr));
 
-	# xxx should print state per file
+	# xxx should print progress per file
 
 	haves := Bits.new(len t.piecehashes);
 	if(dstfds != nil)

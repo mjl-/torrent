@@ -33,6 +33,7 @@ nofix: int;
 
 torrent: ref Torrent;
 dstfds: list of ref (ref Sys->FD, big);  # fd, size
+statefd: ref Sys->FD;
 starttime: int;
 totalupload := big 0;
 totaldownload := big 0;
@@ -183,24 +184,26 @@ init(nil: ref Draw->Context, args: list of string)
 	created: int;
 	(dstfds, created, err) = torrent.openfiles(nofix, 0);
 	if(err != nil)
-		fail(sprint("%s: %s", hd args, err));
+		fail(err);
 
 	if(created) {
+		# all new files, we don't have pieces yet
+		say("no state file needed, all new files");
 		piecehave = Bits.new(len torrent.piecehashes);
 	} else {
 		# attempt to read state of pieces from .torrent.state file
-		fd := sys->open(torrent.piecestatepath, Sys->OREAD);
-		if(fd != nil) {
-			(d, rerr) := readfd(fd);
+		statefd = sys->open(torrent.statepath, Sys->ORDWR);
+		if(statefd != nil) {
+			say("using .state file");
+			(d, rerr) := readfd(statefd);
 			if(rerr != nil)
-				fail(sprint("%s: %s", torrent.piecestatepath, rerr));
+				fail(sprint("%s: %s", torrent.statepath, rerr));
 			(piecehave, err) = Bits.mk(len torrent.piecehashes, d);
 			if(err != nil)
-				fail(sprint("%s: invalid state", torrent.piecestatepath));
-		}
-
-		# otherwise, read through all data
-		if(piecehave == nil) {
+				fail(sprint("%s: invalid state", torrent.statepath));
+		} else {
+			# otherwise, read through all data
+			say("starting to check all pieces in files...");
 			piecehave = Bits.new(len torrent.piecehashes);
 			for(i := 0; i < len torrent.piecehashes; i++) {
 				(d, rerr) := bittorrent->pieceread(torrent, dstfds, i);
@@ -212,6 +215,15 @@ init(nil: ref Draw->Context, args: list of string)
 					piecehave.set(i);
 			}
 		}
+	}
+
+	if(statefd == nil) {
+		say(sprint("creating statepath %q", torrent.statepath));
+		statefd = sys->create(torrent.statepath, Sys->ORDWR, 8r666);
+		if(statefd == nil)
+			warn(sprint("failed to create state file (ignoring): %r"));
+		else
+			writestate();
 	}
 
 	totalleft = torrent.length;
@@ -262,6 +274,16 @@ init(nil: ref Draw->Context, args: list of string)
 isdone(): int
 {
 	return piecehave.n == piecehave.have;
+}
+
+writestate()
+{
+	d := piecehave.d;
+	n := sys->pwrite(statefd, d, len d, big 0);
+	if(n != len d)
+		warn(sprint("writing state: %r"));
+	else
+		say("state written");
 }
 
 trackerpeerdel(np: Newpeer)
@@ -670,13 +692,15 @@ main()
 					# xxx disconnect peer?
 					continue;
 				}
-				piecehave.set(piece.index);
-				say("piece now done: "+piece.text());
-				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
 
 				err := bittorrent->piecewrite(torrent, dstfds, piece.index, piece.d);
 				if(err != nil)
 					fail("writing piece: "+err);
+
+				piecehave.set(piece.index);
+				writestate();
+				say("piece now done: "+piece.text());
+				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
 
 				piece = getpiece(peer);
 			}
