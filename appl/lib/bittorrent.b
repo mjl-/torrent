@@ -540,9 +540,11 @@ say("have unpacked bee");
 	length := big 0;
 	blength := binfo.geti("length"::nil);
 	files: list of ref (string, big);
+	origfiles: list of ref (string, big);
 	if(blength != nil) {
 		length = blength.i;
-		files = ref (name, length)::nil;
+		files = ref (simplepath(name), length)::nil;
+		origfiles = ref (name, length)::nil;
 	} else {
 		bfiles := binfo.getl("files"::nil);
 		if(bfiles == nil)
@@ -569,7 +571,8 @@ say("have unpacked bee");
 			dstpath := foldpath(name::pathls);
 			if(dstpath == nil)
 				return (nil, sprint("weird path, refusing to create: %q", join(pathls, "/")));
-			files = ref (dstpath, size)::files;
+			files = ref (simplepath(dstpath), size)::files;
+			origfiles = ref (dstpath, size)::files;
 			length += size;
 		}
 	}
@@ -578,7 +581,7 @@ say("have unpacked bee");
 	#say("have torrent config");
 
 	# xxx sanity checks
-	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, files, length), nil);
+	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, origfiles, length), nil);
 }
 
 readfile(fd: ref Sys->FD): array of byte
@@ -667,6 +670,43 @@ bytefmt(bytes: big): string
 	if(i >= len suffix)
 		i = len suffix-1;
 	return sprint("%bd%s", bytes, suffix[i]);
+}
+
+sane(s: string): string
+{
+	ascii := "0-9a-zA-Z";
+	ext0 := "!+,.:-";
+	ext := "_"+ext0;
+
+	# keep all good characters, replace all bad characters by underscore
+	p1: string;
+	for(i := 0; i < len s; i++)
+		if(str->in(s[i], ascii+ext))
+			p1[len p1] = s[i];
+		else
+			p1[len p1] = '_';
+
+	# fold all multiples of underscores into a single one
+	# remove all underscores before and after non-alphanumeric
+	p2: string;
+	for(i = 0; i < len p1; i++)
+		if(p1[i] == '_' && (p2 == "" || str->in(p2[len p2-1], ext) || (i+1 < len p1 && str->in(p1[i+1], ext0))))
+			;
+		else
+			p2[len p2] = p1[i];
+	return p2;
+}
+
+
+simplepath(s: string): string
+{
+	(nil, toks) := sys->tokenize(s, "/");
+	if(toks == nil)
+		return nil;
+	path: string;
+	for(; toks != nil; toks = tl toks)
+		path += "/"+sane(hd toks);
+	return path;
 }
 
 
