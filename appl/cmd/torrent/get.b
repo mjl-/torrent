@@ -120,7 +120,7 @@ Intervalneed:	con 10;  # when we need more peers during startup period
 Intervaldefault:	con 1800;
 Intervalstartupperiod:	con 120;
 
-Blocklength:	con 1<<14;
+Blocklength:	con 16*1024;
 WantUnchokedCount:	con 4;
 Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
 Minscheduled:	con 6;
@@ -444,22 +444,9 @@ Traffic.total(t: self ref Traffic): big
 	return t.sum;
 }
 
-bytefmt(bytes: big): string
-{
-	suffix := array[] of {"b", "k", "m", "g", "t", "p"};
-	i := 0;
-	while(bytes >= big 10000) {
-		bytes /= big 1000;
-		i++;
-	}
-	if(i >= len suffix)
-		i = len suffix-1;
-	return sprint("%bd%s", bytes, suffix[i]);
-}
-
 Traffic.text(t: self ref Traffic): string
 {
-	return sprint("<rate %s/s total %s>", bytefmt(big t.rate()), bytefmt(t.total()));
+	return sprint("<rate %s/s total %s>", bittorrent->bytefmt(big t.rate()), bittorrent->bytefmt(t.total()));
 }
 
 ticker()
@@ -657,9 +644,9 @@ main()
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
 
-				n := sys->pwrite(dstfd, piece.d, len piece.d, big piece.index * big torrent.piecelen);
-				if(n != len piece.d)
-					fail(sprint("writing piece: %r"));
+				err := piecewrite(piece);
+				if(err != nil)
+					fail("writing piece: "+err);
 
 				piece = getpiece(peer);
 			}
@@ -829,6 +816,14 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	return (extensions, peerid, nil);
 }
 
+piecewrite(p: ref Piece): string
+{
+	n := sys->pwrite(dstfd, p.d, len p.d, big p.index*big torrent.piecelen);
+	if(n != len p.d)
+		return sprint("write: %r");
+	return nil;
+}
+
 wantpeerpieces(p: ref Peer): ref Bits
 {
 	b := Bits.union(array[] of {piecehave, piecebusy});
@@ -912,7 +907,7 @@ peernetreader(peer: ref Peer)
 	for(;;) {
 		(m, err) := Msg.read(peer.fd);
 		if(err != nil)
-			fail(sprint("reading msg: %r"));  # xxx return error to main
+			fail("reading msg: "+err);  # xxx return error to main
 		fprint(fildes(2), "<< %s\n", m.text());
 		peerinmsgchan <-= (peer, m);
 	}

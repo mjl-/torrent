@@ -4,17 +4,19 @@ include "sys.m";
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
-include "filter.m";
-include "ohttp.m";
+include "string.m";
 include "security.m";
 include "keyring.m";
+include "filter.m";
+include "ohttp.m";
 include "bitarray.m";
 include "bittorrent.m";
 
 sys: Sys;
-http: Http;
+str: String;
 random: Random;
 keyring: Keyring;
+http: Http;
 bitarray: Bitarray;
 
 fprint, fildes, sprint: import sys;
@@ -24,6 +26,7 @@ Url, Rbuf: import http;
 init(ba: Bitarray)
 {
 	sys = load Sys Sys->PATH;
+	str = load String String->PATH;
 	random = load Random Random->PATH;
 	keyring = load Keyring Keyring->PATH;
 	bufio = load Bufio Bufio->PATH;
@@ -456,6 +459,30 @@ encode(a: array of byte): string
 }
 
 
+sanitizepath(s: string): string
+{
+	if(str->prefix("/", s) || suffix("/", s))
+		s = s[1:];
+	if(str->prefix("../", s) || suffix("/..", s) || s == "..")
+		return nil;
+	if(str->splitstrl(s, "/../").t1 != nil)
+		return nil;
+	return s;
+}
+
+foldpath(l: list of string): string
+{
+	path := "";
+	if(l == nil)
+		return nil;
+	for(; l != nil; l = tl l)
+		if(hd l == ".." || hd l == "" || str->in('/', hd l))
+			return nil;
+		else
+			path += "/"+hd l;
+	return path[1:];
+}
+
 Torrent.open(path: string): (ref Torrent, string)
 {
 	fd := sys->open(path, Sys->OREAD);
@@ -500,10 +527,22 @@ say("have unpacked bee");
 	for(o := 0; o < len bpieces.a; o += 20)
 		pieces[i++] = bpieces.a[o:o+20];
 
+
+	# file name, or dir name for files in case of multi-file torrent
+	bname := binfo.gets("name"::nil);
+	if(bname == nil)
+		return (nil, "missing destination file name");
+	name := sanitizepath(string bname.a);
+	if(name == nil)
+		return (nil, sprint("weird path, refusing to create: %q", name));
+
+	# determine paths for files, and total length
 	length := big 0;
 	blength := binfo.geti("length"::nil);
+	files: list of ref (string, big);
 	if(blength != nil) {
 		length = blength.i;
+		files = ref (name, length)::nil;
 	} else {
 		bfiles := binfo.getl("files"::nil);
 		if(bfiles == nil)
@@ -514,14 +553,32 @@ say("have unpacked bee");
 			blen := bfiles.a[i].geti("length"::nil);
 			if(blen == nil)
 				return (nil, sprint("%s: missing field 'length' in 'files[%d]' in 'info'", path, i));
-			length += blen.i;
+			size := blen.i;
+
+			pathl := bfiles.a[i].getl("path"::nil);
+			if(pathl == nil)
+				return (nil, sprint("missing or invalid 'path' for file"));
+			pathls: list of string;
+			for(j := len pathl.a-1; j >= 0; j--)
+				pick e := pathl.a[j] {
+				String =>
+					pathls = string e.a::pathls;
+				* =>
+					return (nil, sprint("bad type for element of 'path' for file"));
+				}
+			dstpath := foldpath(name::pathls);
+			if(dstpath == nil)
+				return (nil, sprint("weird path, refusing to create: %q", join(pathls, "/")));
+			files = ref (dstpath, size)::files;
+			length += size;
 		}
 	}
+	files = rev(files);
 
 	#say("have torrent config");
 
 	# xxx sanity checks
-	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, length), nil);
+	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, files, length), nil);
 }
 
 readfile(fd: ref Sys->FD): array of byte
@@ -599,6 +656,19 @@ genpeerid(): array of byte
 	return random->randombuf(Random->NotQuiteRandom, 20);
 }
 
+bytefmt(bytes: big): string
+{
+	suffix := array[] of {"b", "k", "m", "g", "t", "p"};
+	i := 0;
+	while(bytes >= big 10000) {
+		bytes /= big 1024;
+		i++;
+	}
+	if(i >= len suffix)
+		i = len suffix-1;
+	return sprint("%bd%s", bytes, suffix[i]);
+}
+
 
 p32(d: array of byte, i, v: int): int
 {
@@ -618,6 +688,30 @@ g32(d: array of byte, i: int): (int, int)
 	v = (v<<8)|int d[i++];
 	v = (v<<8)|int d[i++];
 	return (v, i);
+}
+
+rev[T](l: list of T): list of T
+{
+	r: list of T;
+	for(; l != nil; l = tl l)
+		r = hd l::r;
+	return r;
+}
+
+join(l: list of string, s: string): string
+{
+	if(l == nil)
+		return nil;
+	r := hd l;
+	l = tl l;
+	for(; l != nil; l = tl l)
+		r += s+hd l;
+	return r;
+}
+
+suffix(suf, s: string): int
+{
+	return len s >= len suf && suf == s[len s-len suf:];
 }
 
 say(s: string)

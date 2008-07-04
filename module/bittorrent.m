@@ -52,6 +52,8 @@ Bittorrent: module {
 		piecelen:	int;
 		hash:	array of byte;
 		piecehashes:	array of array of byte;
+		files:	list of ref (string, big);  # path, length
+		origfiles: list of ref (string, big);  # files as found in .torrent
 		length:	big;
 
 		open:	fn(path: string): (ref Torrent, string);
@@ -59,4 +61,5 @@ Bittorrent: module {
 
 	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string);
 	genpeerid:	fn(): array of byte;
+	bytefmt:	fn(n: big): string;
 };

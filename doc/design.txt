@@ -1,3 +1,11 @@
+docs:
+http://www.bittorrent.org/beps/bep_0003.html (bittorrent protocol)
+http://www.bittorrent.org/beps/bep_0006.html (fast extensions)
+http://www.bittorrent.org/beps/bep_0023.html (compact peer list)
+http://www.bittorrent.org/beps/bep_0000.html (index)
+http://wiki.theory.org/BitTorrentSpecification (missing pieces of bep3)
+
+
 program lifetime:
 - parse torrent file
 - open/create destination file

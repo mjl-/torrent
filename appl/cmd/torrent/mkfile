@@ -7,6 +7,7 @@ TARG=\
 	trackerget.dis\
 	get.dis\
 	verify.dis\
+	info.dis\
 
 MODULES=\
 
