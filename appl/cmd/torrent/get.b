@@ -29,9 +29,10 @@ Torrentget: module {
 };
 
 Dflag: int;
+nofix: int;
 
 torrent: ref Torrent;
-dstfd: ref Sys->FD;
+dstfds: list of ref (ref Sys->FD, big);  # fd, size
 starttime: int;
 totalupload := big 0;
 totaldownload := big 0;
@@ -158,10 +159,11 @@ init(nil: ref Draw->Context, args: list of string)
 	bittorrent->init(bitarray);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-D] torrentfile");
+	arg->setusage(arg->progname()+" [-Dn] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'D' =>	Dflag++;
+		'n' =>	nofix = 1;
 		* =>
 			fprint(fildes(2), "bad option: -%c\n", c);
 			arg->usage();
@@ -176,12 +178,41 @@ init(nil: ref Draw->Context, args: list of string)
 	if(err != nil)
 		fail(sprint("%s: %s", hd args, err));
 
-	f := "torrentdata";
-	dstfd = sys->create(f, Sys->OWRITE, 8r666);
-	if(dstfd == nil)
-		fail(sprint("create %s: %r", f));
-
 	sys->pctl(Sys->NEWPGRP, nil);
+
+	created: int;
+	(dstfds, created, err) = torrent.openfiles(nofix, 0);
+	if(err != nil)
+		fail(sprint("%s: %s", hd args, err));
+
+	if(created) {
+		piecehave = Bits.new(len torrent.piecehashes);
+	} else {
+		# attempt to read state of pieces from .torrent.state file
+		fd := sys->open(torrent.piecestatepath, Sys->OREAD);
+		if(fd != nil) {
+			(d, rerr) := readfd(fd);
+			if(rerr != nil)
+				fail(sprint("%s: %s", torrent.piecestatepath, rerr));
+			(piecehave, err) = Bits.mk(len torrent.piecehashes, d);
+			if(err != nil)
+				fail(sprint("%s: invalid state", torrent.piecestatepath));
+		}
+
+		# otherwise, read through all data
+		if(piecehave == nil) {
+			piecehave = Bits.new(len torrent.piecehashes);
+			for(i := 0; i < len torrent.piecehashes; i++) {
+				(d, rerr) := bittorrent->pieceread(torrent, dstfds, i);
+				if(rerr != nil)
+					fail("verifying: "+rerr);
+				hash := array[Keyring->SHA1dlen] of byte;
+				keyring->sha1(d, len d, hash, nil);
+				if(hex(hash) == hex(torrent.piecehashes[i]))
+					piecehave.set(i);
+			}
+		}
+	}
 
 	totalleft = torrent.length;
 	localpeerid = bittorrent->genpeerid();
@@ -195,7 +226,6 @@ init(nil: ref Draw->Context, args: list of string)
 	tickchan = chan of int;
 
 	peers = nil;
-	piecehave = Bits.new(len torrent.piecehashes);
 	piecebusy = Bits.new(len torrent.piecehashes);
 
 	peerinmsgchan = chan of (ref Peer, ref Msg);
@@ -644,7 +674,7 @@ main()
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
 
-				err := piecewrite(piece);
+				err := bittorrent->piecewrite(torrent, dstfds, piece.index, piece.d);
 				if(err != nil)
 					fail("writing piece: "+err);
 
@@ -816,14 +846,6 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	return (extensions, peerid, nil);
 }
 
-piecewrite(p: ref Piece): string
-{
-	n := sys->pwrite(dstfd, p.d, len p.d, big p.index*big torrent.piecelen);
-	if(n != len p.d)
-		return sprint("write: %r");
-	return nil;
-}
-
 wantpeerpieces(p: ref Peer): ref Bits
 {
 	b := Bits.union(array[] of {piecehave, piecebusy});
@@ -849,12 +871,7 @@ interesting(p: ref Peer)
 
 setpiece(peer: ref Peer, index: int): ref Piece
 {
-	piecelen := torrent.piecelen;
-	if(index+1 == len torrent.piecehashes) {
-		piecelen = int (torrent.length % big torrent.piecelen);
-		if(piecelen == 0)
-			piecelen = torrent.piecelen;
-	}
+	piecelen := torrent.piecelength(index);
 	nblocks := (piecelen+Blocklength-1)/Blocklength;
 	piece := ref Piece(index, array[piecelen] of byte, Bits.new(nblocks));
 
@@ -933,10 +950,18 @@ readfile(f: string): (string, string)
 	fd := sys->open(f, Sys->OREAD);
 	if(fd == nil)
 		return (nil, sprint("open: %r"));
-	n := sys->readn(fd, buf := array[Sys->ATOMICIO] of byte, len buf);
+	(d, err) := readfd(fd);
+	if(err != nil)
+		return (nil, err);
+	return (string d, err);
+}
+
+readfd(fd: ref Sys->FD): (array of byte, string)
+{
+	n := sys->readn(fd, buf := array[32*1024] of byte, len buf);
 	if(n < 0)
 		return (nil, sprint("read: %r"));
-	return (string buf[:n], nil);
+	return (buf[:n], nil);
 }
 
 hex(d: array of byte): string

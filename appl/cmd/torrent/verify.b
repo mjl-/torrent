@@ -25,9 +25,7 @@ Torrentverify: module {
 };
 
 Dflag: int;
-
-torrent: ref Torrent;
-dstfd: ref Sys->FD;
+nofix: int;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -40,10 +38,11 @@ init(nil: ref Draw->Context, args: list of string)
 	bittorrent->init(bitarray);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-D] torrentfile");
+	arg->setusage(arg->progname()+" [-Dn] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'D' =>	Dflag++;
+		'n' =>	nofix = 1;
 		* =>
 			fprint(fildes(2), "bad option: -%c\n", c);
 			arg->usage();
@@ -53,75 +52,46 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len args != 1)
 		arg->usage();
 
-	err: string;
-	(torrent, err) = Torrent.open(hd args);
-	if(err != nil)
-		fail(sprint("%s: %s", hd args, err));
+	(t, terr) := Torrent.open(hd args);
+	if(terr != nil)
+		fail(sprint("%s: %s", hd args, terr));
 
-	f := "torrentdata";
-	dstfd = sys->open(f, Sys->OREAD);
-	if(dstfd == nil)
-		fail(sprint("open %s: %r", f));
+	(dstfds, nil, oerr) := t.openfiles(nofix, 1);
+	if(oerr != nil)
+		fail(sprint("%s", oerr));
 
-	buf := array[Sys->ATOMICIO] of byte;
-	off := big 0;
-	for(i := 0; i < len torrent.piecehashes; i++) {
-		piecelen := torrent.piecelen;
-		if(big piecelen > torrent.length-off)
-			piecelen = int (torrent.length-off);
+	# xxx should print state per file
 
-		state: ref Keyring->DigestState;
-
-		have := 0;
-		while(have < piecelen) {
-			want := piecelen-have;
-			if(want > len buf)
-				want = len buf;
-			n := sys->read(dstfd, buf, want);
-			if(n == 0)
-				fail(sprint("early eof, at offset %bd", off));
-			if(n < 0)
-				fail(sprint("read at offset %bd: %r", off));
-			state = keyring->sha1(buf, n, nil, state);
-			off += big n;
-			have += n;
-		}
-
-		havehash := array[Keyring->SHA1dlen] of byte;
-		keyring->sha1(nil, 0, havehash, state);
+	haves := Bits.new(len t.piecehashes);
+	if(dstfds != nil)
+	for(i := 0; i < len t.piecehashes; i++) {
+		wanthash := t.piecehashes[i];
+		(buf, err) := bittorrent->pieceread(t, dstfds, i);
+		if(err != nil)
+			fail(sprint("%s", err));
 		
-		wanthash := torrent.piecehashes[i];
-		if(!equal(wanthash, havehash))
-			fail(sprint("piece %d wrong, want %s, have %s", i, hex(havehash), hex(wanthash)));
+		havehash := array[Keyring->SHA1dlen] of byte;
+		keyring->sha1(buf, len buf, havehash, nil);
+		if(hex(wanthash) == hex(havehash))
+			haves.set(i);
 	}
-	fprint(fildes(2), "verified!\n");
-}
 
-equal(d1, d2: array of byte): int
-{
-	if(len d1 != len d2)
-		return 0;
-	for(i := 0; i < len d1; i++)
-		if(d1[i] != d2[i])
-			return 0;
-	return 1;
-}
-
-hexchar(c: byte): byte
-{
-	if(c > byte 9)
-		return c-byte 10+byte 'a';
-	return c+byte '0';
+	print("progress:  %d/%d pieces\n", haves.have, len t.piecehashes);
+	print("pieces:\n");
+	for(i = 0; i < len t.piecehashes; i++)
+		if(haves.get(i))
+			print("1");
+		else
+			print("0");
+	print("\n");
 }
 
 hex(d: array of byte): string
 {
-	s := array[2*len d] of byte;
-	for(i := 0; i < len d; i++) {
-		s[2*i] = hexchar(d[i]>>4);
-		s[2*i+1] = hexchar(d[i] & byte 16r0f);
-	}
-	return string s;
+	s := "";
+	for(i := 0; i < len d; i++)
+		s += sprint("%02x", int d[i]);
+	return s;
 }
 
 fail(s: string)

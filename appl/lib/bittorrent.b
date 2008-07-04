@@ -581,14 +581,103 @@ say("have unpacked bee");
 	#say("have torrent config");
 
 	# xxx sanity checks
-	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, origfiles, length), nil);
+	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, origfiles, length, path+".state"), nil);
 }
+
+
+mkdirs(elems: list of string): string
+{
+	if(elems == nil)
+		return nil;
+
+	path := ".";
+	for(; elems != nil; elems = tl elems) {
+		path += "/"+hd elems;
+		(ok, dir) := sys->stat(path);
+		if(ok == 0) {
+			if(dir.mode & Sys->DMDIR)
+				continue;
+			return sprint("existing %q should be a directory but it is not", path);
+		}
+		fd := sys->create(path, Sys->OREAD, 8r777);
+		if(fd == nil)
+			return sprint("creating %q: %r", path);
+	}
+	return nil;
+}
+
+Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string)
+{
+	fds: list of ref (ref Sys->FD, big);
+
+	# attempt to open paths as existing files
+	opens: list of string;
+	files := t.files;
+	if(nofix)
+		files = t.origfiles;
+	for(l := files; l != nil; l = tl l) {
+		(path, length) := *hd l;
+		fd := sys->open("./"+path, Sys->ORDWR);
+		fds = ref (fd, length)::fds;
+		if(fd != nil) {
+			(ok, dir) := sys->fstat(fd);
+			if(ok != 0)
+				return (nil, 0, sprint("fstat %s: %r", path));
+			if(dir.length != length)
+				return (nil, 0, sprint("%s: length of existing file is %bd, torrent says %bd", path, dir.length, length));
+			opens = path::opens;
+			say(sprint("opened %q", path));
+		}
+	}
+	fds = rev(fds);
+	if(len opens == len files)
+		return (fds, 0, nil);
+
+	if(len opens != 0)
+		return (nil, 0, sprint("%s: already exists", hd opens));
+
+	if(nocreate)
+		return (nil, 0, nil); 
+
+	# none could be opened, create paths as new files
+	fds = nil;
+	for(l = files; l != nil; l = tl l) {
+		(path, length) := *hd l;
+		(nil, elems) := sys->tokenize(path, "/");
+		err := mkdirs(rev(tl rev(elems)));
+		if(err != nil)
+			return (nil, 0, err);
+		fd := sys->create("./"+path, Sys->ORDWR, 8r666);
+		if(fd == nil)
+			return (nil, 0, sprint("create %s: %r", path));
+		dir := sys->nulldir;
+		dir.length = length;
+		if(sys->fwstat(fd, dir) != 0)
+			return (nil, 0, sprint("fwstat file size %s: %r", path));
+		fds = ref (fd, length)::fds;
+		say(sprint("created %q", path));
+	}
+	fds = rev(fds);
+	return (fds, 1, nil);
+}
+
+Torrent.piecelength(t: self ref Torrent, index: int): int
+{
+	piecelen := t.piecelen;
+	if(index+1 == len t.piecehashes) {
+		piecelen = int (t.length % big t.piecelen);
+		if(piecelen == 0)
+			piecelen = t.piecelen;
+	}
+	return piecelen;
+}
+
 
 readfile(fd: ref Sys->FD): array of byte
 {
 	d := array[0] of byte;
 	for(;;) {
-		n := sys->read(fd, buf := array[Sys->ATOMICIO] of byte, len buf);
+		n := sys->readn(fd, buf := array[32*1024] of byte, len buf);
 		if(n == 0)
 			break;
 		if(n < 0)
@@ -672,6 +761,80 @@ bytefmt(bytes: big): string
 	return sprint("%bd%s", bytes, suffix[i]);
 }
 
+
+piecewrite(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string
+{
+	have := 0;
+
+	wantoff := big index*big t.piecelen;
+	off := big 0;
+	for(f := dstfds; have < len buf && f != nil; f = tl f) {
+		(fd, size) := *hd f;
+		if(off+size < wantoff) {
+			off += size;
+			continue;
+		}
+
+		want := len buf-have;
+		if(size < big want)
+			want = int size;
+		n := sys->pwrite(fd, buf[have:], want, wantoff-off);
+		if(n != want)
+			return sprint("write piece %d: %r", index);
+		have += n;
+		wantoff += big n;
+		off += size;
+	}
+	if(have != len buf)
+		return "internal error: should have written full piece by now...";
+	return nil;
+}
+
+preadn(fd: ref Sys->FD, d: array of byte, n: int, off: big): int
+{
+	have := 0;
+	while(have < n) {
+		nn := sys->pread(fd, d[have:], n-have, off+big have);
+		if(nn < 0)
+			return nn;
+		if(nn == 0)
+			break;
+		have += n;
+	}
+	return have;
+}
+
+pieceread(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int): (array of byte, string)
+{
+	piecelen := t.piecelength(index);
+	buf := array[piecelen] of byte;  # xxx memory hog
+	have := 0;
+
+	wantoff := big index*big t.piecelen;
+	off := big 0;
+	for(f := dstfds; have < len buf && f != nil; f = tl f) {
+		(fd, size) := *hd f;
+		if(off+size < wantoff) {
+			off += size;
+			continue;
+		}
+
+		want := piecelen-have;
+		if(size < big want)
+			want = int size;
+		n := preadn(fd, buf[have:], want, wantoff-off);
+		if(n != want)
+			return (nil, sprint("read piece %d: %r", index));
+		have += n;
+		wantoff += big n;
+		off += size;
+	}
+	if(have != len buf)
+		return (nil, "internal error: should have read full piece by now...");
+	return (buf, nil);
+}
+
+
 sane(s: string): string
 {
 	ascii := "0-9a-zA-Z";
@@ -706,7 +869,7 @@ simplepath(s: string): string
 	path: string;
 	for(; toks != nil; toks = tl toks)
 		path += "/"+sane(hd toks);
-	return path;
+	return path[1:];
 }
 
 
@@ -733,6 +896,14 @@ g32(d: array of byte, i: int): (int, int)
 rev[T](l: list of T): list of T
 {
 	r: list of T;
+	for(; l != nil; l = tl l)
+		r = hd l::r;
+	return r;
+}
+
+revstr(l: list of string): list of string
+{
+	r: list of string;
 	for(; l != nil; l = tl l)
 		r = hd l::r;
 	return r;

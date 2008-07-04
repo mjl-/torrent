@@ -55,11 +55,17 @@ Bittorrent: module {
 		files:	list of ref (string, big);  # path, length
 		origfiles: list of ref (string, big);  # files as found in .torrent
 		length:	big;
+		piecestatepath:	string;
 
 		open:	fn(path: string): (ref Torrent, string);
+		openfiles:	fn(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string);
+		piecelength:	fn(t: self ref Torrent, index: int): int;
 	};
 
 	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string);
 	genpeerid:	fn(): array of byte;
 	bytefmt:	fn(n: big): string;
+	pieceread:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int): (array of byte, string);
+	piecewrite:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string;
+
 };
