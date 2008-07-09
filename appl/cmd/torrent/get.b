@@ -9,6 +9,7 @@ include "arg.m";
 include "daytime.m";
 include "string.m";
 include "keyring.m";
+include "security.m";
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -18,6 +19,7 @@ sys: Sys;
 daytime: Daytime;
 str: String;
 keyring: Keyring;
+random: Random;
 bittorrent: Bittorrent;
 
 print, sprint, fprint, fildes: import sys;
@@ -41,6 +43,7 @@ totalleft: big;
 listenport: int;
 localpeerid: array of byte;
 trackerevent: string;
+piececounts: array of int;  # for each piece, count of peers that have it
 
 # piecekeeper
 piecechan: chan of (int, int, int, chan of int);
@@ -107,9 +110,10 @@ Peer: adt {
 };
 
 
-Dialersmax: con 5;  # max number of dialer procs
-Dialtimeout: con 20;  # timeout for connecting to peer
-Peersmax: con 40;
+Dialersmax:	con 5;  # max number of dialer procs
+Dialtimeout:	con 20;  # timeout for connecting to peer
+Peersmax:	con 40;
+Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
 
 Peeridlen:	con 20;
 
@@ -156,6 +160,7 @@ init(nil: ref Draw->Context, args: list of string)
 	daytime = load Daytime Daytime->PATH;
 	str = load String String->PATH;
 	keyring = load Keyring Keyring->PATH;
+	random = load Random Random->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init(bitarray);
@@ -243,6 +248,8 @@ init(nil: ref Draw->Context, args: list of string)
 	piecebusy = Bits.new(len torrent.piecehashes);
 
 	peerinmsgchan = chan of (ref Peer, ref Msg);
+
+	piececounts = array[len torrent.piecehashes] of {* => 0};
 
 	# start listener, for incoming connections
 	ok := -1;
@@ -353,8 +360,16 @@ peerdel(peer: ref Peer)
 {
 	npeers: list of ref Peer;
 	for(; peers != nil; peers = tl peers) {
-		if(hd peers != peer)
+		if(hd peers != peer) {
 			npeers = hd peers::npeers;
+		} else {
+			n := 0;
+			for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
+				if(peer.piecehave.get(i)) {
+					piececounts[i]--;
+					n++;
+				}
+		}
 	}
 	peers = npeers;
 }
@@ -574,6 +589,7 @@ main()
 
 	(peer, msg) := <-peerinmsgchan =>
 		# xxx fix this code.  it can easily block now
+
 		if(msg == nil) {
 			warn("eof from peer "+peer.text());
 			peerdel(peer);
@@ -645,6 +661,8 @@ main()
 			}
 			if(peer.piecehave.get(m.index))
 				say(sprint("%s already had piece %d", peer.text(), m.index));
+			else
+				piececounts[m.index]++;
 
 			say(sprint("remote now has piece %d", m.index));
 			peer.piecehave.set(m.index);
@@ -669,6 +687,13 @@ main()
 				continue;
 			}
 			say("remote sent bitfield, haves "+peer.piecehave.text());
+
+			n := 0;
+			for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
+				if(peer.piecehave.get(i)) {
+					piececounts[i]++;
+					n++;
+				}
 
 			interesting(peer);
 
@@ -899,7 +924,9 @@ interesting(p: ref Peer)
 	}
 }
 
-setpiece(peer: ref Peer, index: int): ref Piece
+
+
+setpiece(peer: ref Peer, index: int)
 {
 	piecelen := torrent.piecelength(index);
 	nblocks := (piecelen+Blocklength-1)/Blocklength;
@@ -908,22 +935,66 @@ setpiece(peer: ref Peer, index: int): ref Piece
 	say(sprint("assigned %s to %s", piece.text(), peer.text()));
 	peer.curpiece = piece;
 	piecebusy.set(index);
+}
 
-	return piece;
+
+getrandompiece(peer: ref Peer, b: ref Bits)
+{
+	skip := random->randomint(Random->NotQuiteRandom) % b.have;
+
+	for(i := 0; i < b.n; i++)
+		if(b.get(i)) {
+			if(skip <= 0) {
+				say(sprint("choose random piece %d", i));
+				return setpiece(peer, i);
+			}
+			skip--;
+		}
+}
+
+getrarestpiece(peer: ref Peer, b: ref Bits)
+{
+	# first, determine which pieces are the rarest
+	rarest: list of int;  # piece index
+	min := -1;
+	seen := 0;
+	for(i := 0; i < b.n && seen < b.have; i++) {
+		if(b.get(i)) {
+			seen++;
+			if(min < 0 || piececounts[i] < min) {
+				rarest = nil;
+				min = piececounts[i];
+			}
+			if(piececounts[i] <= min)
+				rarest = i::rarest;
+		}
+	}
+	if(rarest == nil)
+		return;
+
+	# next, pick a random element from the list
+	skip := random->randomint(Random->NotQuiteRandom) % b.have;
+	while(skip-- > 0)
+		rarest = tl rarest;
+	index := hd rarest;
+	say(sprint("choose rarest piece %d", index));
+	setpiece(peer, index);
 }
 
 getpiece(peer: ref Peer): ref Piece
 {
+	peer.curpiece = nil;
 	b := wantpeerpieces(peer);
-	if(!b.isempty()) {
-		for(i := 0; i < b.n; i++)
-			if(b.get(i))
-				return setpiece(peer, i);
+	if(b.isempty()) {
+		say("no piece to get from "+peer.text());
+		return nil;
 	}
 
-	say("no piece to get from "+peer.text());
-	peer.curpiece = nil;
-	return nil;
+	if(piecehave.have < Piecesrandom)
+		getrandompiece(peer, b);
+	else
+		getrarestpiece(peer, b);
+	return peer.curpiece;  # should always be non-nil...
 }
 
 schedreq(peer: ref Peer)
