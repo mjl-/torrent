@@ -40,6 +40,7 @@ totaldownload := big 0;
 totalleft: big;
 listenport: int;
 localpeerid: array of byte;
+trackerevent: string;
 
 # piecekeeper
 piecechan: chan of (int, int, int, chan of int);
@@ -47,7 +48,7 @@ Add, Remove, Request: con iota;
 
 # tracker
 trackkickchan:	chan of int;
-trackreqchan:	chan of (big, big, big, int);  # up, down, left, listenport
+trackreqchan:	chan of (big, big, big, int, string);  # up, down, left, listenport, event
 trackchan:	chan of (int, array of (string, int, array of byte), string);  # interval, peers, error
 
 Newpeer: adt {
@@ -188,6 +189,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	if(created) {
 		# all new files, we don't have pieces yet
+		trackerevent = "started";
 		say("no state file needed, all new files");
 		piecehave = Bits.new(len torrent.piecehashes);
 	} else {
@@ -231,7 +233,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	piecechan = chan of (int, int, int, chan of int);
 	trackkickchan = chan of int;
-	trackreqchan = chan of (big, big, big, int);
+	trackreqchan = chan of (big, big, big, int, string);
 	trackchan = chan of (int, array of (string, int, array of byte), string);
 
 	newpeerchan = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
@@ -520,7 +522,8 @@ main()
 		}
 
 	<-trackkickchan =>
-		trackreqchan <-= (totalupload, totaldownload, totalleft, listenport);
+		trackreqchan <-= (totalupload, totaldownload, totalleft, listenport, trackerevent);
+		trackerevent = nil;
 
 	(interval, newpeers, trackerr) := <-trackchan =>
 		if(trackerr != nil) {
@@ -706,8 +709,11 @@ main()
 			}
 			schedreq(peer);
 
-			if(isdone())
+			if(isdone()) {
+				trackerevent = "completed";
+				spawn trackkick(0);
 				print("DONE!\n");
+			}
 
                 Request =>
 			say(sprint("remote sent request, ignoring"));
@@ -728,10 +734,10 @@ trackkick(n: int)
 track()
 {
 	for(;;) {
-		(up, down, left, lport) := <-trackreqchan;
+		(up, down, left, lport, event) := <-trackreqchan;
 
 		say("getting new tracker info");
-		(interval, newpeers, nil, err) := bittorrent->trackerget(torrent, localpeerid, up, down, left, lport, nil);
+		(interval, newpeers, nil, err) := bittorrent->trackerget(torrent, localpeerid, up, down, left, lport, event);
 		if(err != nil)
 			say("trackerget: "+err);
 		else
