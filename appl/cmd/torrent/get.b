@@ -116,6 +116,7 @@ Peer: adt {
 	localchoking:	fn(p: self ref Peer): int;
 	localinterested:	fn(p: self ref Peer): int;
 	send:	fn(p: self ref Peer, m: ref Msg);
+	isdone:	fn(p: self ref Peer): int;
 	text:	fn(p: self ref Peer): string;
 	fulltext:	fn(p: self ref Peer): string;
 };
@@ -343,7 +344,7 @@ trackerpeertake(): Newpeer
 isascii(d: array of byte): int
 {
 	for(i := 0; i < len d; i++)
-		if(str->in(int d[i], " -~"))
+		if(!str->in(int d[i], " -~"))
 			return 0;
 	return 1;
 }
@@ -374,20 +375,25 @@ peerconnected(addr: string): int
 	return 0;
 }
 
+
+peerdrop(peer: ref Peer)
+{
+	n := 0;
+	for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
+		if(peer.piecehave.get(i)) {
+			piececounts[i]--;
+			n++;
+		}
+}
+
 peerdel(peer: ref Peer)
 {
 	npeers: list of ref Peer;
 	for(; peers != nil; peers = tl peers) {
-		if(hd peers != peer) {
+		if(hd peers != peer)
 			npeers = hd peers::npeers;
-		} else {
-			n := 0;
-			for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
-				if(peer.piecehave.get(i)) {
-					piececounts[i]--;
-					n++;
-				}
-		}
+		else
+			peerdrop(peer);
 	}
 	peers = npeers;
 }
@@ -439,6 +445,11 @@ Peer.localchoking(p: self ref Peer): int
 Peer.localinterested(p: self ref Peer): int
 {
 	return p.state & LocalInterested;
+}
+
+Peer.isdone(p: self ref Peer): int
+{
+	return p.piecehave.isfull();
 }
 
 Peer.send(p: self ref Peer, msg: ref Msg)
@@ -652,7 +663,10 @@ main()
 	(dialed, np, peerfd, extensions, peerid, err) := <-newpeerchan =>
 		if(err != nil) {
 			warn(sprint("%s: %s", np.text(), err));
+		} else if(hex(peerid) == localpeeridhex) {
+			say("connected to self, dropping connection...");
 		} else {
+
 			peer := Peer.new(np, peerfd, extensions, peerid);
 			spawn peernetreader(peer);
 			spawn peernetwriter(peer);
@@ -825,6 +839,16 @@ main()
 			if(isdone()) {
 				trackerevent = "completed";
 				spawn trackkick(0);
+				npeers: list of ref Peer;
+				for(l := peers; l != nil; l = tl l) {
+					p := hd peers;
+					if(p.isdone()) {
+						say("done: dropping seed "+p.fulltext());
+						peerdrop(p);
+					} else
+						npeers = p::npeers;
+				}
+				peers = rev(npeers);
 				print("DONE!\n");
 			}
 
