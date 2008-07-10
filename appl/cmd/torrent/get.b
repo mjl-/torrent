@@ -109,6 +109,7 @@ Peer: adt {
 	up, down, metaup, metadown: ref Traffic;
 	wants:	list of ref Block;
 	netwriting:	int;
+	lastunchoke:	int;
 
 	new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer;
 	remotechoking:	fn(p: self ref Peer): int;
@@ -126,7 +127,7 @@ Dialersmax:	con 5;  # max number of dialer procs
 Dialtimeout:	con 20;  # timeout for connecting to peer
 Peersmax:	con 40;
 Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
-Blockqueuemax:	con 50;  # max number of Requests a peer can queue at our side without being considered bad
+Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
 
 Peeridlen:	con 20;
 
@@ -141,7 +142,8 @@ Intervaldefault:	con 1800;
 Intervalstartupperiod:	con 120;
 
 Blocklength:	con 16*1024;
-WantUnchokedCount:	con 4;
+Unchokedmax:	con 4;
+Seedunchokedmax:	con 4;
 Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
 Minscheduled:	con 6;
 Maxdialedpeers:	con 20;
@@ -152,12 +154,14 @@ RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
 
 
 # progress/state
-ndialers: int;  # number of active dialers
-trackerpeers: list of Newpeer;  # peers we are not connected to
-peers: list of ref Peer;  # peers we are connected to
-peergen: int;  # sequence number for peers
-piecehave: ref Bits;
-piecebusy: ref Bits;
+ndialers:	int;  # number of active dialers
+trackerpeers:	list of Newpeer;  # peers we are not connected to
+peers:	list of ref Peer;  # peers we are connected to
+rotatepeers:	list of ref Peer;  # peers to use in optimistic unchoking
+luckypeer:	ref Peer;  # current optimistic unchoked peer.  may be stale (not in peers)
+peergen:	int;  # sequence number for peers
+piecehave:	ref Bits;
+piecebusy:	ref Bits;
 
 peerinmsgchan: chan of (ref Peer, ref Msg);
 msgwrittenchan: chan of ref Peer;
@@ -389,13 +393,21 @@ peerdrop(peer: ref Peer)
 peerdel(peer: ref Peer)
 {
 	npeers: list of ref Peer;
-	for(; peers != nil; peers = tl peers) {
+	for(; peers != nil; peers = tl peers)
 		if(hd peers != peer)
 			npeers = hd peers::npeers;
 		else
 			peerdrop(peer);
-	}
 	peers = npeers;
+
+	nrotatepeers: list of ref Peer;
+	for(; rotatepeers != nil; rotatepeers = tl rotatepeers)
+		if(hd rotatepeers != peer)
+			nrotatepeers = hd rotatepeers::nrotatepeers;
+	rotatepeers = nrotatepeers;
+
+	if(luckypeer == peer)
+		luckypeer = nil;
 }
 
 peeradd(p: ref Peer)
@@ -404,6 +416,13 @@ peeradd(p: ref Peer)
 	peers = p::peers;
 }
 
+peerhas(p: ref Peer): int
+{
+	for(l := peers; l != nil; l = tl l)
+		if(p == hd l)
+			return 1;
+	return 0;
+}
 
 dialpeers()
 {
@@ -424,7 +443,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref P
 	outmsgs := chan of ref Msg;
 	state := RemoteChoking|LocalChoking;
 	msgseq := 0;
-	return ref Peer(peergen++, np, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq, Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(), nil, 0);
+	return ref Peer(peergen++, np, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq, Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(), nil, 0, 0);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -606,6 +625,85 @@ blockreadsend(p: ref Peer)
 	p.send(ref Msg.Piece(b.piece, b.begin, d));
 }
 
+peersunchoked(): list of ref Peer
+{
+	r: list of ref Peer;
+	for(l := peers; l != nil; l = tl l)
+		if(!(hd l).localchoking())
+			r = hd l::r;
+	return r;
+}
+
+peersactive(): list of ref Peer
+{
+	r: list of ref Peer;
+	for(l := peers; l != nil; l = tl l)
+		if(!(hd l).localchoking() && (hd l).remoteinterested())
+			r = hd l::r;
+	return r;
+}
+
+cmp(n1, n2: int): int
+{
+	if(n1 == n2)
+		return n1;
+	return n2-n1;
+}
+
+peerratecmp(a1, a2: (ref Peer, int)): int
+{
+	(p1, r1) := a1;
+	(p2, r2) := a2;
+	n := cmp(r1, r2);
+	if(n != 0)
+		return n;
+	if(p1.remoteinterested() == p2.remoteinterested())
+		return 0;
+	if(p1.remoteinterested())
+		return -1;
+	return 1;
+}
+
+# xxx should be done more generic
+peersort(a: array of (ref Peer, int))
+{ 
+        for(i := 1; i < len a; i++) { 
+                tmp := a[i]; 
+                for(j := i; j > 0 && peerratecmp(a[j-1], tmp) > 0; j--) 
+                        a[j] = a[j-1]; 
+                a[j] = tmp; 
+        } 
+}
+
+nextoptimisticunchoke(): ref Peer
+{
+	# possibly repopulate rotatepeers with current peers
+	if(rotatepeers == nil) {
+		for(l := peers; l != nil; l = tl l)
+			rotatepeers = hd l::rotatepeers;
+	}
+
+	if(rotatepeers == nil)
+		return nil;
+
+	peer: ref Peer;
+	(rotatepeers, peer) = pickrandom(rotatepeers);
+	return peer;
+}
+
+choke(p: ref Peer)
+{
+	p.send(ref Msg.Choke());
+	p.state |= LocalChoking;
+}
+
+unchoke(p: ref Peer)
+{
+	p.send(ref Msg.Unchoke());
+	p.state &= ~LocalChoking;
+	p.lastunchoke = daytime->now();
+}
+
 
 ticker()
 {
@@ -617,12 +715,95 @@ ticker()
 
 main()
 {
+	gen := 0;
+
 	for(;;) alt {
 	<-tickchan =>
 		say(sprint("ticking, %d peers", len peers));
 		for(l := peers; l != nil; l = tl l) {
 			peer := hd l;
 			say(sprint("%s: up %s, down %s, meta %s %s", peer.fulltext(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
+		}
+
+		if(isdone()) {
+			if(gen % 3 == 2) {
+				gen++;
+				continue;
+			}
+
+			# find the peer that has been unchoked longest
+			oldest: ref Peer;
+			nunchoked := 0;
+			for(l = peers; l != nil; l = tl l) {
+				p := hd peers;
+				if(!p.localchoking() && p.remoteinterested()) {
+					nunchoked++;
+					if(oldest == nil || p.lastunchoke < oldest.lastunchoke)
+						oldest = p;
+				}
+			}
+
+			# find all peers that we may want to unchoke randomly
+			others: list of ref Peer;
+			for(l = peers; l != nil; l = tl l) {
+				p := hd peers;
+				if(p.remoteinterested() && p.localchoking())
+					others = p::others;
+			}
+
+			if(oldest != nil && nunchoked+len others >= Seedunchokedmax) {
+				choke(oldest);
+				nunchoked--;
+			}
+
+			while(others != nil && nunchoked < Seedunchokedmax) {
+				p: ref Peer;
+				(others, p) = pickrandom(others);
+				unchoke(p);
+				nunchoked++;
+			}
+
+			gen++;
+		} else {
+			# new optimistic unchoke?
+			if(gen % 3 == 0)
+				luckypeer = nextoptimisticunchoke();
+
+			# make sorted array of all peers, sorted by upload rate, then by interestedness
+			allpeers := array[len peers] of (ref Peer, int);  # peer, rate
+			i := 0;
+			luckyindex := -1;
+			for(l = peers; l != nil; l = tl l) {
+				if(luckypeer != nil && hd peers == luckypeer)
+					luckyindex = i;
+				allpeers[i++] = (hd peers, (hd peers).down.rate());
+			}
+			peersort(allpeers);
+
+			# determine N interested peers with highest upload rate
+			nintr := 0;
+			for(i = 0; nintr < Unchokedmax && i < len allpeers; i++)
+				if(allpeers[i].t0.remoteinterested())
+					nintr++;
+			unchokeend := i;  # index of first peer to choke.  element before (if any) is slowest peer to unchoke
+
+			# replace slowest of N by optimistic unchoke if lucky peer was not already going to be unchoked
+			if(luckyindex >= 0 && luckyindex >= unchokeend && unchokeend-1 >= 0) {
+				allpeers[luckyindex] = allpeers[unchokeend-1];
+				allpeers[unchokeend-1] = (luckypeer, 0);
+			}
+
+			# now unchoke the N peers, and all non-interested peers that are faster.  choke all other peers if they weren't already.
+			for(i = 0; i < len allpeers; i++) {
+				(p, nil) := allpeers[i];
+				if(p == nil)
+					say(sprint("bad allpeers, len allpeers %d, len peers %d, i %d, unchokeend %d, luckyindex %d, nintr %d", len allpeers, len peers, i, unchokeend, luckyindex, nintr));
+				if(i < unchokeend && p.localchoking())
+					unchoke(p);
+				else if(i >= unchokeend && !p.localchoking())
+					choke(p);
+			}
+			gen++;
 		}
 
 	<-trackkickchan =>
@@ -673,6 +854,9 @@ main()
 			peeradd(peer);
 			say("new peer "+peer.fulltext());
 
+			# give fresh peers a good chance of getting unchoked
+			rotatepeers = peer::peer::peer::rotatepeers;
+
 			if(piecehave.have == 0) {
 				peer.send(ref Msg.Keepalive());
 			} else {
@@ -681,8 +865,11 @@ main()
 				d[:] = piecehave.d;
 				peer.send(ref Msg.Bitfield(d));
 			}
-			peer.send(ref Msg.Unchoke());
-			peer.state &= ~LocalChoking;
+
+			if(len peersactive() < Unchokedmax) {
+				say("unchoking rare new peer: "+peer.text());
+				unchoke(peer);
+			}
 		}
 		if(dialed) {
 			ndialers--;
@@ -746,6 +933,10 @@ main()
 			say(sprint("%s is interested", peer.text()));
 			peer.state |= RemoteInterested;
 
+			if(!peer.localchoking() && len peersactive() >= Unchokedmax && !isdone()) {
+				# xxx choke slowest peer that is not the optimistic unchoke
+			}
+
 		Notinterested =>
 			if(!peer.remoteinterested()) {
 				say(sprint("%s is uninterested again...", peer.text()));
@@ -754,6 +945,8 @@ main()
 
 			say(sprint("%s is no longer interested", peer.text()));
 			peer.state &= ~RemoteInterested;
+
+			# xxx if this peer was choked, unchoke another peer?
 
                 Have =>
 			if(m.index >= len torrent.piecehashes) {
@@ -845,8 +1038,12 @@ main()
 					if(p.isdone()) {
 						say("done: dropping seed "+p.fulltext());
 						peerdrop(p);
-					} else
+					} else {
 						npeers = p::npeers;
+						# we won't act on becoming interested while unchoked anymore
+						if(!p.remoteinterested() && !p.localchoking())
+							choke(p);
+					}
 				}
 				peers = rev(npeers);
 				print("DONE!\n");
@@ -1184,6 +1381,24 @@ peernetwriter(peer: ref Peer)
 	}
 }
 
+
+pickrandom[T](l: list of T): (list of T, T)
+{
+	if(len l == 0)
+		return (l, nil);
+
+	elem: T;
+	new: list of T;
+	skip := random->randomint(Random->NotQuiteRandom) % len l;
+	for(; l != nil; l = tl l) {
+		if(skip == 0)
+			elem = hd l;
+		else
+			new = hd l::new;
+		skip--;
+	}
+	return (rev(new), elem);
+}
 
 readfile(f: string): (string, string)
 {

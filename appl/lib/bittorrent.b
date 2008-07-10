@@ -816,7 +816,6 @@ piecewrite(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int, b
 
 preadn(fd: ref Sys->FD, d: array of byte, n: int, off: big): int
 {
-	say(sprint("preadn n %d off %bd", n, off));
 	have := 0;
 	while(have < n) {
 		nn := sys->pread(fd, d[have:], n-have, off+big have);
@@ -833,7 +832,6 @@ preadn(fd: ref Sys->FD, d: array of byte, n: int, off: big): int
 torrentpreadx(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string
 {
 	for(f := dstfds; n > 0 && f != nil; f = tl f) {
-		say(sprint("loop, n %d off %bd", n, off));
 		(fd, size) := *hd f;
 		if(size <= off) {
 			off -= size;
