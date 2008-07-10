@@ -67,5 +67,5 @@ Bittorrent: module {
 	bytefmt:	fn(n: big): string;
 	pieceread:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int): (array of byte, string);
 	piecewrite:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string;
-
+	blockread:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index, begin, length: int): (array of byte, string);
 };

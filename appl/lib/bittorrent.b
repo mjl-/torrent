@@ -816,6 +816,7 @@ piecewrite(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int, b
 
 preadn(fd: ref Sys->FD, d: array of byte, n: int, off: big): int
 {
+	say(sprint("preadn n %d off %bd", n, off));
 	have := 0;
 	while(have < n) {
 		nn := sys->pread(fd, d[have:], n-have, off+big have);
@@ -828,34 +829,44 @@ preadn(fd: ref Sys->FD, d: array of byte, n: int, off: big): int
 	return have;
 }
 
-pieceread(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int): (array of byte, string)
-{
-	piecelen := t.piecelength(index);
-	buf := array[piecelen] of byte;  # xxx memory hog
-	have := 0;
 
-	wantoff := big index*big t.piecelen;
-	off := big 0;
-	for(f := dstfds; have < len buf && f != nil; f = tl f) {
+torrentpreadx(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string
+{
+	for(f := dstfds; n > 0 && f != nil; f = tl f) {
+		say(sprint("loop, n %d off %bd", n, off));
 		(fd, size) := *hd f;
-		if(off+size < wantoff) {
-			off += size;
+		if(size <= off) {
+			off -= size;
 			continue;
 		}
 
-		want := piecelen-have;
-		if(size < big want)
-			want = int size;
-		n := preadn(fd, buf[have:], want, wantoff-off);
-		if(n != want)
-			return (nil, sprint("read piece %d: %r", index));
-		have += n;
-		wantoff += big n;
-		off += size;
+		want := n;
+		if(size < off+big n)
+			want = int (size-off);
+		nn := preadn(fd, buf, want, off);
+		if(nn < 0)
+			return sprint("reading: %r");
+		if(nn != want)
+			return "short read";
+		n -= nn;
+		buf = buf[nn:];
+		off -= size;
 	}
-	if(have != len buf)
-		return (nil, "internal error: should have read full piece by now...");
-	return (buf, nil);
+	if(n != 0)
+		return "could not read all requested data";
+	return nil;
+}
+
+pieceread(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int): (array of byte, string)
+{
+	buf := array[t.piecelength(index)] of byte;  # xxx memory hog
+	return (buf, torrentpreadx(dstfds, buf, len buf, big index*big t.piecelen));
+}
+
+blockread(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index, begin, length: int): (array of byte, string)
+{
+	buf := array[length] of byte;
+	return (buf, torrentpreadx(dstfds, buf, len buf, big index*big t.piecelen+big begin));
 }
 
 
