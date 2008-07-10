@@ -42,6 +42,7 @@ totaldownload := big 0;
 totalleft: big;
 listenport: int;
 localpeerid: array of byte;
+localpeeridhex: string;
 trackerevent: string;
 piececounts: array of int;  # for each piece, count of peers that have it
 
@@ -250,6 +251,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	totalleft = torrent.length;
 	localpeerid = bittorrent->genpeerid();
+	localpeeridhex = hex(localpeerid);
 
 	piecechan = chan of (int, int, int, chan of int);
 	trackkickchan = chan of int;
@@ -623,6 +625,8 @@ main()
 			say("main, new peers");
 			for(i := 0; i < len newpeers; i++) {
 				(ip, port, peerid) := newpeers[i];
+				if(hex(peerid) == localpeeridhex)
+					continue;  # skip self
 				np := Newpeer(sprint("%s!%d", ip, port), peerid);
 				say("new: "+np.text());
 				trackerpeerdel(np);
