@@ -101,6 +101,7 @@ Peer: adt {
 	np:	Newpeer;
 	fd:	ref Sys->FD;
 	extensions, peerid: array of byte;
+	peeridhex:	string;
 	outmsgs:	chan of ref Msg;
 	curpiece:	ref Piece;
 	piecehave:	ref Bits;
@@ -416,6 +417,14 @@ peeradd(p: ref Peer)
 	peers = p::peers;
 }
 
+peerknown(peeridhex: string): int
+{
+	for(l := peers; l != nil; l = tl l)
+		if(peeridhex == (hd l).peeridhex)
+			return 1;
+	return 0;
+}
+
 peerhas(p: ref Peer): int
 {
 	for(l := peers; l != nil; l = tl l)
@@ -443,7 +452,15 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref P
 	outmsgs := chan of ref Msg;
 	state := RemoteChoking|LocalChoking;
 	msgseq := 0;
-	return ref Peer(peergen++, np, fd, extensions, peerid, outmsgs, nil, Bits.new(piecehave.n), state, msgseq, Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(), nil, 0, 0);
+	return ref Peer(
+		peergen++,
+		np, fd, extensions, peerid, hex(peerid),
+		outmsgs, nil,
+		Bits.new(piecehave.n),
+		state,
+		msgseq,
+		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
+		nil, 0, 0);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -846,6 +863,8 @@ main()
 			warn(sprint("%s: %s", np.text(), err));
 		} else if(hex(peerid) == localpeeridhex) {
 			say("connected to self, dropping connection...");
+		} else if(peerknown(hex(peerid))) {
+			say("new connection from known peer, dropping new connection...");
 		} else {
 
 			peer := Peer.new(np, peerfd, extensions, peerid);
