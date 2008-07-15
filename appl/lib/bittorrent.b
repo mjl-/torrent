@@ -613,13 +613,22 @@ mkdirs(elems: list of string): string
 Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string)
 {
 	fds: list of ref (ref Sys->FD, big);
-
-	# attempt to open paths as existing files
-	opens: list of string;
 	files := t.files;
 	if(nofix)
 		files = t.origfiles;
-	for(l := files; l != nil; l = tl l) {
+
+	# verify file names are unique
+	filenames: list of string;
+	for(l := files; l != nil; l = tl l)
+		filenames = (hd l).t0::filenames;
+
+	for(m := filenames; m != nil; m = tl m)
+		if(has(tl m, hd m))
+			return (nil, 0, "duplicate path: "+hd m);
+
+	# attempt to open paths as existing files
+	opens: list of string;
+	for(l = files; l != nil; l = tl l) {
 		(path, length) := *hd l;
 		fd := sys->open("./"+path, Sys->ORDWR);
 		fds = ref (fd, length)::fds;
@@ -972,6 +981,14 @@ hex(d: array of byte): string
 	for(i := 0; i < len d; i++)
 		s += sprint("%02x", int d[i]);
 	return s;
+}
+
+has[T](l: list of T, e: T): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == e)
+			return 1;
+	return 0;
 }
 
 say(s: string)
