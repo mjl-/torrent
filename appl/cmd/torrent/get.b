@@ -10,6 +10,7 @@ include "daytime.m";
 include "string.m";
 include "keyring.m";
 include "security.m";
+include "ip.m";
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -20,10 +21,12 @@ daytime: Daytime;
 str: String;
 keyring: Keyring;
 random: Random;
+ipmod: IP;
 bittorrent: Bittorrent;
 
 print, sprint, fprint, fildes: import sys;
 Bee, Msg, Torrent: import bittorrent;
+IPaddr: import ipmod;
 
 
 Torrentget: module {
@@ -46,6 +49,9 @@ localpeeridhex: string;
 trackerevent: string;
 piececounts: array of int;  # for each piece, count of peers that have it
 trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
+
+ip4maskstr:	con "255.255.255.0";
+ip4mask:	IPaddr;
 
 # piecekeeper
 piecechan: chan of (int, int, int, chan of int);
@@ -163,7 +169,7 @@ RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
 ndialers:	int;  # number of active dialers
 trackerpeers:	list of Newpeer;  # peers we are not connected to
 peers:	list of ref Peer;  # peers we are connected to
-rotatepeers:	list of ref Peer;  # peers to use in optimistic unchoking
+rotateips:	list of string;  # masked ip address
 luckypeer:	ref Peer;  # current optimistic unchoked peer.  may be stale (not in peers)
 peergen:	int;  # sequence number for peers
 piecehave:	ref Bits;
@@ -185,6 +191,7 @@ init(nil: ref Draw->Context, args: list of string)
 	str = load String String->PATH;
 	keyring = load Keyring Keyring->PATH;
 	random = load Random Random->PATH;
+	ipmod = load IP IP->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init(bitarray);
@@ -259,6 +266,11 @@ init(nil: ref Draw->Context, args: list of string)
 		else
 			writestate();
 	}
+
+	ipok: int;
+	(ipok, ip4mask) = IPaddr.parse(ip4maskstr);
+	if(ipok != 0)
+		fail(sprint("bad ip4 mask: %q", ip4maskstr));
 
 	totalleft = torrent.length;
 	localpeerid = bittorrent->genpeerid();
@@ -410,12 +422,6 @@ peerdel(peer: ref Peer)
 		else
 			peerdrop(peer);
 	peers = npeers;
-
-	nrotatepeers: list of ref Peer;
-	for(; rotatepeers != nil; rotatepeers = tl rotatepeers)
-		if(hd rotatepeers != peer)
-			nrotatepeers = hd rotatepeers::nrotatepeers;
-	rotatepeers = nrotatepeers;
 
 	if(luckypeer == peer)
 		luckypeer = nil;
@@ -718,20 +724,41 @@ peersort(a: array of (ref Peer, int))
         } 
 }
 
-nextoptimisticunchoke(): ref Peer
+_nextoptimisticunchoke(regen: int): ref Peer
 {
-	# possibly repopulate rotatepeers with current peers
-	if(rotatepeers == nil) {
-		for(l := peers; l != nil; l = tl l)
-			rotatepeers = hd l::rotatepeers;
+	# find next masked ip address to pick peer from (if still present)
+	ipmasked: string;
+	while(rotateips != nil) {
+		(rotateips, ipmasked) = pickrandom(rotateips);
+
+		# find peer from the address pool with oldest unchoke
+		peer: ref Peer;
+		for(l := peers; l != nil; l = tl l) {
+			p := hd l;
+			if(maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
+				peer = p;
+		}
+		if(peer != nil)
+			return peer;
 	}
 
-	if(rotatepeers == nil)
+	if(!regen)
 		return nil;
 
-	peer: ref Peer;
-	(rotatepeers, peer) = pickrandom(rotatepeers);
-	return peer;
+	# rotation list emptied, generate a new one
+	for(l := peers; l != nil; l = tl l) {
+		p := hd l;
+		ip := maskip(p.np.ip);
+		if(!has(rotateips, ip))
+			rotateips = ip::rotateips;
+	}
+
+	return _nextoptimisticunchoke(0);
+}
+
+nextoptimisticunchoke(): ref Peer
+{
+	return _nextoptimisticunchoke(1);
 }
 
 choke(p: ref Peer)
@@ -903,15 +930,15 @@ main()
 		} else if(peerknownip(np.ip)) {
 			say("new connection from known ip address, dropping new connection...");
 		} else {
-
 			peer := Peer.new(np, peerfd, extensions, peerid);
 			spawn peernetreader(peer);
 			spawn peernetwriter(peer);
 			peeradd(peer);
 			say("new peer "+peer.fulltext());
 
-			# give fresh peers a good chance of getting unchoked
-			rotatepeers = peer::peer::peer::rotatepeers;
+			ip := maskip(np.ip);
+			if(!has(rotateips, ip))
+				rotateips = ip::rotateips;
 
 			if(piecehave.have == 0) {
 				peer.send(ref Msg.Keepalive());
@@ -1483,6 +1510,14 @@ pickrandom[T](l: list of T): (list of T, T)
 	return (rev(new), elem);
 }
 
+maskip(ipstr: string): string
+{
+	(ok, ip) := IPaddr.parse(ipstr);
+	if(ok != 0)
+		return ipstr;
+	return ip.mask(ip4mask).text();
+}
+
 etastr(secs: int): string
 {
 	if(secs < 0)
@@ -1548,6 +1583,14 @@ killgrp(pid: int)
 kill(pid: int)
 {
 	progctl(pid, "kill");
+}
+
+has[T](l: list of T, e: T): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == e)
+			return 1;
+	return 0;
 }
 
 rev[T](l: list of T): list of T
