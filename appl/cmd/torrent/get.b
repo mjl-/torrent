@@ -146,7 +146,8 @@ Intervalneed:	con 10;  # when we need more peers during startup period
 Intervaldefault:	con 1800;
 Intervalstartupperiod:	con 120;
 
-Blocklength:	con 16*1024;
+Blocksize:	con 16*1024;
+Blocksizemax:	con 32*1024;
 Unchokedmax:	con 4;
 Seedunchokedmax:	con 4;
 Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
@@ -1072,7 +1073,7 @@ main()
 			}
 
 			piece.d[m.begin:] = m.d;
-			piece.have.set(m.begin/Blocklength);
+			piece.have.set(m.begin/Blocksize);
 			totalleft -= big len m.d;
 
 			if(piece.isdone()) {
@@ -1121,6 +1122,13 @@ main()
                 Request =>
 			b := Block.new(m.index, m.begin, m.length);
 			say(sprint("%s sent request for %s", peer.text(), b.text()));
+
+			if(m.length > Blocksizemax) {
+				warn("requested block too large, disconnecting");
+				peerdel(peer);
+				continue;
+			}
+
 			if(blockhave(peer.wants, b)) {
 				say("peer already wanted block, skipping");
 				continue;
@@ -1335,7 +1343,7 @@ interesting(p: ref Peer)
 setpiece(peer: ref Peer, index: int)
 {
 	piecelen := torrent.piecelength(index);
-	nblocks := (piecelen+Blocklength-1)/Blocklength;
+	nblocks := (piecelen+Blocksize-1)/Blocksize;
 	piece := ref Piece(index, array[piecelen] of byte, Bits.new(nblocks));
 
 	say(sprint("assigned %s to %s", piece.text(), peer.text()));
@@ -1418,8 +1426,8 @@ schedreq(peer: ref Peer)
 nextblock(p: ref Piece): (int, int)
 {
 	# request sequentially, may change
-	begin := Blocklength*p.have.have;
-	length := Blocklength;
+	begin := Blocksize*p.have.have;
+	length := Blocksize;
 	if(len p.d-begin < length)
 		length = len p.d-begin;
 	return (begin, length);
