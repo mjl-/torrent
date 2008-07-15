@@ -57,6 +57,7 @@ trackchan:	chan of (int, array of (string, int, array of byte), string);  # inte
 
 Newpeer: adt {
 	addr:	string;
+	ip:	string;
 	peerid:	array of byte;  # may be nil, for incoming connections or compact track responses
 
 	text:	fn(np: self Newpeer): string;
@@ -417,10 +418,10 @@ peeradd(p: ref Peer)
 	peers = p::peers;
 }
 
-peerknown(peeridhex: string): int
+peerknownip(ip: string): int
 {
 	for(l := peers; l != nil; l = tl l)
-		if(peeridhex == (hd l).peeridhex)
+		if((hd l).np.ip == ip)
 			return 1;
 	return 0;
 }
@@ -841,7 +842,7 @@ main()
 				(ip, port, peerid) := newpeers[i];
 				if(hex(peerid) == localpeeridhex)
 					continue;  # skip self
-				np := Newpeer(sprint("%s!%d", ip, port), peerid);
+				np := Newpeer(sprint("%s!%d", ip, port), ip, peerid);
 				say("new: "+np.text());
 				trackerpeerdel(np);
 				if(!peerconnected(np.addr))
@@ -868,8 +869,8 @@ main()
 			warn(sprint("%s: %s", np.text(), err));
 		} else if(hex(peerid) == localpeeridhex) {
 			say("connected to self, dropping connection...");
-		} else if(peerknown(hex(peerid))) {
-			say("new connection from known peer, dropping new connection...");
+		} else if(peerknownip(np.ip)) {
+			say("new connection from known ip address, dropping new connection...");
 		} else {
 
 			peer := Peer.new(np, peerfd, extensions, peerid);
@@ -1155,6 +1156,7 @@ listener(aconn: Sys->Connection)
 			warn(sprint("reading %s: %s", remote, rerr));
 			continue;
 		}
+		remaddr = str->splitstrl(remaddr, "\n").t0;
 
 		f := conn.dir+"/data";
 		fd := sys->open(f, Sys->ORDWR);
@@ -1164,7 +1166,8 @@ listener(aconn: Sys->Connection)
 		}
 
 		(extensions, peerid, err) := handshake(fd);
-		np := Newpeer(str->splitstrl(remaddr, "\n").t0, nil);
+		
+		np := Newpeer(remaddr, str->splitstrl(remaddr, "!").t0, nil);
 		if(err != nil)
 			say("error handshaking incoming connection: "+err);
 		newpeerchan <-= (0, np, fd, extensions, peerid, err);
