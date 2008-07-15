@@ -742,7 +742,10 @@ main()
 			say(sprint("%s: up %s, down %s, meta %s %s", peer.fulltext(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
 		}
 
+		# do choking/unchoking algorithm round
 		if(isdone()) {
+			# we are seeding...
+
 			if(gen % 3 == 2) {
 				gen++;
 				continue;
@@ -782,6 +785,8 @@ main()
 
 			gen++;
 		} else {
+			# we are "leeching"...
+
 			# new optimistic unchoke?
 			if(gen % 3 == 0)
 				luckypeer = nextoptimisticunchoke();
@@ -923,6 +928,7 @@ main()
 		Choke =>
 			if(peer.remotechoking()) {
 				say(sprint("%s choked us twice...", peer.text()));
+				# xxx disconnect?
 				continue;
 			}
 
@@ -932,6 +938,7 @@ main()
 		Unchoke =>
 			if(!peer.remotechoking()) {
 				say(sprint("%s unchoked us twice...", peer.text()));
+				# xxx disconnect?
 				continue;
 			}
 
@@ -946,6 +953,7 @@ main()
 		Interested =>
 			if(peer.remoteinterested()) {
 				say(sprint("%s is interested again...", peer.text()));
+				# xxx disconnect?
 				continue;
 			}
 
@@ -959,6 +967,7 @@ main()
 		Notinterested =>
 			if(!peer.remoteinterested()) {
 				say(sprint("%s is uninterested again...", peer.text()));
+				# xxx disconnect?
 				continue;
 			}
 
@@ -969,13 +978,14 @@ main()
 
                 Have =>
 			if(m.index >= len torrent.piecehashes) {
-				say(sprint("%s sent 'have' for invalid piece %d", peer.text(), m.index));
-				# xxx close connection?
+				say(sprint("%s sent 'have' for invalid piece %d, disconnecting", peer.text(), m.index));
+				peerdel(peer);
 				continue;
 			}
-			if(peer.piecehave.get(m.index))
+			if(peer.piecehave.get(m.index)) {
 				say(sprint("%s already had piece %d", peer.text(), m.index));
-			else
+				# xxx disconnect?
+			} else
 				piececounts[m.index]++;
 
 			say(sprint("remote now has piece %d", m.index));
@@ -989,15 +999,16 @@ main()
 
                 Bitfield =>
 			if(peer.msgseq != 1) {
-				say(sprint("%s sent bitfield after first message, ignoring...", peer.text()));
+				say(sprint("%s sent bitfield after first message, disconnecting", peer.text()));
+				peerdel(peer);
 				continue;
 			}
 
 			err: string;
 			(peer.piecehave, err) = Bits.mk(len torrent.piecehashes, m.d);
 			if(err != nil) {
-				say(sprint("%s sent bogus bitfield message: %s", peer.text(), err));
-				# xxx
+				say(sprint("%s sent bogus bitfield message: %s, disconnecting", peer.text(), err));
+				peerdel(peer);
 				continue;
 			}
 			say("remote sent bitfield, haves "+peer.piecehave.text());
@@ -1019,8 +1030,11 @@ main()
 			piece := peer.curpiece;
 
 			(begin, length) := nextblock(piece);
-			if(m.begin != begin || len m.d != length)
-				fail(sprint("%s sent bad begin (have %d, want %d) or length (%d, %d)", peer.text(), m.begin, begin, len m.d, length));
+			if(m.begin != begin || len m.d != length) {
+				warn(sprint("%s sent bad begin (have %d, want %d) or length (%d, %d), disconnecting", peer.text(), m.begin, begin, len m.d, length));
+				peerdel(peer);
+				continue;
+			}
 
 			piece.d[m.begin:] = m.d;
 			piece.have.set(m.begin/Blocklength);
@@ -1030,14 +1044,15 @@ main()
 				wanthash := hex(torrent.piecehashes[piece.index]);
 				havehash := hex(piece.hash());
 				if(wanthash != havehash) {
-					say(sprint("%s from %s did not check out, want %s, have %s", piece.text(), peer.text(), wanthash, havehash));
-					# xxx disconnect peer?
+					say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
+					# xxx should mark ip as bad?
+					peerdel(peer);
 					continue;
 				}
 
 				err := bittorrent->piecewrite(torrent, dstfds, piece.index, piece.d);
 				if(err != nil)
-					fail("writing piece: "+err);
+					fail("writing piece: "+err);  # xxx fail saner...
 
 				piecehave.set(piece.index);
 				writestate();
@@ -1076,8 +1091,9 @@ main()
 				continue;
 			}
 			if(len peer.wants >= Blockqueuemax) {
-				say(sprint("peer scheduled one too many blocks, already has %d scheduled", len peer.wants));
-				continue;  # xxx disconnect peer?
+				say(sprint("peer scheduled one too many blocks, already has %d scheduled, disconnecting", len peer.wants));
+				peerdel(peer);
+				continue;
 			}
 			peer.wants = b::peer.wants;
 			if(!peer.localchoking() && peer.remoteinterested() && !peer.netwriting && len peer.wants > 0)
