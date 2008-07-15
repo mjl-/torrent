@@ -45,6 +45,7 @@ localpeerid: array of byte;
 localpeeridhex: string;
 trackerevent: string;
 piececounts: array of int;  # for each piece, count of peers that have it
+trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
 
 # piecekeeper
 piecechan: chan of (int, int, int, chan of int);
@@ -276,6 +277,11 @@ init(nil: ref Draw->Context, args: list of string)
 
 	piececounts = array[len torrent.piecehashes] of {* => 0};
 
+	trafficup = Traffic.new();
+	trafficdown = Traffic.new();
+	trafficmetaup = Traffic.new();
+	trafficmetadown = Traffic.new();
+
 	# start listener, for incoming connections
 	ok := -1;
 	conn: Sys->Connection;
@@ -497,8 +503,11 @@ Peer.send(p: self ref Peer, msg: ref Msg)
 	Piece =>
 		dsize = len m.d;
 		p.up.add(dsize);
+		trafficup.add(dsize);
+		totalupload += big dsize;
 	}
 	p.metaup.add(msize-dsize);
+	trafficmetaup.add(msize-dsize);
 	p.outmsgs <-= msg;
 }
 
@@ -743,6 +752,9 @@ main()
 			say(sprint("%s: up %s, down %s, meta %s %s", peer.fulltext(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
 		}
 
+		etasecs := eta();
+		say(sprint("eta: %d: %s", etasecs, etastr(etasecs)));
+
 		# do choking/unchoking algorithm round
 		if(isdone()) {
 			# we are seeding...
@@ -918,9 +930,11 @@ main()
 		Piece =>
 			dsize = len m.d;
 			peer.down.add(dsize);
+			trafficdown.add(dsize);
 			totaldownload += big dsize;
 		}
 		peer.metadown.add(msize-dsize);
+		trafficmetadown.add(msize-dsize);
 
 		pick m := msg {
                 Keepalive =>
@@ -1436,6 +1450,28 @@ pickrandom[T](l: list of T): (list of T, T)
 		skip--;
 	}
 	return (rev(new), elem);
+}
+
+etastr(secs: int): string
+{
+	if(secs < 0)
+		return "stalled";
+	else if(secs < 60*60)
+		return sprint("%3dm %3ds", secs / 60, secs % 60);
+	else if(secs < 24*60*60)
+		return sprint("%3dh %3dm", secs / (60*60), secs % (60*60) / 60);
+	else if(secs < 366*24*60*60)
+		return sprint("%3dd %3dh", secs / (24*60*60), secs % (24*60*60) / (60*60));
+	else
+		return "  > year";
+}
+
+eta(): int
+{
+	rate := trafficdown.rate();
+	if(rate <= 0)
+		return -1;
+	return int (totalleft / big rate);
 }
 
 readfile(f: string): (string, string)
