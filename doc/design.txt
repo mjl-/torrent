@@ -3,7 +3,20 @@ http://www.bittorrent.org/beps/bep_0003.html (bittorrent protocol)
 http://www.bittorrent.org/beps/bep_0006.html (fast extensions)
 http://www.bittorrent.org/beps/bep_0023.html (compact peer list)
 http://www.bittorrent.org/beps/bep_0000.html (index)
-http://wiki.theory.org/BitTorrentSpecification (missing pieces of bep3)
+http://wiki.theory.org/BitTorrentSpecification (warning: messy, stale and often incorrect)
+
+clients:
+http://www.bittorrent.com/
+http://libtorrent.rakshasa.no/
+http://azureus.sourceforge.net/
+http://www.bitcomet.com/
+http://www.utorrent.com/
+http://dcg.ethz.ch/projects/bitthief/ (evil)
+http://bittyrant.cs.washington.edu/ ("strategic")
+
+mailing lists:
+http://groups.yahoo.com/group/BitTorrent (old, no longer active)
+http://lists.ibiblio.org/mailman/listinfo/bittorrent
 
 
 program lifetime:
@@ -97,7 +110,7 @@ state:
 
 considerations:
 - we assign pieces to peers.  we don't let multiple peers deliver parts of the same piece.  this is to detect fraudulent peers later on.  we don't want to invalidate our entire piece.
-- the procs reading pieces from peers need to be directly connected to the procs that write to disk.  and vice versa (procs writing pieces from disk need to be connect to procs that read from disk).  if this weren't so, we could be building up huge buffers (e.g. for very slow disk):  we read more from the network than we write to disk.  by directly connecting them (through a buffered channel probably), the procs get some leeway but the situation does not get out of hand.
+- the procs reading pieces from peers need to be directly connected to the procs that write to disk.  and vice versa (procs writing pieces to peer need to be connect to procs that read from disk).  if this weren't so, we could be building up huge buffers (e.g. for very slow disk):  we read more from the network than we write to disk.  by directly connecting them (through a buffered channel probably), the procs get some leeway but the situation does not get out of hand.
 - we send multiple blocks to peers, queued.  we need to keep track of a queue of blocks the remote side wants (if they queue too many request, we'll just have to disconnect them).  the queue has to be accessible because it may need to be flushed.
 - for a first implementation, we don't have to implement the end-game.  it's just an optimisation.
 - we might want to keep the main event-loop agnostic of blocks.  and have the procs handling peer comm only send events when a whole piece is in.  nehh, i think not.  we also have to keep track of upload/download bytes, and we don't want to introduce special locking/channels to that end.
