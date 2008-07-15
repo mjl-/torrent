@@ -82,9 +82,11 @@ Traffic: adt {
 	d:	array of (int, int);  # time, bytes
 	winsum:	int;
 	sum:	big;
+	npackets:	int;
 
 	new:	fn(): ref Traffic;
 	add:	fn(t: self ref Traffic, bytes: int);
+	packet:	fn(t: self ref Traffic);
 	rate:	fn(t: self ref Traffic): int;
 	total:	fn(t: self ref Traffic): big;
 	text:	fn(t: self ref Traffic): string;
@@ -505,6 +507,11 @@ Peer.send(p: self ref Peer, msg: ref Msg)
 		p.up.add(dsize);
 		trafficup.add(dsize);
 		totalupload += big dsize;
+		p.up.packet();
+		trafficup.packet();
+	* =>
+		p.metaup.packet();
+		trafficmetaup.packet();
 	}
 	p.metaup.add(msize-dsize);
 	trafficmetaup.add(msize-dsize);
@@ -543,7 +550,7 @@ Piece.text(p: self ref Piece): string
 
 Traffic.new(): ref Traffic
 {
-	return ref Traffic(0, array[TrafficHistorysize] of {* => (0, 0)}, 0, big 0);
+	return ref Traffic(0, array[TrafficHistorysize] of {* => (0, 0)}, 0, big 0, 0);
 }
 
 Traffic.add(t: self ref Traffic, bytes: int)
@@ -568,6 +575,11 @@ reclaim(t: ref Traffic, time: int)
 		t.winsum -= t.d[pos].t1;
 		t.d[pos] = (0, 0);
 	}
+}
+
+Traffic.packet(t: self ref Traffic)
+{
+	t.npackets++;
 }
 
 Traffic.rate(t: self ref Traffic): int
@@ -752,6 +764,9 @@ main()
 			say(sprint("%s: up %s, down %s, meta %s %s", peer.fulltext(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
 		}
 
+		say(sprint("total traffic:  up %s, down %s, meta %s %s", trafficup.text(), trafficdown.text(), trafficmetaup.text(), trafficmetadown.text()));
+		say(sprint("packets:  up %d, down %d, meta %d %d", trafficup.npackets, trafficdown.npackets, trafficmetaup.npackets, trafficmetadown.npackets));
+
 		etasecs := eta();
 		say(sprint("eta: %d: %s", etasecs, etastr(etasecs)));
 
@@ -932,6 +947,11 @@ main()
 			peer.down.add(dsize);
 			trafficdown.add(dsize);
 			totaldownload += big dsize;
+			peer.down.packet();
+			trafficdown.packet();
+		* =>
+			peer.metadown.packet();
+			trafficmetadown.packet();
 		}
 		peer.metadown.add(msize-dsize);
 		trafficmetadown.add(msize-dsize);
