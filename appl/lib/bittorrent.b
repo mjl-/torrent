@@ -797,30 +797,7 @@ bytefmt(bytes: big): string
 
 piecewrite(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string
 {
-	have := 0;
-
-	wantoff := big index*big t.piecelen;
-	off := big 0;
-	for(f := dstfds; have < len buf && f != nil; f = tl f) {
-		(fd, size) := *hd f;
-		if(off+size < wantoff) {
-			off += size;
-			continue;
-		}
-
-		want := len buf-have;
-		if(size < big want)
-			want = int size;
-		n := sys->pwrite(fd, buf[have:], want, wantoff-off);
-		if(n != want)
-			return sprint("write piece %d: %r", index);
-		have += n;
-		wantoff += big n;
-		off += size;
-	}
-	if(have != len buf)
-		return "internal error: should have written full piece by now...";
-	return nil;
+	return torrentpwritex(dstfds, buf, len buf, big index*big t.piecelen);
 }
 
 preadn(fd: ref Sys->FD, d: array of byte, n: int, off: big): int
@@ -861,6 +838,32 @@ torrentpreadx(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int
 	}
 	if(n != 0)
 		return "could not read all requested data";
+	return nil;
+}
+
+torrentpwritex(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string
+{
+	for(f := dstfds; n > 0 && f != nil; f = tl f) {
+		(fd, size) := *hd f;
+		if(size <= off) {
+			off -= size;
+			continue;
+		}
+
+		want := n;
+		if(size < off+big n)
+			want = int (size-off);
+		nn := sys->pwrite(fd, buf, want, off);
+		if(nn < 0)
+			return sprint("write: %r");
+		if(nn != want)
+			return "short write";
+		n -= nn;
+		buf = buf[nn:];
+		off -= size;
+	}
+	if(n != 0)
+		return "could not write all requested data";
 	return nil;
 }
 

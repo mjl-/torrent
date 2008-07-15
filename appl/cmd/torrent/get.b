@@ -49,6 +49,7 @@ localpeeridhex: string;
 trackerevent: string;
 piececounts: array of int;  # for each piece, count of peers that have it
 trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
+diskchunkswritten: ref Bits;  # which disk chunks have been written to in the past and must not be written again
 
 ip4maskstr:	con "255.255.255.0";
 ip4mask:	IPaddr;
@@ -139,6 +140,7 @@ Dialtimeout:	con 20;  # timeout for connecting to peer
 Peersmax:	con 40;
 Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
 Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
+Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
 
 Peeridlen:	con 20;
 
@@ -297,12 +299,24 @@ init(nil: ref Draw->Context, args: list of string)
 	trafficmetaup = Traffic.new();
 	trafficmetadown = Traffic.new();
 
+	diskchunkswritten = Bits.new(int ((torrent.length+big Diskchunksize-big 1)/big Diskchunksize));
+	seen := 0;
+	for(i := 0; i < piecehave.n && seen < piecehave.have; i++) {
+		if(piecehave.get(i)) {
+			seen++;
+			off := big i*big torrent.piecelen;
+			offe := off+big torrent.piecelength(i);
+			for(; off < offe; off += big Diskchunksize)
+				diskchunkswritten.set(int (off/big Diskchunksize));
+		}
+	}
+
 	# start listener, for incoming connections
 	ok := -1;
 	conn: Sys->Connection;
 	listenaddr: string;
 
-	for(i := 0; i < Listenportrange; i++) {
+	for(i = 0; i < Listenportrange; i++) {
 		listenport = Listenport+i;
 		listenaddr = sprint("net!%s!%d", Listenhost, listenport);
 		(ok, conn) = sys->announce(listenaddr);
@@ -1114,6 +1128,20 @@ main()
 					# xxx should mark ip as bad?
 					peerdel(peer);
 					continue;
+				}
+
+				# before writing to disk, ensure data is written with at least Diskchunksize bytes at a time, to prevent fragmentation  xxx in the future we'll write blocks, not only whole pieces (now this doesn't make much sense, pieces will be larger than the 128kb disk chunk size).
+				off := big piece.index*big torrent.piecelen;
+				offe := off+big len piece.d;
+				for(; off < offe; off += big Diskchunksize) {
+					chunk := int (off/big Diskchunksize);
+					if(!diskchunkswritten.get(chunk)) {
+						buf := array[Diskchunksize] of {* => byte 0};
+						err := bittorrent->torrentpwritex(dstfds, buf, len buf, off);
+						if(err != nil)
+							fail("writing disk chunk: "+err);  # xxx fail saner...
+						diskchunkswritten.set(chunk);
+					}
 				}
 
 				err := bittorrent->piecewrite(torrent, dstfds, piece.index, piece.d);
