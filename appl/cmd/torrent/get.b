@@ -449,6 +449,9 @@ dialpeers()
 
 	while(trackerpeers != nil && ndialers < Dialersmax && len peers < Peersmax) {
 		np := trackerpeertake();
+		if(peerknownip(np.ip))
+			continue;
+
 		say("spawning dialproc for "+np.text());
 		spawn dialer(np);
 		ndialers++;
