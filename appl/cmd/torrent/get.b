@@ -1225,6 +1225,13 @@ main()
 				continue;
 			}
 
+			if(peer.piecehave.get(m.index)) {
+				warn("peer requested piece it already claimed to have");
+				peerdel(peer);
+				setfaulty(peer.np.ip);
+				continue;
+			}
+
 			if(blockhave(peer.wants, b)) {
 				say("peer already wanted block, skipping");
 				continue;
