@@ -11,6 +11,7 @@ include "string.m";
 include "keyring.m";
 include "security.m";
 include "ip.m";
+include "math.m";
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -48,6 +49,7 @@ trackerevent: string;
 piececounts: array of int;  # for each piece, count of peers that have it
 trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
 diskchunkswritten: ref Bits;  # which disk chunks have been written to in the past and must not be written again
+maxratio := 0.0;
 
 ip4maskstr:	con "255.255.255.0";
 ip4mask:	IPaddr;
@@ -167,6 +169,7 @@ RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
 
 
 # progress/state
+stopped := 0;
 ndialers:	int;  # number of active dialers
 trackerpeers:	list of Newpeer;  # peers we are not connected to
 peers:	list of ref Peer;  # peers we are connected to
@@ -199,11 +202,14 @@ init(nil: ref Draw->Context, args: list of string)
 	bittorrent->init(bitarray);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-Dn] torrentfile");
+	arg->setusage(arg->progname()+" [-Dn] [-m ratio] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'D' =>	Dflag++;
 		'n' =>	nofix = 1;
+		'm' =>	maxratio = real arg->earg();
+			if(maxratio <= 1.1)
+				fail("invalid maximum ratio");
 		* =>
 			fprint(fildes(2), "bad option: -%c\n", c);
 			arg->usage();
@@ -932,8 +938,10 @@ main()
 		}
 
 	<-trackkickchan =>
-		trackreqchan <-= (trafficup.total(), trafficdown.total(), totalleft, listenport, trackerevent);
-		trackerevent = nil;
+		if(!stopped) {
+			trackreqchan <-= (trafficup.total(), trafficdown.total(), totalleft, listenport, trackerevent);
+			trackerevent = nil;
+		}
 
 	(interval, newpeers, trackerr) := <-trackchan =>
 		if(trackerr != nil) {
@@ -1243,6 +1251,19 @@ main()
 
 	peer := <-msgwrittenchan =>
 		say(sprint("%s: message written", peer.text()));
+
+		if(!stopped && isdone()) {
+			ratio := ratio();
+			if(ratio >= 1.1 && ratio >= maxratio) {
+				say(sprint("stopping due to max ratio achieved (%2f)", ratio));
+				stopped = 1;
+
+				# disconnect from all peers and don't do further tracker requests
+				peers = nil;
+				luckypeer = nil;
+				rotateips = nil;
+			}
+		}
 
 		peer.netwriting = 0;
 		if(!peer.localchoking() && peer.remoteinterested() && len peer.wants > 0)
@@ -1574,6 +1595,15 @@ maskip(ipstr: string): string
 	if(ok != 0)
 		return ipstr;
 	return ip.mask(ip4mask).text();
+}
+
+ratio(): real
+{
+	up := trafficup.total();
+	down := trafficdown.total();
+	if(down == big 0)
+		return Math->Infinity;
+	return real up/real down;
 }
 
 etastr(secs: int): string
