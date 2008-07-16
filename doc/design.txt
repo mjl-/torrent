@@ -139,6 +139,11 @@ writing to peer/reading from disk:
 - xxx perhaps we should drop messages when peer chokes us and later unchokes us?  makes sense.  on choke, we can probably send a special "flush data messages from peerdiskreader"-message.
 
 
+rate limiting:
+- every read/write must go through a proc that handles the limiting.  it sends a request for reading/writing x bytes.  the proc then responds with the number of bytes that can be read/written.  this is like readn/read.
+- currently the proc divides time in 1-second slots, allocating bandwidth to them.  if bandwidth of the second is used, the proc waits with responding until the next second starts.
+
+
 file system:
 ctl
 	for setting up/down speeds
