@@ -40,8 +40,6 @@ torrent: ref Torrent;
 dstfds: list of ref (ref Sys->FD, big);  # fd, size
 statefd: ref Sys->FD;
 starttime: int;
-totalupload := big 0;
-totaldownload := big 0;
 totalleft: big;
 listenport: int;
 localpeerid: array of byte;
@@ -532,7 +530,6 @@ Peer.send(p: self ref Peer, msg: ref Msg)
 		dsize = len m.d;
 		p.up.add(dsize);
 		trafficup.add(dsize);
-		totalupload += big dsize;
 		p.up.packet();
 		trafficup.packet();
 	* =>
@@ -837,6 +834,12 @@ main()
 		}
 
 		say(sprint("total traffic:  up %s, down %s, meta %s %s", trafficup.text(), trafficdown.text(), trafficmetaup.text(), trafficmetadown.text()));
+		
+		ratiostr := "⋡";  # infinity
+		down := trafficdown.total();
+		if(down != big 0)
+			ratiostr = sprint("%2f", real trafficup.total()/real down);
+		say("ratio:  "+ratiostr);
 		say(sprint("packets:  up %d, down %d, meta %d %d", trafficup.npackets, trafficdown.npackets, trafficmetaup.npackets, trafficmetadown.npackets));
 
 		etasecs := eta();
@@ -929,7 +932,7 @@ main()
 		}
 
 	<-trackkickchan =>
-		trackreqchan <-= (totalupload, totaldownload, totalleft, listenport, trackerevent);
+		trackreqchan <-= (trafficup.total(), trafficdown.total(), totalleft, listenport, trackerevent);
 		trackerevent = nil;
 
 	(interval, newpeers, trackerr) := <-trackchan =>
@@ -1018,7 +1021,6 @@ main()
 			dsize = len m.d;
 			peer.down.add(dsize);
 			trafficdown.add(dsize);
-			totaldownload += big dsize;
 			peer.down.packet();
 			trafficdown.packet();
 		* =>
