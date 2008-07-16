@@ -205,6 +205,7 @@ init(nil: ref Draw->Context, args: list of string)
 	keyring = load Keyring Keyring->PATH;
 	random = load Random Random->PATH;
 	ipmod = load IP IP->PATH;
+	ipmod->init();
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init(bitarray);
@@ -330,8 +331,11 @@ init(nil: ref Draw->Context, args: list of string)
 			seen++;
 			off := big i*big torrent.piecelen;
 			offe := off+big torrent.piecelength(i);
-			for(; off < offe; off += big Diskchunksize)
-				diskchunkswritten.set(int (off/big Diskchunksize));
+			for(; off < offe; off += big Diskchunksize) {
+				chunk := int (off/big Diskchunksize);
+				diskchunkswritten.set(chunk);
+				say(sprint("chunk %d has been written to, mark as such", chunk));
+			}
 		}
 	}
 
@@ -884,10 +888,10 @@ main()
 
 		say(sprint("total traffic:  up %s, down %s, meta %s %s", trafficup.text(), trafficdown.text(), trafficmetaup.text(), trafficmetadown.text()));
 		
-		ratiostr := "⋡";  # infinity
+		ratiostr := "infinity";
 		down := trafficdown.total();
 		if(down != big 0)
-			ratiostr = sprint("%2f", real trafficup.total()/real down);
+			ratiostr = sprint("%.2f", real trafficup.total()/real down);
 		say("ratio:  "+ratiostr);
 		say(sprint("packets:  up %d, down %d, meta %d %d", trafficup.npackets, trafficdown.npackets, trafficmetaup.npackets, trafficmetadown.npackets));
 
@@ -1220,16 +1224,21 @@ main()
 				# to prevent fragmentation.
 				# xxx in the future we'll write blocks, not only whole pieces (now this doesn't make much sense, pieces will be larger than the 128kb disk chunk size).
 				off := big piece.index*big torrent.piecelen;
-				offe := off+big len piece.d;
+				offe := off+big torrent.piecelength(piece.index);
 				for(; off < offe; off += big Diskchunksize) {
 					chunk := int (off/big Diskchunksize);
-					if(!diskchunkswritten.get(chunk)) {
-						buf := array[Diskchunksize] of {* => byte 0};
-						err := bittorrent->torrentpwritex(dstfds, buf, len buf, off);
-						if(err != nil)
-							fail("writing disk chunk: "+err);  # xxx fail saner...
-						diskchunkswritten.set(chunk);
-					}
+					if(diskchunkswritten.get(chunk))
+						continue;
+
+					say(sprint("writing to chunk %d", chunk));
+					chunksize := Diskchunksize;
+					if(off+big chunksize > torrent.length)
+						chunksize = int (torrent.length-off);
+					buf := array[chunksize] of {* => byte 0};
+					err := bittorrent->torrentpwritex(dstfds, buf, len buf, off);
+					if(err != nil)
+						fail("writing disk chunk: "+err);  # xxx fail saner...
+					diskchunkswritten.set(chunk);
 				}
 
 				err := bittorrent->piecewrite(torrent, dstfds, piece.index, piece.d);
@@ -1240,6 +1249,11 @@ main()
 				writestate();
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
+
+				for(l := peers; l != nil; l = tl l) {
+					p := hd l;
+					p.send(ref Msg.Have(piece.index));
+				}
 
 				piece = getpiece(peer);
 			}
@@ -1312,7 +1326,7 @@ main()
 		if(!stopped && isdone()) {
 			ratio := ratio();
 			if(ratio >= 1.1 && ratio >= maxratio) {
-				say(sprint("stopping due to max ratio achieved (%2f)", ratio));
+				say(sprint("stopping due to max ratio achieved (%.2f)", ratio));
 				stopped = 1;
 
 				# disconnect from all peers and don't do further tracker requests
