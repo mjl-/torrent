@@ -494,6 +494,8 @@ dialpeers()
 		np := trackerpeertake();
 		if(peerknownip(np.ip))
 			continue;
+		if(isfaulty(np.ip))
+			continue;
 
 		say("spawning dialproc for "+np.text());
 		spawn dialer(np);
@@ -1008,6 +1010,8 @@ main()
 			say("connected to self, dropping connection...");
 		} else if(peerknownip(np.ip)) {
 			say("new connection from known ip address, dropping new connection...");
+		} else if(isfaulty(np.ip)) {
+			say(sprint("connected to faulty ip %s, dropping connection...", np.ip));
 		} else {
 			peer := Peer.new(np, peerfd, extensions, peerid, dialed);
 			spawn peernetreader(peer);
