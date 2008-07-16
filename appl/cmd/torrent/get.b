@@ -162,6 +162,7 @@ Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
 Minscheduled:	con 6;
 Maxdialedpeers:	con 20;
 TrafficHistorysize:	con 10;
+Ignorefaultyperiod:	con 300;
 
 # Peer.state
 RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
@@ -176,6 +177,7 @@ luckypeer:	ref Peer;  # current optimistic unchoked peer.  may be stale (not in 
 peergen:	int;  # sequence number for peers
 piecehave:	ref Bits;
 piecebusy:	ref Bits;
+faulty:		list of (string, int);  # ip, time
 
 peerinmsgchan: chan of (ref Peer, ref Msg);
 msgwrittenchan: chan of ref Peer;
@@ -788,6 +790,31 @@ unchoke(p: ref Peer)
 	p.lastunchoke = daytime->now();
 }
 
+isfaulty(ip: string): int
+{
+	now := daytime->now();
+	for(l := faulty; l != nil; l = tl l)
+		if((hd l).t0 == ip && now < (hd l).t1+Ignorefaultyperiod)
+			return 1;
+	return 0;
+}
+
+setfaulty(ip: string)
+{
+	clearfaulty(nil);
+	faulty = (ip, daytime->now())::faulty;
+}
+
+clearfaulty(ip: string)
+{
+	now := daytime->now();
+	new: list of (string, int);
+	for(l := faulty; l != nil; l = tl l)
+		if((hd l).t0 != ip && (hd l).t1+Ignorefaultyperiod < now)
+			new = hd l::new;
+	faulty = new;
+}
+
 
 ticker()
 {
@@ -1103,8 +1130,6 @@ main()
 			interesting(peer);
 
                 Piece =>
-			# xxx check if block isn't too large
-
 			say(sprint("%s sent data for piece=%d begin=%d length=%d", peer.text(), m.index, m.begin, len m.d));
 
 			piece := peer.curpiece;
@@ -1112,6 +1137,7 @@ main()
 			(begin, length) := nextblock(piece);
 			if(m.begin != begin || len m.d != length) {
 				warn(sprint("%s sent bad begin (have %d, want %d) or length (%d, %d), disconnecting", peer.text(), m.begin, begin, len m.d, length));
+				setfaulty(peer.np.ip);
 				peerdel(peer);
 				continue;
 			}
@@ -1125,12 +1151,14 @@ main()
 				havehash := hex(piece.hash());
 				if(wanthash != havehash) {
 					say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
-					# xxx should mark ip as bad?
+					setfaulty(peer.np.ip);
 					peerdel(peer);
 					continue;
 				}
 
-				# before writing to disk, ensure data is written with at least Diskchunksize bytes at a time, to prevent fragmentation  xxx in the future we'll write blocks, not only whole pieces (now this doesn't make much sense, pieces will be larger than the 128kb disk chunk size).
+				# before writing to disk, ensure data is written with at least Diskchunksize bytes at a time,
+				# to prevent fragmentation.
+				# xxx in the future we'll write blocks, not only whole pieces (now this doesn't make much sense, pieces will be larger than the 128kb disk chunk size).
 				off := big piece.index*big torrent.piecelen;
 				offe := off+big len piece.d;
 				for(; off < offe; off += big Diskchunksize) {
