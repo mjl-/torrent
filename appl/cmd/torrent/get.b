@@ -50,6 +50,8 @@ piececounts: array of int;  # for each piece, count of peers that have it
 trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
 diskchunkswritten: ref Bits;  # which disk chunks have been written to in the past and must not be written again
 maxratio := 0.0;
+maxdownload := big -1;
+maxupload := big -1;
 
 ip4maskstr:	con "255.255.255.0";
 ip4mask:	IPaddr;
@@ -74,6 +76,10 @@ Newpeer: adt {
 # dialer/listener
 canlistenchan: chan of int;
 newpeerchan: chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
+
+# upload/download rate limiter
+upchan, downchan: chan of (int, chan of int);
+
 
 Piece: adt {
 	index:	int;
@@ -204,7 +210,7 @@ init(nil: ref Draw->Context, args: list of string)
 	bittorrent->init(bitarray);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-Dn] [-m ratio] torrentfile");
+	arg->setusage(arg->progname()+" [-Dn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'D' =>	Dflag++;
@@ -212,6 +218,12 @@ init(nil: ref Draw->Context, args: list of string)
 		'm' =>	maxratio = real arg->earg();
 			if(maxratio <= 1.1)
 				fail("invalid maximum ratio");
+		'd' =>	maxdownload = bittorrent->byteparse(arg->earg());
+			if(maxdownload < big 0)
+				fail("invalid maximum download rate");
+		'u' =>	maxupload = bittorrent->byteparse(arg->earg());
+			if(maxupload < big 0)
+				fail("invalid maximum upload rate");
 		* =>
 			fprint(fildes(2), "bad option: -%c\n", c);
 			arg->usage();
@@ -295,6 +307,9 @@ init(nil: ref Draw->Context, args: list of string)
 	newpeerchan = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 	tickchan = chan of int;
 
+	upchan = chan of (int, chan of int);
+	downchan = chan of (int, chan of int);
+
 	peers = nil;
 	piecebusy = Bits.new(len torrent.piecehashes);
 
@@ -343,6 +358,8 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn piecekeeper();
 	spawn ticker();
 	spawn track();
+	spawn limiter(upchan, int maxupload);
+	spawn limiter(downchan, int maxdownload);
 
 	starttime = daytime->now();
 	spawn trackkick(0);
@@ -1374,6 +1391,47 @@ listener(aconn: Sys->Connection)
 }
 
 
+# we are allowed to pass `max' bytes per second.
+# xxx do more fine-grained allocations.  detect contention and allow smaller pieces?  never give full bandwidth away in one request?
+limiter(ch: chan of (int, chan of int), max: int)
+{
+	allow := max;  # remaining bandwidth in current second
+	cur := sys->millisec();  # start of current second
+
+	for(;;) {
+		(want, respch) := <-ch;
+		if(max < 0) {
+			# no rate limiting, let traffic pass
+			respch <-= want;
+			continue;
+		}
+
+		now := sys->millisec();
+		if(now < cur)
+			cur = now;  # wrap-around, stretch time
+
+		if(now-1000 > cur) {
+			# new second, new bandwidth
+			cur = now-(now-cur)%1000;
+			allow = max;
+		}
+
+		if(allow == 0) {
+			# we already used all our bandwidth for this second, wait till next one
+			sys->sleep(cur+1000-now);
+			cur = sys->millisec();
+			allow = max;
+		}
+
+		get := want;
+		if(get > allow)
+			get = allow;
+		allow -= get;
+		respch <-= get;
+	}
+}
+
+
 piecekeeper()
 {
 	awaiting: list of (int, int);  # piece, peer
@@ -1455,12 +1513,12 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	if(i != len d)
 		fail("bad peer header, internal error");
 
-	n := sys->write(fd, d, len d);
+	n := netwrite(fd, d, len d);
 	if(n != len d)
 		return (nil, nil, sprint("writing peer header: %r"));
 
 	rd := array[len d] of byte;
-	n = sys->readn(fd, rd, len rd);
+	n = netread(fd, rd, len rd);
 	if(n < 0)
 		return (nil, nil, sprint("reading peer header: %r"));
 	if(n != len rd)
@@ -1590,11 +1648,71 @@ nextblock(p: ref Piece): (int, int)
 	return (begin, length);
 }
 
+netread(fd: ref Sys->FD, buf: array of byte, n: int): int
+{
+	read := 0;
+	while(n > 0) {
+		downchan <-= (n, respch := chan of int);
+		can := <-respch;
+		nn := sys->readn(fd, buf, can);
+		if(nn < 0)
+			return nn;
+		if(nn != can)
+			return read+nn;
+		n -= can;
+		buf = buf[can:];
+		read += can;
+	}
+	return read;
+}
+
+netwrite(fd: ref Sys->FD, buf: array of byte, n: int): int
+{
+	wrote := 0;
+	while(n > 0) {
+		upchan <-= (n, respch := chan of int);
+		can := <-respch;
+		nn := sys->write(fd, buf, can);
+		if(nn < 0)
+			return nn;
+		if(nn != can)
+			return wrote+nn;
+		n -= can;
+		buf = buf[can:];
+		wrote += can;
+	}
+	return wrote;
+}
+
+
+# copied from bittorrent.b Msg.read
+msgread(fd: ref Sys->FD): (ref Msg, string)
+{
+	buf := array[4] of byte;
+	n := netread(fd, buf, len buf);
+	if(n < 0)
+		return (nil, sprint("reading: %r"));
+	if(n < len buf)
+		return (nil, sprint("short read"));
+	(size, nil) := bittorrent->g32(buf, 0);
+	buf = array[size] of byte;
+say(sprint("msg.read: have size=%d", size));
+
+
+	n = netread(fd, buf, len buf);
+	if(n < 0)
+		return (nil, sprint("reading: %r"));
+	if(n < len buf)
+		return (nil, sprint("short read"));
+
+	return Msg.unpack(buf);
+}
+
 
 peernetreader(peer: ref Peer)
 {
 	for(;;) {
-		(m, err) := Msg.read(peer.fd);
+		(m, err) := msgread(peer.fd);
 		if(err != nil)
 			fail("reading msg: "+err);  # xxx return error to main
 		fprint(fildes(2), "<< %s\n", m.text());
@@ -1610,7 +1728,7 @@ peernetwriter(peer: ref Peer)
 			return;
 		fprint(fildes(2), ">> %s\n", m.text());
 		d := m.pack();
-		n := sys->write(peer.fd, d, len d);
+		n := netwrite(peer.fd, d, len d);
 		if(n != len d)
 			fail(sprint("writing msg: %r"));
 		if(tagof m == tagof Msg.Piece)

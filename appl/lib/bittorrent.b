@@ -785,15 +785,28 @@ bytefmt(bytes: big): string
 {
 	suffix := array[] of {"b", "k", "m", "g", "t", "p"};
 	i := 0;
-	while(bytes >= big 10000) {
+	while(bytes >= big 10000 && i < len suffix) {
 		bytes /= big 1024;
 		i++;
 	}
-	if(i >= len suffix)
-		i = len suffix-1;
 	return sprint("%bd%s", bytes, suffix[i]);
 }
 
+byteparse(s: string): big
+{
+	suffix := array[] of {"b", "k", "m", "g", "t", "p"};
+
+	(n, rem) := str->tobig(s, 10);
+	if(rem == nil)
+		return n;
+
+	for(i := 0; i < len suffix; i++) {
+		if(rem == suffix[i])
+			return n;
+		n *= big 1024;
+	}
+	return big -1;
+}
 
 piecewrite(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string
 {
