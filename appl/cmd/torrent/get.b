@@ -72,6 +72,7 @@ Newpeer: adt {
 };
 
 # dialer/listener
+canlistenchan: chan of int;
 newpeerchan: chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 
 Piece: adt {
@@ -122,8 +123,9 @@ Peer: adt {
 	wants:	list of ref Block;
 	netwriting:	int;
 	lastunchoke:	int;
+	dialed:	int;
 
-	new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer;
+	new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int): ref Peer;
 	remotechoking:	fn(p: self ref Peer): int;
 	remoteinterested:	fn(p: self ref Peer): int;
 	localchoking:	fn(p: self ref Peer): int;
@@ -137,7 +139,8 @@ Peer: adt {
 
 Dialersmax:	con 5;  # max number of dialer procs
 Dialtimeout:	con 20;  # timeout for connecting to peer
-Peersmax:	con 40;
+Peersmax:	con 80;
+Peersdialedmax:	con 40;
 Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
 Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
 Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
@@ -159,8 +162,6 @@ Blocksizemax:	con 32*1024;
 Unchokedmax:	con 4;
 Seedunchokedmax:	con 4;
 Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
-Minscheduled:	con 6;
-Maxdialedpeers:	con 20;
 TrafficHistorysize:	con 10;
 Ignorefaultyperiod:	con 300;
 
@@ -179,6 +180,7 @@ peergen:	int;  # sequence number for peers
 piecehave:	ref Bits;
 piecebusy:	ref Bits;
 faulty:		list of (string, int);  # ip, time
+islistening:	int;  # whether listener() is listening
 
 peerinmsgchan: chan of (ref Peer, ref Msg);
 msgwrittenchan: chan of ref Peer;
@@ -289,6 +291,7 @@ init(nil: ref Draw->Context, args: list of string)
 	trackreqchan = chan of (big, big, big, int, string);
 	trackchan = chan of (int, array of (string, int, array of byte), string);
 
+	canlistenchan = chan of int;
 	newpeerchan = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 	tickchan = chan of int;
 
@@ -445,6 +448,11 @@ peerdel(peer: ref Peer)
 
 	if(luckypeer == peer)
 		luckypeer = nil;
+
+	if(peer.dialed)
+		dialpeers();
+	else
+		awaitpeer();
 }
 
 peeradd(p: ref Peer)
@@ -469,11 +477,20 @@ peerhas(p: ref Peer): int
 	return 0;
 }
 
+peersdialed(): int
+{
+	i := 0;
+	for(l := peers; l != nil; l = tl l)
+		if((hd l).dialed)
+			i++;
+	return i;
+}
+
 dialpeers()
 {
 	say(sprint("dialpeers, %d trackerpeers %d peers", len trackerpeers, len peers));
 
-	while(trackerpeers != nil && ndialers < Dialersmax && len peers < Peersmax) {
+	while(trackerpeers != nil && ndialers < Dialersmax && len peers < Peersmax && peersdialed() < Peersdialedmax) {
 		np := trackerpeertake();
 		if(peerknownip(np.ip))
 			continue;
@@ -484,9 +501,16 @@ dialpeers()
 	}
 }
 
+awaitpeer()
+{
+	if(peersdialed() < Peersmax-Peersdialedmax && !islistening) {
+		islistening = 1;
+		spawn kicklistener();
+	}
+}
 
 
-Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref Peer
+Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int): ref Peer
 {
 	outmsgs := chan of ref Msg;
 	state := RemoteChoking|LocalChoking;
@@ -499,7 +523,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte): ref P
 		state,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, 0);
+		nil, 0, 0, dialed);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -975,6 +999,9 @@ main()
 		spawn trackkick(interval);
 
 	(dialed, np, peerfd, extensions, peerid, err) := <-newpeerchan =>
+		if(!dialed)
+			islistening = 0;
+
 		if(err != nil) {
 			warn(sprint("%s: %s", np.text(), err));
 		} else if(hex(peerid) == localpeeridhex) {
@@ -982,7 +1009,7 @@ main()
 		} else if(peerknownip(np.ip)) {
 			say("new connection from known ip address, dropping new connection...");
 		} else {
-			peer := Peer.new(np, peerfd, extensions, peerid);
+			peer := Peer.new(np, peerfd, extensions, peerid, dialed);
 			spawn peernetreader(peer);
 			spawn peernetwriter(peer);
 			peeradd(peer);
@@ -1006,10 +1033,12 @@ main()
 				unchoke(peer);
 			}
 		}
+
 		if(dialed) {
 			ndialers--;
 			dialpeers();
-		}
+		} else
+			awaitpeer();
 
 	(peer, msg) := <-peerinmsgchan =>
 		# xxx fix this code.  it can easily block now
@@ -1299,8 +1328,15 @@ track()
 	}
 }
 
+
+kicklistener()
+{
+	canlistenchan <-= 1;
+}
+
 listener(aconn: Sys->Connection)
 {
+	<-canlistenchan;
 	for(;;) {
 		(ok, conn) := sys->listen(aconn);
 		if(ok != 0) {
@@ -1329,6 +1365,7 @@ listener(aconn: Sys->Connection)
 		if(err != nil)
 			say("error handshaking incoming connection: "+err);
 		newpeerchan <-= (0, np, fd, extensions, peerid, err);
+		<-canlistenchan;
 	}
 }
 
