@@ -248,7 +248,7 @@ init(nil: ref Draw->Context, args: list of string)
 			if(maxdownload < big 0)
 				fail("invalid maximum download rate");
 		'u' =>	maxupload = bittorrent->byteparse(arg->earg());
-			if(maxupload < big 0)
+			if(maxupload < big (10*1024))
 				fail("invalid maximum upload rate");
 		* =>
 			fprint(fildes(2), "bad option: -%c\n", c);
