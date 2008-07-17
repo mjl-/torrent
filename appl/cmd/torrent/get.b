@@ -114,6 +114,29 @@ Block: adt {
 	text:	fn(b: self ref Block): string;
 };
 
+Req: adt {
+	pieceindex, blockindex: int;
+
+	eq:	fn(r1, r2: Req): int;
+	text:	fn(r: self Req): string;
+};
+
+Reqs: adt {
+	a:	array of Req;
+	first, next:	int;
+	lastreq:	ref Req;
+
+	new:	fn(size: int): ref Reqs;
+	take:	fn(r: self ref Reqs, req: Req): int;
+	add:	fn(r: self ref Reqs, req: Req);
+	peek:	fn(r: self ref Reqs): Req;
+	flush:	fn(r: self ref Reqs);
+	last:	fn(r: self ref Reqs): ref Req;
+	isempty:	fn(r: self ref Reqs): int;
+	isfull:		fn(r: self ref Reqs): int;
+	text:	fn(r: self ref Reqs): string;
+};
+
 Peer: adt {
 	id:	int;
 	np:	Newpeer;
@@ -122,6 +145,7 @@ Peer: adt {
 	peeridhex:	string;
 	outmsgs:	chan of ref Msg;
 	curpiece:	ref Piece;
+	reqs:	ref Reqs;
 	piecehave:	ref Bits;
 	state:	int;
 	msgseq:	int;
@@ -149,6 +173,7 @@ Peersmax:	con 80;
 Peersdialedmax:	con 40;
 Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
 Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
+Blockqueuesize:	con 30;  # number of pending blocks to request to peer
 Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
 
 Peeridlen:	con 20;
@@ -163,8 +188,8 @@ Intervalneed:	con 10;  # when we need more peers during startup period
 Intervaldefault:	con 1800;
 Intervalstartupperiod:	con 120;
 
-Blocksize:	con 16*1024;
-Blocksizemax:	con 32*1024;
+Blocksize:	con 16*1024;  # block size of blocks we request
+Blocksizemax:	con 32*1024;  # max block size allowed for incoming blocks
 Unchokedmax:	con 4;
 Seedunchokedmax:	con 4;
 Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
@@ -533,6 +558,74 @@ awaitpeer()
 }
 
 
+Req.eq(r1, r2: Req): int
+{
+	return r1.pieceindex == r2.pieceindex && r1.blockindex == r2.blockindex;
+}
+
+Req.text(r: self Req): string
+{
+	return sprint("<req piece=%d block=%d begin=%d>", r.pieceindex, r.blockindex, r.blockindex*Blocksize);
+}
+
+
+Reqs.new(size: int): ref Reqs
+{
+	return ref Reqs(array[size] of Req, 0, 0, nil);
+}
+
+Reqs.take(r: self ref Reqs, req: Req): int
+{
+	if(r.isempty())
+		raise "take on empty list";
+	if(!Req.eq(r.a[r.first], req))
+		return 0;
+	r.first = (r.first+1) % len r.a;
+	return 1;
+}
+
+Reqs.peek(r: self ref Reqs): Req
+{
+	if(r.isempty())
+		raise "peek on empty list";
+	return r.a[r.first];
+}
+
+Reqs.add(r: self ref Reqs, req: Req)
+{
+	if(r.isfull())
+		raise "add on full list";
+	r.a[r.next] = req;
+	r.next = (r.next+1) % len r.a;
+	r.lastreq = ref req;
+}
+
+Reqs.flush(r: self ref Reqs)
+{
+	r.first = r.next = 0;
+}
+
+Reqs.last(r: self ref Reqs): ref Req
+{
+	return r.lastreq;
+}
+
+Reqs.isempty(r: self ref Reqs): int
+{
+	return r.first == r.next;
+}
+
+Reqs.isfull(r: self ref Reqs): int
+{
+	return (r.next+1) % len r.a == r.first;
+}
+
+Reqs.text(r: self ref Reqs): string
+{
+	return sprint("<reqs first=%d next=%d size=%d>", r.first, r.next, len r.a);
+}
+
+
 Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int): ref Peer
 {
 	outmsgs := chan of ref Msg;
@@ -541,7 +634,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 	return ref Peer(
 		peergen++,
 		np, fd, extensions, peerid, hex(peerid),
-		outmsgs, nil,
+		outmsgs, nil, Reqs.new(Blockqueuesize),
 		Bits.new(piecehave.n),
 		state,
 		msgseq,
@@ -1198,9 +1291,19 @@ main()
 
 			piece := peer.curpiece;
 
-			(begin, length) := nextblock(piece);
-			if(m.begin != begin || len m.d != length) {
-				warn(sprint("%s sent bad begin (have %d, want %d) or length (%d, %d), disconnecting", peer.text(), m.begin, begin, len m.d, length));
+			req := Req(m.index, m.begin/Blocksize);
+			if(blocksize(req) != len m.d) {
+				warn(sprint("%s sent bad size for block %s, disconnecting", peer.text(), req.text()));
+				setfaulty(peer.np.ip);
+				peerdel(peer);
+				continue;
+			}
+
+			if(!peer.reqs.take(req)) {
+				exp := "nothing";
+				if(!peer.reqs.isempty())
+					exp = peer.reqs.peek().text();
+				warn(sprint("%s sent block %s, expected %s, disconnecting", peer.text(), req.text(), exp));
 				setfaulty(peer.np.ip);
 				peerdel(peer);
 				continue;
@@ -1640,27 +1743,40 @@ getpiece(peer: ref Peer): ref Piece
 	return peer.curpiece;  # should always be non-nil...
 }
 
+blocksize(req: Req): int
+{
+	# first a quick check
+	if(req.pieceindex < len torrent.piecehashes-1)
+		return Blocksize;
+
+	# otherwise, the full check
+	if(big req.pieceindex*big torrent.piecelen + big (req.blockindex+1)*big Blocksize > torrent.length)
+		return int (torrent.length % big Blocksize);
+	return Blocksize;
+}
+
 schedreq(peer: ref Peer)
 {
 	piece := peer.curpiece;
 
-	if(piece != nil) {
-		(begin, length) := nextblock(piece);
-		say(sprint("requesting next block, begin %d, length %d, %s", begin, length, piece.text()));
-		peer.send(ref Msg.Request(piece.index, begin, length));
+	if(piece == nil)
+		return;
+
+	while(!peer.reqs.isfull()) {
+		req: Req;
+		last := peer.reqs.last();
+		if(last == nil || last.pieceindex != piece.index)
+			req = Req(piece.index, 0);
+		else if((last.blockindex+1)*Blocksize < torrent.piecelength(last.pieceindex))
+			req = Req(piece.index, last.blockindex+1);
+		else
+			return;
+		say(sprint("requesting next block, %s", req.text()));
+		peer.reqs.add(req);
+		peer.send(ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req)));
 	}
 }
 
-
-nextblock(p: ref Piece): (int, int)
-{
-	# request sequentially, may change
-	begin := Blocksize*p.have.have;
-	length := Blocksize;
-	if(len p.d-begin < length)
-		length = len p.d-begin;
-	return (begin, length);
-}
 
 netread(fd: ref Sys->FD, buf: array of byte, n: int): int
 {
