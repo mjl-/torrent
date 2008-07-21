@@ -67,8 +67,10 @@ Bittorrent: module {
 	bytefmt:	fn(n: big): string;
 	byteparse:	fn(s: string): big;
 	pieceread:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int): (array of byte, string);
-	piecewrite:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string;
 	blockread:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index, begin, length: int): (array of byte, string);
+	piecewrite:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string;
 	torrentpwritex:	fn(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string;
+	torrentpreadx:	fn(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string;
+
 	g32:	fn(d: array of byte, i: int): (int, int);
 };

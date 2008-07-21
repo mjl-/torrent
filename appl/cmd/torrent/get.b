@@ -28,6 +28,7 @@ bittorrent: Bittorrent;
 print, sprint, fprint, fildes: import sys;
 Bee, Msg, Torrent: import bittorrent;
 IPaddr: import ipmod;
+DigestState: import keyring;
 
 
 Torrentget: module {
@@ -48,7 +49,6 @@ localpeeridhex: string;
 trackerevent: string;
 piececounts: array of int;  # for each piece, count of peers that have it
 trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
-diskchunkswritten: ref Bits;  # which disk chunks have been written to in the past and must not be written again
 maxratio := 0.0;
 maxdownload := big -1;
 maxupload := big -1;
@@ -82,12 +82,15 @@ upchan, downchan: chan of (int, chan of int);
 
 
 Piece: adt {
+	hashstate:	ref DigestState;
+	hashstateoff:	int;
 	index:	int;
-	d:	array of byte;
 	have:	ref Bits;
+	length:	int;
 
 	isdone:	fn(p: self ref Piece): int;
-	hash:	fn(p: self ref Piece): array of byte;
+	hashadd:	fn(p: self ref Piece, buf: array of byte);
+	hash:	fn(p: self ref Piece): (array of byte, string);
 	text:	fn(p: self ref Piece): string;
 };
 
@@ -154,6 +157,8 @@ Peer: adt {
 	netwriting:	int;
 	lastunchoke:	int;
 	dialed:	int;
+	data:	array of byte;  # data for active blockbatch
+	dataoff:	int;  # offset within piece where `data' starts
 
 	new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int): ref Peer;
 	remotechoking:	fn(p: self ref Peer): int;
@@ -172,9 +177,12 @@ Dialtimeout:	con 20;  # timeout for connecting to peer
 Peersmax:	con 80;
 Peersdialedmax:	con 40;
 Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
+Blocksize:	con 16*1024;  # block size of blocks we request
 Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
 Blockqueuesize:	con 30;  # number of pending blocks to request to peer
 Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
+Blockbatchsize:	con Diskchunksize/Blocksize;
+Netiounit:	con 1500-20-20;  # typical network data io unit, ethernet-ip-tcp
 
 Peeridlen:	con 20;
 
@@ -188,7 +196,6 @@ Intervalneed:	con 10;  # when we need more peers during startup period
 Intervaldefault:	con 1800;
 Intervalstartupperiod:	con 120;
 
-Blocksize:	con 16*1024;  # block size of blocks we request
 Blocksizemax:	con 32*1024;  # max block size allowed for incoming blocks
 Unchokedmax:	con 4;
 Seedunchokedmax:	con 4;
@@ -349,27 +356,12 @@ init(nil: ref Draw->Context, args: list of string)
 	trafficmetaup = Traffic.new();
 	trafficmetadown = Traffic.new();
 
-	diskchunkswritten = Bits.new(int ((torrent.length+big Diskchunksize-big 1)/big Diskchunksize));
-	seen := 0;
-	for(i := 0; i < piecehave.n && seen < piecehave.have; i++) {
-		if(piecehave.get(i)) {
-			seen++;
-			off := big i*big torrent.piecelen;
-			offe := off+big torrent.piecelength(i);
-			for(; off < offe; off += big Diskchunksize) {
-				chunk := int (off/big Diskchunksize);
-				diskchunkswritten.set(chunk);
-				say(sprint("chunk %d has been written to, mark as such", chunk));
-			}
-		}
-	}
-
 	# start listener, for incoming connections
 	ok := -1;
 	conn: Sys->Connection;
 	listenaddr: string;
 
-	for(i = 0; i < Listenportrange; i++) {
+	for(i := 0; i < Listenportrange; i++) {
 		listenport = Listenport+i;
 		listenaddr = sprint("net!%s!%d", Listenhost, listenport);
 		(ok, conn) = sys->announce(listenaddr);
@@ -398,6 +390,11 @@ init(nil: ref Draw->Context, args: list of string)
 isdone(): int
 {
 	return piecehave.n == piecehave.have;
+}
+
+rarestfirst(): int
+{
+	return piecehave.n >= Piecesrandom;
 }
 
 writestate()
@@ -639,7 +636,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 		state,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, 0, dialed);
+		nil, 0, 0, dialed, array[0] of byte, 0);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -704,11 +701,27 @@ Piece.isdone(p: self ref Piece): int
 	return p.have.n == p.have.have;
 }
 
-Piece.hash(p: self ref Piece): array of byte
+
+Piece.hashadd(p: self ref Piece, buf: array of byte)
 {
+	p.hashstate = keyring->sha1(buf, len buf, nil, p.hashstate);
+	p.hashstateoff += len buf;
+}
+
+Piece.hash(p: self ref Piece): (array of byte, string)
+{
+	while(p.hashstateoff < p.length) {
+		size := min(Diskchunksize, p.length-p.hashstateoff);
+		buf := array[size] of byte;
+		err := bittorrent->torrentpreadx(dstfds, buf, len buf, big p.index*big torrent.piecelen+big p.hashstateoff);
+		if(err != nil)
+			return (nil, err);
+		p.hashadd(buf);
+	}
+	
 	hash := array[Keyring->SHA1dlen] of byte;
-	keyring->sha1(p.d, len p.d, hash, nil);
-	return hash;
+	keyring->sha1(nil, 0, hash, p.hashstate);
+	return (hash, nil);
 }
 
 Piece.text(p: self ref Piece): string
@@ -1309,13 +1322,36 @@ main()
 				continue;
 			}
 
-			piece.d[m.begin:] = m.d;
+			if(len peer.data == 0)
+				peer.dataoff = m.begin;
+
+			ndata := array[len peer.data+len m.d] of byte;
+			ndata[:] = peer.data;
+			ndata[len peer.data:] = m.d;
+			peer.data = ndata;
+
+			if(piece.hashstateoff == m.begin)
+				piece.hashadd(m.d);
+
+			if(len peer.data == Diskchunksize || peer.dataoff+len peer.data == piece.length) {
+				say(sprint("writing chunk to disk, dataoff %d len data %d", peer.dataoff, len peer.data));
+				off := big piece.index*big torrent.piecelen + big peer.dataoff;
+				err := bittorrent->torrentpwritex(dstfds, peer.data, len peer.data, off);
+				if(err != nil)
+					fail("writing piece: "+err);  # xxx fail saner...
+				peer.data = array[0] of byte;
+				peer.dataoff = 0;
+			}
+
 			piece.have.set(m.begin/Blocksize);
 			totalleft -= big len m.d;
 
 			if(piece.isdone()) {
 				wanthash := hex(torrent.piecehashes[piece.index]);
-				havehash := hex(piece.hash());
+				(piecehash, herr) := piece.hash();
+				if(herr != nil)
+					fail("verifying hash: "+herr);
+				havehash := hex(piecehash);
 				if(wanthash != havehash) {
 					say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
 					setfaulty(peer.np.ip);
@@ -1323,32 +1359,8 @@ main()
 					continue;
 				}
 
-				# before writing to disk, ensure data is written with at least Diskchunksize bytes at a time,
-				# to prevent fragmentation.
-				# xxx in the future we'll write blocks, not only whole pieces (now this doesn't make much sense, pieces will be larger than the 128kb disk chunk size).
-				off := big piece.index*big torrent.piecelen;
-				offe := off+big torrent.piecelength(piece.index);
-				for(; off < offe; off += big Diskchunksize) {
-					chunk := int (off/big Diskchunksize);
-					if(diskchunkswritten.get(chunk))
-						continue;
-
-					say(sprint("writing to chunk %d", chunk));
-					chunksize := Diskchunksize;
-					if(off+big chunksize > torrent.length)
-						chunksize = int (torrent.length-off);
-					buf := array[chunksize] of {* => byte 0};
-					err := bittorrent->torrentpwritex(dstfds, buf, len buf, off);
-					if(err != nil)
-						fail("writing disk chunk: "+err);  # xxx fail saner...
-					diskchunkswritten.set(chunk);
-				}
-
-				err := bittorrent->piecewrite(torrent, dstfds, piece.index, piece.d);
-				if(err != nil)
-					fail("writing piece: "+err);  # xxx fail saner...
-
 				piecehave.set(piece.index);
+
 				writestate();
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
@@ -1508,43 +1520,29 @@ listener(aconn: Sys->Connection)
 }
 
 
+min(a, b: int): int
+{
+	if(a < b)
+		return a;
+	return b;
+}
+
 # we are allowed to pass `max' bytes per second.
-# xxx do more fine-grained allocations.  detect contention and allow smaller pieces?  never give full bandwidth away in one request?
 limiter(ch: chan of (int, chan of int), max: int)
 {
-	allow := max;  # remaining bandwidth in current second
-	cur := sys->millisec();  # start of current second
+	maxallow := min(max, Netiounit);
 
 	for(;;) {
 		(want, respch) := <-ch;
-		if(max < 0) {
+		if(max <= 0) {
 			# no rate limiting, let traffic pass
 			respch <-= want;
 			continue;
 		}
 
-		now := sys->millisec();
-		if(now < cur)
-			cur = now;  # wrap-around, stretch time
-
-		if(now-1000 > cur) {
-			# new second, new bandwidth
-			cur = now-(now-cur)%1000;
-			allow = max;
-		}
-
-		if(allow == 0) {
-			# we already used all our bandwidth for this second, wait till next one
-			sys->sleep(cur+1000-now);
-			cur = sys->millisec();
-			allow = max;
-		}
-
-		get := want;
-		if(get > allow)
-			get = allow;
-		allow -= get;
-		respch <-= get;
+		give := min(maxallow, want);
+		respch <-= give;
+		sys->sleep(980*give/max);  # don't give out more bandwidth until this portion has run out
 	}
 }
 
@@ -1671,12 +1669,11 @@ interesting(p: ref Peer)
 }
 
 
-
 setpiece(peer: ref Peer, index: int)
 {
 	piecelen := torrent.piecelength(index);
 	nblocks := (piecelen+Blocksize-1)/Blocksize;
-	piece := ref Piece(index, array[piecelen] of byte, Bits.new(nblocks));
+	piece := ref Piece(nil, 0, index, Bits.new(nblocks), piecelen);
 
 	say(sprint("assigned %s to %s", piece.text(), peer.text()));
 	peer.curpiece = piece;
