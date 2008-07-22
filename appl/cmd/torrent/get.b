@@ -1399,9 +1399,7 @@ main()
 				peer.send(ref Msg.Keepalive());
 			} else {
 				say("sending bitfield to peer: "+piecehave.text());
-				d := array[len piecehave.d] of byte;
-				d[:] = piecehave.d;
-				peer.send(ref Msg.Bitfield(d));
+				peer.send(ref Msg.Bitfield(piecehave.bytes()));
 			}
 
 			if(len peersactive() < Unchokedmax) {

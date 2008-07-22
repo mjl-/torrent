@@ -115,6 +115,13 @@ Bits.isfull(b: self ref Bits): int
 	return b.have == b.n;
 }
 
+Bits.bytes(b: self ref Bits): array of byte
+{
+	d := array[len b.d] of byte;
+	d[:] = b.d;
+	return d;
+}
+
 Bits.text(b: self ref Bits): string
 {
 	s := "";

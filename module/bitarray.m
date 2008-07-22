@@ -17,6 +17,7 @@ Bitarray: module {
 		union:	fn(l: array of ref Bits): ref Bits;
 		isempty:	fn(b: self ref Bits): int;
 		isfull:		fn(b: self ref Bits): int;
+		bytes:	fn(b: self ref Bits): array of byte;
 		text:	fn(b: self ref Bits): string;
 	};
 };
