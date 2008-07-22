@@ -23,6 +23,7 @@ fprint, fildes, sprint: import sys;
 Bits: import bitarray;
 Url, Rbuf: import http;
 
+dflag = 0;
 version: con 0;
 Peeridlen: con 20;
 
@@ -429,8 +430,6 @@ Msg.read(fd: ref Sys->FD): (ref Msg, string)
 		return (nil, sprint("short read"));
 	(size, nil) := g32(buf, 0);
 	buf = array[size] of byte;
-say(sprint("msg.read: have size=%d", size));
-
 
 	n = sys->readn(fd, buf, len buf);
 	if(n < 0)
@@ -495,13 +494,10 @@ Torrent.open(path: string): (ref Torrent, string)
 	d := readfile(fd);
 	if(d == nil)
 		return (nil, sprint("reading %s: %r", path));
-	#say("have file");
-	#say(sprint("file length=%d byte0=%c", len d, int d[0]));
 
 	(b, err) := Bee.unpack(d);
 	if(err != nil)
 		return (nil, sprint("parsing %s: %s", path, err));
-say("have unpacked bee");
 
 	bannoun := b.gets("announce"::nil);
 	if(bannoun == nil)
@@ -580,8 +576,6 @@ say("have unpacked bee");
 		}
 	}
 	files = rev(files);
-
-	#say("have torrent config");
 
 	# xxx sanity checks
 	statepath := hd revstr(sys->tokenize(path, "/").t1)+".state";
@@ -1008,6 +1002,6 @@ has[T](l: list of T, e: T): int
 
 say(s: string)
 {
-	if(1)
+	if(dflag)
 		fprint(fildes(2), "%s\n", s);
 }

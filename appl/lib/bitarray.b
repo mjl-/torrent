@@ -62,6 +62,12 @@ Bits.clear(b: self ref Bits, i: int)
 	}
 }
 
+Bits.clearall(b: self ref Bits)
+{
+	b.d = array[len b.d] of {* => byte 0};
+	b.have = 0;
+}
+
 Bits.invert(b: self ref Bits)
 {
 	for(i := 0; i < len b.d; i++)

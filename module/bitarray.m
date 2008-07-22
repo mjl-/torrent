@@ -11,6 +11,7 @@ Bitarray: module {
 		get:	fn(b: self ref Bits, i: int): int;
 		set:	fn(b: self ref Bits, i: int);
 		clear:	fn(b: self ref Bits, i: int);
+		clearall:	fn(b: self ref Bits);
 		invert:	fn(b: self ref Bits);
 		and:	fn(l: array of ref Bits): ref Bits;
 		union:	fn(l: array of ref Bits): ref Bits;

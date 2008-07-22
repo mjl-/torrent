@@ -38,6 +38,8 @@ Torrentget: module {
 };
 
 Dflag: int;
+Pflag: int;
+Lflag: int;
 nofix: int;
 
 torrent: ref Torrent;
@@ -285,10 +287,12 @@ init(nil: ref Draw->Context, args: list of string)
 	bittorrent->init(bitarray);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-Dn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
+	arg->setusage(arg->progname()+" [-DPLn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'D' =>	Dflag++;
+		'P' =>	Pflag++;
+		'L' =>	bittorrent->dflag++;
 		'n' =>	nofix = 1;
 		'm' =>	maxratio = real arg->earg();
 			if(maxratio <= 1.1)
@@ -1570,10 +1574,13 @@ main()
 			# possibly send cancel to other peer
 			busy := piece.busy[blockindex];
 			busypeer: ref Peer;
-			if(busy.t0 >= 0 && busy.t0 != peer.id)
+			if(busy.t0 >= 0 && busy.t0 != peer.id) {
 				busypeer = peerfind(busy.t0);
-			else if(busy.t1 >= 0 && busy.t1 != peer.id)
+				piece.busy[blockindex].t0 = -1;
+			} else if(busy.t1 >= 0 && busy.t1 != peer.id) {
 				busypeer = peerfind(busy.t1);
+				piece.busy[blockindex].t1 = -1;
+			}
 			if(busypeer != nil) {
 				peer.reqs.cancel(Req.new(m.index, m.begin/Blocksize));
 				peer.send(ref Msg.Cancel(m.index, m.begin, len m.d));
@@ -1619,6 +1626,15 @@ main()
 					say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
 					setfaulty(peer.np.ip);
 					peerdel(peer);
+					piece.hashstate = nil;
+					piece.hashstateoff = 0;
+					piece.have.clearall();
+					if(Dflag) {
+						for(i := 0; i < len piece.busy; i++)
+							if(piece.busy[i].t0 >= 0 || piece.busy[i].t1 >= 0)
+								raise sprint("piece %d should be complete, but block %d is busy", piece.index, i);
+					}
+					
 					# xxx what do to with other peers?
 					continue;
 				}
@@ -2286,7 +2302,8 @@ peernetreader(peer: ref Peer)
 		(m, err) := msgread(peer.fd);
 		if(err != nil)
 			fail("reading msg: "+err);  # xxx return error to main
-		fprint(fildes(2), "<< %s\n", m.text());
+		if(Pflag)
+			fprint(fildes(2), "<< %s\n", m.text());
 		peerinmsgchan <-= (peer, m);
 	}
 }
@@ -2297,7 +2314,8 @@ peernetwriter(peer: ref Peer)
 		m := <- peer.outmsgs;
 		if(m == nil)
 			return;
-		fprint(fildes(2), ">> %s\n", m.text());
+		if(Pflag)
+			fprint(fildes(2), ">> %s\n", m.text());
 		d := m.pack();
 		n := netwrite(peer.fd, d, len d);
 		if(n != len d)

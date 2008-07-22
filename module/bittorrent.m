@@ -1,6 +1,7 @@
 Bittorrent: module {
 	PATH:	con "/dis/lib/bittorrent.dis";
 
+	dflag:	int;
 	init:	fn(bitarray: Bitarray);
 
 	Bee: adt {
