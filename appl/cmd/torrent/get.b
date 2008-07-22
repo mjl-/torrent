@@ -96,7 +96,6 @@ Piece: adt {
 	isdone:	fn(p: self ref Piece): int;
 	orphan:	fn(p: self ref Piece): int;
 	hashadd:	fn(p: self ref Piece, buf: array of byte);
-	hash:	fn(p: self ref Piece): (array of byte, string);
 	text:	fn(p: self ref Piece): string;
 };
 
@@ -970,22 +969,6 @@ Piece.hashadd(p: self ref Piece, buf: array of byte)
 	p.hashstateoff += len buf;
 }
 
-Piece.hash(p: self ref Piece): (array of byte, string)
-{
-	while(p.hashstateoff < p.length) {
-		size := min(Diskchunksize, p.length-p.hashstateoff);
-		buf := array[size] of byte;
-		err := bittorrent->torrentpreadx(dstfds, buf, len buf, big p.index*big torrent.piecelen+big p.hashstateoff);
-		if(err != nil)
-			return (nil, err);
-		p.hashadd(buf);
-	}
-	
-	hash := array[Keyring->SHA1dlen] of byte;
-	keyring->sha1(nil, 0, hash, p.hashstate);
-	return (hash, nil);
-}
-
 Piece.text(p: self ref Piece): string
 {
 	return sprint("<piece %d have %s>", p.index, p.have.text());
@@ -1618,6 +1601,7 @@ main()
 			totalleft -= big len m.d;
 
 			if(piece.isdone()) {
+				# flush all bufs about this piece, also from other peers, to disk.  to make hash-checking read right data.
 				for(l := peers; l != nil; l = tl l) {
 					p := hd l;
 					if(p.buf.piece == m.index) {
@@ -1627,7 +1611,7 @@ main()
 				}
 
 				wanthash := hex(torrent.piecehashes[piece.index]);
-				(piecehash, herr) := piece.hash();
+				(piecehash, herr) := piecehash(piece);
 				if(herr != nil)
 					fail("verifying hash: "+herr);
 				havehash := hex(piecehash);
@@ -1849,6 +1833,23 @@ piecefind(index: int): ref Piece
 			return hd l;
 	return nil;
 }
+
+piecehash(p: ref Piece): (array of byte, string)
+{
+	while(p.hashstateoff < p.length) {
+		size := min(Diskchunksize, p.length-p.hashstateoff);
+		buf := array[size] of byte;
+		err := bittorrent->torrentpreadx(dstfds, buf, len buf, big p.index*big torrent.piecelen+big p.hashstateoff);
+		if(err != nil)
+			return (nil, err);
+		p.hashadd(buf);
+	}
+	
+	hash := array[Keyring->SHA1dlen] of byte;
+	keyring->sha1(nil, 0, hash, p.hashstate);
+	return (hash, nil);
+}
+
 
 piecekeeper()
 {
