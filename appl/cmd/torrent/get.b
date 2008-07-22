@@ -93,6 +93,7 @@ Piece: adt {
 	have:	ref Bits;
 	length:	int;
 	busy:	array of (int, int);  # peerid, peerid
+	done:	array of int;  # peerid
 
 	new:	fn(index: int): ref Piece;
 	isdone:	fn(p: self ref Piece): int;
@@ -950,7 +951,7 @@ Piece.new(index: int): ref Piece
 {
 	length := torrent.piecelength(index);
 	nblocks := (length+Blocksize-1)/Blocksize;
-	return ref Piece(nil, 0, index, Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)});
+	return ref Piece(nil, 0, index, Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
 }
 
 Piece.orphan(p: self ref Piece): int
@@ -1602,7 +1603,8 @@ main()
 			if(piece.hashstateoff == m.begin)
 				piece.hashadd(m.d);
 
-			piece.have.set(m.begin/Blocksize);
+			piece.have.set(blockindex);
+			piece.done[blockindex] = peer.id;
 			totalleft -= big len m.d;
 
 			if(piece.isdone()) {
