@@ -203,15 +203,23 @@ Peer: adt {
 	fulltext:	fn(p: self ref Peer): string;
 };
 
-Rotation: adt[T] {
-	a:	array of T;
 
-	new:	fn(): ref Rotation[T];
-	takerandom:	fn(r: self ref Rotation): T;
-	add:	fn(r: self ref Rotation, e: T);
-	addunique:	fn(r: self ref Rotation, e: T);
-	has:	fn(r: self ref Rotation, e: T): int;
-	text:	fn(r: self ref Rotation): string;
+PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # pool mode
+
+Pool: adt[T] {
+	active:	array of T;
+	pool:	array of T;
+	poolnext:	int;
+	mode:	int;
+
+	new:	fn(mode: int): ref Pool[T];
+	fill:	fn(p: self ref Pool);
+	take:	fn(p: self ref Pool): T;
+	pooladd:	fn(p: self ref Pool, e: T);
+	pooladdunique:	fn(p: self ref Pool, e: T);
+	poolhas:	fn(p: self ref Pool, e: T): int;
+	pooldel:	fn(p: self ref Pool, e: T);
+	text:	fn(p: self ref Pool): string;
 };
 
 
@@ -255,7 +263,7 @@ stopped := 0;
 ndialers:	int;  # number of active dialers
 trackerpeers:	list of Newpeer;  # peers we are not connected to
 peers:	list of ref Peer;  # peers we are connected to
-rotateips:	ref Rotation[string];  # masked ip address
+rotateips:	ref Pool[string];  # masked ip address
 luckypeer:	ref Peer;  # current optimistic unchoked peer.  may be stale (not in peers)
 peergen:	int;  # sequence number for peers
 piecehave:	ref Bits;
@@ -420,7 +428,7 @@ init(nil: ref Draw->Context, args: list of string)
 	trafficmetaup = Traffic.new();
 	trafficmetadown = Traffic.new();
 
-	rotateips = Rotation[string].new();
+	rotateips = Pool[string].new(PoolRotateRandom);
 
 	# start listener, for incoming connections
 	ok := -1;
@@ -919,48 +927,94 @@ Peer.fulltext(p: self ref Peer): string
 }
 
 
-Rotation[T].new(): ref Rotation[T]
+Pool[T].new(mode: int): ref Pool[T]
 {
-	return ref Rotation[T](array[0] of T);
+	return ref Pool[T](array[0] of T, array[0] of T, 0, mode);
 }
 
-Rotation[T].takerandom(r: self ref Rotation): T
+Pool[T].fill(p: self ref Pool)
 {
-	if(len r.a == 0)
+	case p.mode {
+	PoolRandom =>
+		return;
+	PoolRotateRandom or PoolInorder =>
+		n := len p.pool-len p.active;
+
+		newa := array[len p.pool] of T;
+		newa[:] = p.active;
+		start := len p.active;
+		for(i := 0; i < n; i++) {
+			newa[start+i] = p.pool[p.poolnext];
+			p.poolnext = (p.poolnext+1) % len p.pool;
+		}
+		p.active = newa;
+
+		if(p.mode == PoolRotateRandom)
+			randomize(p.active[len p.active-n:]);
+	* =>
+		raise sprint("bad mode for pool: %d", p.mode);
+	}
+}
+
+Pool[T].take(p: self ref Pool): T
+{
+	if(len p.active == 0)
 		return nil;
 
-	i := rand->rand(len r.a);
-	res := r.a[i];
-	r.a[i] = r.a[len r.a-1];
-	r.a = r.a[:len r.a-1];
-	return res;
+	case p.mode {
+	PoolRandom =>
+		return p.pool[rand->rand(len p.pool)];
+	PoolRotateRandom or PoolInorder =>
+		e := p.active[0];
+		p.active = p.active[1:];
+		return e;
+	* =>
+		raise sprint("bad mode for pool: %d", p.mode);
+	}
 }
 
-Rotation[T].add(r: self ref Rotation, e: T)
+Pool[T].pooladd(p: self ref Pool, e: T)
 {
-	newa := array[len r.a+1] of T;
-	newa[:] = r.a;
-	newa[len r.a] = e;
+	newp := array[len p.pool+1] of T;
+	newp[:] = p.pool;
+	newp[len p.pool] = e;
 }
 
-Rotation[T].addunique(r: self ref Rotation, e: T)
+Pool[T].pooladdunique(p: self ref Pool, e: T)
 {
-	if(!r.has(e))
-		r.add(e);
+	if(!p.poolhas(e))
+		p.pooladd(e);
 }
 
-Rotation[T].has(r: self ref Rotation, e: T): int
+Pool[T].poolhas(p: self ref Pool, e: T): int
 {
-	for(i := 0; i < len r.a; i++)
-		if(r.a[i] == e)
+	for(i := 0; i < len p.pool; i++)
+		if(p.pool[i] == e)
 			return 1;
 	return 0;
 }
 
-
-Rotation[T].text(r: self ref Rotation): string
+Pool[T].pooldel(p: self ref Pool, e: T)
 {
-	return sprint("<rotation len a=%d>", len r.a);
+	i := 0;
+	while(i < len p.pool) {
+		if(p.pool[i] == e) {
+			p.pool[i:] = p.pool[i+1:];
+			p.pool = p.pool[:len p.pool-1];
+		} else
+			i++;
+	}
+}
+
+poolmodes := array[] of {
+	"random",
+	"rotaterandom",
+	"inorder"
+};
+
+Pool[T].text(p: self ref Pool): string
+{
+	return sprint("<rotation len active=%d len pool=%d poolnext=%d mode=%s>", len p.active, len p.pool, p.poolnext, poolmodes[p.mode]);
 }
 
 
@@ -1152,10 +1206,16 @@ peerratecmp(a1, a2: ref (ref Peer, int)): int
 	return 1;
 }
 
-_nextoptimisticunchoke(regen: int): ref Peer
+nextoptimisticunchoke(): ref Peer
 {
+	rotateips.fill(); # xxx replace by markstart, and then lazily rotate
+
 	# find next masked ip address to pick peer from (if still present)
-	while((ipmasked := rotateips.takerandom()) != nil) {
+	for(;;) {
+		ipmasked := rotateips.take();
+		if(ipmasked == nil)
+			break;
+
 		# find peer from the address pool with oldest unchoke
 		peer: ref Peer;
 		for(l := peers; l != nil; l = tl l) {
@@ -1165,21 +1225,10 @@ _nextoptimisticunchoke(regen: int): ref Peer
 		}
 		if(peer != nil)
 			return peer;
+		else
+			rotateips.pooldel(ipmasked);
 	}
-
-	if(!regen)
-		return nil;
-
-	# rotation list emptied, generate a new one
-	for(l := peers; l != nil; l = tl l)
-		rotateips.addunique(maskip((hd l).np.ip));
-
-	return _nextoptimisticunchoke(0);
-}
-
-nextoptimisticunchoke(): ref Peer
-{
-	return _nextoptimisticunchoke(1);
+	return nil;
 }
 
 choke(p: ref Peer)
@@ -1411,7 +1460,7 @@ main()
 			peeradd(peer);
 			say("new peer "+peer.fulltext());
 
-			rotateips.addunique(maskip(np.ip));
+			rotateips.pooladdunique(maskip(np.ip));
 
 			if(piecehave.have == 0) {
 				peer.send(ref Msg.Keepalive());
