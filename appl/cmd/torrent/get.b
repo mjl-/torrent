@@ -313,12 +313,12 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len args != 1)
 		arg->usage();
 
+	sys->pctl(Sys->NEWPGRP, nil);
+
 	err: string;
 	(torrent, err) = Torrent.open(hd args);
 	if(err != nil)
 		fail(sprint("%s: %s", hd args, err));
-
-	sys->pctl(Sys->NEWPGRP, nil);
 
 	created: int;
 	(dstfds, created, err) = torrent.openfiles(nofix, 0);
@@ -344,13 +344,30 @@ init(nil: ref Draw->Context, args: list of string)
 		} else {
 			# otherwise, read through all data
 			say("starting to check all pieces in files...");
+
+			reqch := chan[len torrent.piecehashes+1] of ref (int, big, chan of (array of byte, string));
+			spawn chunkreader(reqch);
+
+			chunkch := chan[1] of (array of byte, string);
+			for(i := 0; i < len torrent.piecehashes; i++)
+				reqch <-= ref (torrent.piecelength(i), big i*big torrent.piecelen, chunkch);
+			reqch <-= nil;
+
 			piecehave = Bits.new(len torrent.piecehashes);
-			for(i := 0; i < len torrent.piecehashes; i++) {
-				(d, rerr) := bittorrent->pieceread(torrent, dstfds, i);
-				if(rerr != nil)
-					fail("verifying: "+rerr);
+			for(i = 0; i < len torrent.piecehashes; i++) {
+				state: ref DigestState;
+				for(;;) {
+					(buf, cerr) := <-chunkch;
+					if(cerr != nil)
+						fail(sprint("reading piece %d for verification: %s", i, cerr));
+					if(buf == nil)
+						break;
+					state = keyring->sha1(buf, len buf, nil, state);
+				}
+
 				hash := array[Keyring->SHA1dlen] of byte;
-				keyring->sha1(d, len d, hash, nil);
+				keyring->sha1(nil, 0, hash, state);
+
 				if(hex(hash) == hex(torrent.piecehashes[i]))
 					piecehave.set(i);
 			}
@@ -1850,17 +1867,48 @@ piecefind(index: int): ref Piece
 	return nil;
 }
 
+chunkreader(reqch: chan of ref (int, big, chan of (array of byte, string)))
+{
+	for(;;) {
+		req := <-reqch;
+		if(req == nil)
+			break;
+
+		(n, off, chunkch) := *req;
+		while(n > 0) {
+			want := min(Diskchunksize, n);
+			buf := array[want] of byte;
+			err := bittorrent->torrentpreadx(dstfds, buf, len buf, off);
+			if(err != nil) {
+				chunkch <-= (nil, err);
+				return;
+			}
+			off += big len buf;
+			n -= len buf;
+			chunkch <-= (buf, nil);
+		}
+		chunkch <-= (nil, nil);
+	}
+}
+
 piecehash(p: ref Piece): (array of byte, string)
 {
-	while(p.hashstateoff < p.length) {
-		size := min(Diskchunksize, p.length-p.hashstateoff);
-		buf := array[size] of byte;
-		err := bittorrent->torrentpreadx(dstfds, buf, len buf, big p.index*big torrent.piecelen+big p.hashstateoff);
+	reqch := chan[1] of ref (int, big, chan of (array of byte, string));
+	spawn chunkreader(reqch);
+
+	chunkch := chan of (array of byte, string);
+	reqch <-= ref (p.length-p.hashstateoff, big p.index*big torrent.piecelen+big p.hashstateoff, chunkch);
+	reqch <-= nil;
+
+	for(;;) {
+		(buf, err) := <-chunkch;
 		if(err != nil)
-			return (nil, err);
+			fail(sprint("reading piece %d: %s", p.index, err));
+		if(buf == nil)
+			break;
 		p.hashadd(buf);
 	}
-	
+
 	hash := array[Keyring->SHA1dlen] of byte;
 	keyring->sha1(nil, 0, hash, p.hashstate);
 	return (hash, nil);
