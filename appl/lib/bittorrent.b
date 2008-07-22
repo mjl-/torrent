@@ -776,8 +776,7 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
 genpeerid(): array of byte
 {
 	peerid := sprint("-in%04d-", version);
-	peerid += hex(random->randombuf(Random->NotQuiteRandom, (Peeridlen-len peerid)/2));
-	say("generated peerid "+string peerid);
+	peerid += hex(random->randombuf(Random->ReallyRandom, (Peeridlen-len peerid)/2));
 	return array of byte peerid;
 }
 
