@@ -38,6 +38,7 @@ pieces: Pieces;
 peers: Peers;
 requests: Requests;
 verify: Verify;
+sched: Schedule;
 
 print, sprint, fprint, fildes: import sys;
 Bee, Msg, Torrent: import bittorrent;
@@ -65,7 +66,6 @@ listenport: int;
 localpeerid: array of byte;
 localpeeridhex: string;
 trackerevent: string;
-piececounts: array of int;  # for each piece, count of peers that have it
 trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
 maxratio := 0.0;
 maxdownload := big -1;
@@ -90,8 +90,6 @@ upchan, downchan: chan of (int, chan of int);
 stopped := 0;
 ndialers:	int;  # number of active dialers
 rotateips:	ref Pool[string];  # masked ip address
-piecehave:	ref Bits;
-piecebusy:	ref Bits;
 faulty:		list of (string, int);  # ip, time
 islistening:	int;  # whether listener() is listening
 
@@ -134,6 +132,8 @@ init(nil: ref Draw->Context, args: list of string)
 	peers->init(rand);
 	verify = load Verify Verify->PATH;
 	verify->init();
+	sched = load Schedule Schedule->PATH;
+	sched->init(rand, peers, pieces);
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-DPLn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
@@ -177,7 +177,7 @@ init(nil: ref Draw->Context, args: list of string)
 		# all new files, we don't have pieces yet
 		trackerevent = "started";
 		say("no state file needed, all new files");
-		piecehave = Bits.new(len torrent.piecehashes);
+		sched->piecehave = Bits.new(len torrent.piecehashes);
 	} else {
 		# attempt to read state of pieces from .torrent.state file
 		statefd = sys->open(torrent.statepath, Sys->ORDWR);
@@ -186,7 +186,7 @@ init(nil: ref Draw->Context, args: list of string)
 			(d, rerr) := readfd(statefd);
 			if(rerr != nil)
 				fail(sprint("%s: %s", torrent.statepath, rerr));
-			(piecehave, err) = Bits.mk(len torrent.piecehashes, d);
+			(sched->piecehave, err) = Bits.mk(len torrent.piecehashes, d);
 			if(err != nil)
 				fail(sprint("%s: invalid state", torrent.statepath));
 		} else {
@@ -201,7 +201,7 @@ init(nil: ref Draw->Context, args: list of string)
 				reqch <-= ref (torrent.piecelength(i), big i*big torrent.piecelen, chunkch);
 			reqch <-= nil;
 
-			piecehave = Bits.new(len torrent.piecehashes);
+			sched->piecehave = Bits.new(len torrent.piecehashes);
 			for(i = 0; i < len torrent.piecehashes; i++) {
 				state: ref DigestState;
 				for(;;) {
@@ -217,7 +217,7 @@ init(nil: ref Draw->Context, args: list of string)
 				keyring->sha1(nil, 0, hash, state);
 
 				if(hex(hash) == hex(torrent.piecehashes[i]))
-					piecehave.set(i);
+					(sched->piecehave).set(i);
 			}
 		}
 	}
@@ -254,17 +254,16 @@ init(nil: ref Draw->Context, args: list of string)
 	upchan = chan of (int, chan of int);
 	downchan = chan of (int, chan of int);
 
-	piecebusy = Bits.new(len torrent.piecehashes);
-
 	peerinmsgchan = chan of (ref Peer, ref Msg);
 	msgwrittenchan = chan of ref Peer;
-
-	piececounts = array[len torrent.piecehashes] of {* => 0};
 
 	trafficup = Traffic.new();
 	trafficdown = Traffic.new();
 	trafficmetaup = Traffic.new();
 	trafficmetadown = Traffic.new();
+
+	pieces->prepare(torrent);
+	sched->prepare(len torrent.piecehashes);
 
 	rotateips = Pool[string].new(Pools->PoolRotateRandom);
 
@@ -300,17 +299,12 @@ init(nil: ref Draw->Context, args: list of string)
 
 isdone(): int
 {
-	return piecehave.n == piecehave.have;
-}
-
-rarestfirst(): int
-{
-	return piecehave.have >= Piecesrandom;
+	return (sched->piecehave).n == (sched->piecehave).have;
 }
 
 writestate()
 {
-	d := piecehave.d;
+	d := (sched->piecehave).d;
 	n := sys->pwrite(statefd, d, len d, big 0);
 	if(n != len d)
 		warn(sprint("writing state: %r"));
@@ -322,9 +316,9 @@ writestate()
 peerdrop(peer: ref Peer)
 {
 	n := 0;
-	for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
-		if(peer.piecehave.get(i)) {
-			piececounts[i]--;
+	for(i := 0; i < (peer.piecehave).n && n < (peer.piecehave).have; i++)
+		if((peer.piecehave).get(i)) {
+			sched->piececounts[i]--;
 			n++;
 		}
 
@@ -420,6 +414,20 @@ blockreadsend(p: ref Peer)
 	peersend(p, ref Msg.Piece(b.piece, b.begin, d));
 }
 
+peerratecmp(a1, a2: ref (ref Peer, int)): int
+{
+	(p1, r1) := *a1;
+	(p2, r2) := *a2;
+	n := r2-r1;
+	if(n != 0)
+		return n;
+	if(p1.remoteinterested() == p2.remoteinterested())
+		return 0;
+	if(p1.remoteinterested())
+		return -1;
+	return 1;
+}
+
 request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 {
 	for(; reqs != nil; reqs = tl reqs) {
@@ -439,33 +447,18 @@ request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 	}
 }
 
-schedbatches(peer: ref Peer, b: array of ref Batch)
+schedule(p: ref Peer)
 {
-	for(i := 0; needblocks(peer) && i < len b; i++)
-		request(peer, b[i].piece, b[i].unused());
-}
+	if(!sched->needblocks(p))
+		return;
 
-schedpieces(peer: ref Peer, a: array of ref Piece)
-{
-	for(i := 0; needblocks(peer) && i < len a; i++)
-		if(peer.piecehave.get(a[i].index)) {
-			b := requests->batches(a[i]);
-			schedbatches(peer, b);
-		}
-}
-
-peerratecmp(a1, a2: ref (ref Peer, int)): int
-{
-	(p1, r1) := *a1;
-	(p2, r2) := *a2;
-	n := r2-r1;
-	if(n != 0)
-		return n;
-	if(p1.remoteinterested() == p2.remoteinterested())
-		return 0;
-	if(p1.remoteinterested())
-		return -1;
-	return 1;
+	reqch := chan of ref (ref Piece, list of Req, chan of int);
+	spawn sched->schedule(reqch, p);
+	while((r := <-reqch) != nil) {
+		(piece, reqs, donech) := *r;
+		request(p, piece, reqs);
+		donech <-= 0;
+	}
 }
 
 
@@ -486,7 +479,7 @@ unchoke(p: ref Peer)
 
 wantpeerpieces(p: ref Peer): ref Bits
 {
-	b := Bits.union(array[] of {piecehave, piecebusy});
+	b := Bits.union(array[] of {sched->piecehave, sched->piecebusy});
 	b.invert();
 	b = Bits.and(array[] of {p.piecehave, b});
 
@@ -768,11 +761,11 @@ main()
 
 			rotateips.pooladdunique(maskip(np.ip));
 
-			if(piecehave.have == 0) {
+			if((sched->piecehave).have == 0) {
 				peersend(peer, ref Msg.Keepalive());
 			} else {
-				say("sending bitfield to peer: "+piecehave.text());
-				peersend(peer, ref Msg.Bitfield(piecehave.bytes()));
+				say("sending bitfield to peer: "+(sched->piecehave).text());
+				peersend(peer, ref Msg.Bitfield((sched->piecehave).bytes()));
 			}
 
 			if(len peers->peersactive() < Unchokedmax) {
@@ -876,7 +869,7 @@ main()
 				say(sprint("%s already had piece %d", peer.text(), m.index));
 				# xxx disconnect?
 			} else
-				piececounts[m.index]++;
+				sched->piececounts[m.index]++;
 
 			say(sprint("remote now has piece %d", m.index));
 			peer.piecehave.set(m.index);
@@ -904,7 +897,7 @@ main()
 			n := 0;
 			for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
 				if(peer.piecehave.get(i)) {
-					piececounts[i]++;
+					sched->piececounts[i]++;
 					n++;
 				}
 
@@ -1011,12 +1004,12 @@ main()
 					continue;
 				}
 
-				piecehave.set(piece.index);
+				(sched->piecehave).set(piece.index);
 				pieces->piecedel(pieces->piecefind(piece.index));
 
 				writestate();
 				say("piece now done: "+piece.text());
-				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
+				say(sprint("pieces: have %s, busy %s", (sched->piecehave).text(), (sched->piecebusy).text()));
 
 				for(l = peers->peers; l != nil; l = tl l)
 					peersend(hd l, ref Msg.Have(piece.index));
@@ -1349,182 +1342,6 @@ peernetwriter(peer: ref Peer)
 			fail(sprint("writing msg: %r"));
 		if(tagof m == tagof Msg.Piece)
 			msgwrittenchan <-= peer;
-	}
-}
-
-
-# piece/block scheduler
-
-getrandompiece(): ref Piece
-{
-	# will succeed, this is only called when few pieces are busy
-	for(;;) {
-		i := rand->rand(piecebusy.n);
-		if(!piecebusy.get(i)) {
-			p := pieces->piecenew(i, torrent.piecelength(i));
-			piecebusy.set(i);
-			return p;
-		}
-	}
-}
-
-getrarestpiece(b: ref Bits)
-{
-	# first, determine which pieces are the rarest
-	rarest: list of int;  # piece index
-	min := -1;
-	seen := 0;
-	for(i := 0; i < b.n && seen < b.have; i++) {
-		if(b.get(i)) {
-			seen++;
-			if(min < 0 || piececounts[i] < min) {
-				rarest = nil;
-				min = piececounts[i];
-			}
-			if(piececounts[i] <= min)
-				rarest = i::rarest;
-		}
-	}
-	if(rarest == nil)
-		return;
-
-	# next, pick a random element from the list
-	skip := rand->rand(b.have);
-	while(skip-- > 0)
-		rarest = tl rarest;
-	index := hd rarest;
-	say(sprint("choose rarest piece %d", index));
-}
-
-needblocks(peer: ref Peer): int
-{
-	return peer.reqs.count() == 0 || peer.reqs.count()+Batchsize < peer.reqs.size();
-}
-
-inactiverare(): array of ref (int, int)
-{
-	# we just use .t0 of the ref (int, int).  it's used here so we can use polymorphic functions
-	a := array[piecebusy.n-piecebusy.have] of ref (int, int);
-	say(sprint("inactiverare: %d pieces, %d busy, finding %d", piecebusy.n, piecebusy.have, len a));
-	j := 0;
-	for(i := 0; j < len a && i < piecebusy.n; i++)
-		if(!piecebusy.get(i))
-			a[j++] = ref (i, 0);
-
-	misc->randomize(a);
-	return a;
-}
-
-rarepiececmp(p1, p2: ref Piece): int
-{
-	return piececounts[p1.index]-piececounts[p2.index];
-}
-
-piecesrareorphan(orphan: int): array of ref Piece
-{
-	r: list of ref Piece;
-	for(l := pieces->pieces; l != nil; l = tl l) {
-		p := hd l;
-		if(p.orphan() && orphan)
-			r = p::r;
-		else if(!p.orphan() && !orphan)
-			r = p::r;
-	}
-
-	a := l2a(r);
-	sort(a, rarepiececmp);
-	return a;
-}
-
-progresscmp(p1, p2: ref Piece): int
-{
-	return p2.have.n-p1.have.n;
-}
-
-schedule(peer: ref Peer)
-{
-	if(!needblocks(peer))
-		return;
-
-	if(rarestfirst()) {
-		say("schedule: doing rarest first");
-
-		# attempt to work on last piece this peer was working on
-		say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
-		req := peer.reqs.last();
-		if(req != nil) {
-			piece := pieces->piecefind(req.pieceindex);
-			if(piece != nil)
-				schedpieces(peer, array[] of {piece});
-		}
-
-		# find rarest orphan pieces to work on
-		say("schedule: trying rarest orphans");
-		a := piecesrareorphan(1);
-		schedpieces(peer, a);
-		if(!needblocks(peer))
-			return;
-
-		# find rarest inactive piece to work on
-		say("schedule: trying inactive pieces");
-		rare := inactiverare();
-		for(i := 0; i < len rare; i++) {
-			v := rare[i].t0;  # it's a ref tuple to allow using polymorphic functions
-			say(sprint("using new rare piece %d", v));
-			p := pieces->piecenew(v, torrent.piecelength(v));
-			piecebusy.set(v);
-			schedpieces(peer, array[] of {p});
-			if(!needblocks(peer))
-				return;
-		}
-
-		# find rarest active non-orphan piece to work on
-		say("schedule: trying rarest non-orphans");
-		a = piecesrareorphan(0);
-		schedpieces(peer, a);
-		if(!needblocks(peer))
-			return;
-		
-	} else {
-		say("schedule: doing random");
-
-		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-		a := l2a(pieces->pieces);
-		sort(a, progresscmp);
-		for(i := 0; i < len a; i++) {
-			piece := a[i];
-			say(sprint("schedule: looking at piece %d", piece.index));
-
-			# skip piece if this peer doesn't have it
-			if(!peer.piecehave.get(piece.index))
-				continue;
-
-			# divide piece into batches
-			b := requests->batches(piece);
-
-			# request blocks from unused batches first
-			say("schedule: trying unused batches from piece");
-			schedbatches(peer, b);
-			if(!needblocks(peer))
-				return;
-
-			# if more requests needed, start on partially used batches too, in reverse order (for fewer duplicate data)
-			say("schedule: trying partially used batches from piece");
-			for(k := len b-1; k >= 0; k--) {
-				request(peer, piece, b[k].usedpartial(peer));
-				if(!needblocks(peer))
-					return;
-			}
-		}
-
-		# otherwise, get new random pieces to work on
-		say("schedule: trying random pieces");
-		while(needblocks(peer) && piecebusy.have < piecebusy.n) {
-			say("schedule: getting another random piece...");
-			piece := getrandompiece();
-			b := requests->batches(piece);
-			schedbatches(peer, b);
-		}
 	}
 }
 

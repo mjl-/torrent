@@ -9,6 +9,7 @@ TARG=\
 	peers.dis\
 	pieces.dis\
 	verify.dis\
+	schedule.dis\
 
 MODULES=\
 	get.m\

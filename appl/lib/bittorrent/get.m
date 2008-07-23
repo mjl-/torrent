@@ -98,6 +98,7 @@ Pieces: module {
 	PATH:	con "/dis/lib/bittorrent/pieces.dis";
 
 	init:	fn();
+	prepare:	fn(t: ref Bittorrent->Torrent);
 
 	Piece: adt {
 		hashstate:	ref Keyring->DigestState;
@@ -126,7 +127,7 @@ Pieces: module {
 
 	pieces:	list of ref Piece;  # only active pieces
 
-	piecenew:	fn(index, length: int): ref Piece;
+	piecenew:	fn(index: int): ref Piece;
 	piecedel:	fn(p: ref Piece);
 	piecefind:	fn(index: int): ref Piece;
 
@@ -269,4 +270,18 @@ Verify: module {
 
 	chunkreader:	fn(fds: list of ref (ref Sys->FD, big), reqch: chan of ref (int, big, chan of (array of byte, string)));
 	piecehash:	fn(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Pieces->Piece): (array of byte, string);
+};
+
+Schedule: module {
+	PATH:	con "/dis/lib/bittorrent/schedule.dis";
+
+	init:	fn(randmod: Rand, peersmod: Peers, piecesmod: Pieces);
+	prepare:	fn(npieces: int);
+
+	piecehave:	ref Bitarray->Bits;
+	piecebusy:	ref Bitarray->Bits;
+	piececounts:	array of int;  # for each piece, count of peers that have it
+
+	needblocks:	fn(p: ref Peers->Peer): int;
+	schedule:	fn(reqch: chan of ref (ref Pieces->Piece, list of Requests->Req, chan of int), p: ref Peers->Peer);
 };

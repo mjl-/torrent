@@ -7,8 +7,12 @@ sys: Sys;
 keyring: Keyring;
 lists: Lists;
 bitarray: Bitarray;
+bittorrent: Bittorrent;
 
 Bits: import bitarray;
+Torrent: import bittorrent;
+
+torrent: ref Torrent;
 
 init()
 {
@@ -16,6 +20,13 @@ init()
 	keyring = load Keyring Keyring->PATH;
 	lists = load Lists Lists->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
+	bittorrent = load Bittorrent Bittorrent->PATH;
+	bittorrent->init(bitarray);
+}
+
+prepare(t: ref Torrent)
+{
+	torrent = t;
 }
 
 Piece.new(index, length: int): ref Piece
@@ -70,9 +81,9 @@ Block.text(b: self ref Block): string
 
 # pieces
 
-piecenew(index, length: int): ref Piece
+piecenew(index: int): ref Piece
 {
-	p := Piece.new(index, length);
+	p := Piece.new(index, torrent.piecelength(index));
 	pieces = p::pieces;
 	return p;
 }
