@@ -1202,11 +1202,13 @@ wantpeerpieces(p: ref Peer): ref Bits
 
 interesting(p: ref Peer)
 {
-	if(p.localinterested())
-		return;
-
 	b := wantpeerpieces(p);
-	if(!b.isempty()) {
+
+	if(p.localinterested() && b.isempty()) {
+		say("we are now interested in "+p.text());
+		p.state &= ~Peers->LocalInterested;
+		peersend(p, ref Msg.Notinterested());
+	} else if(!p.localinterested() && !b.isempty()) {
 		say("we are now interested in "+p.text());
 		p.state |= Peers->LocalInterested;
 		peersend(p, ref Msg.Interested());
