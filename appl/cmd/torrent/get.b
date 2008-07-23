@@ -188,32 +188,7 @@ init(nil: ref Draw->Context, args: list of string)
 			# otherwise, read through all data
 			say("starting to check all pieces in files...");
 
-			reqch := chan[torrent.piececount+1] of ref (int, big, chan of (array of byte, string));
-			spawn verify->chunkreader(dstfds, reqch);
-
-			chunkch := chan[1] of (array of byte, string);
-			for(i := 0; i < torrent.piececount; i++)
-				reqch <-= ref (torrent.piecelength(i), big i*big torrent.piecelen, chunkch);
-			reqch <-= nil;
-
-			state->piecehave = Bits.new(torrent.piececount);
-			for(i = 0; i < torrent.piececount; i++) {
-				digeststate: ref DigestState;
-				for(;;) {
-					(buf, cerr) := <-chunkch;
-					if(cerr != nil)
-						fail(sprint("reading piece %d for verification: %s", i, cerr));
-					if(buf == nil)
-						break;
-					digeststate = keyring->sha1(buf, len buf, nil, digeststate);
-				}
-
-				hash := array[Keyring->SHA1dlen] of byte;
-				keyring->sha1(nil, 0, hash, digeststate);
-
-				if(hex(hash) == hex(torrent.piecehashes[i]))
-					(state->piecehave).set(i);
-			}
+			verify->torrenthash(dstfds, torrent, state->piecehave);
 		}
 	}
 
