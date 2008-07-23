@@ -1246,8 +1246,15 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	if(n != len rd)
 		return (nil, nil, sprint("short read on peer header (%d)", n));
 
+	if(rd[0] != byte 19 || string rd[1:1+19] != "BitTorrent protocol")
+		return (nil, nil, sprint("peer does not speak bittorrent protocol"));
+
 	extensions := rd[20:20+8];
+	hash := rd[20+8:20+8+20];
 	peerid := rd[20+8+20:];
+
+	if(hex(hash) != hex(torrent.hash))
+		return (nil, nil, sprint("peer wants torrent hash %s, not %s", hex(hash), hex(torrent.hash)));
 
 	return (extensions, peerid, nil);
 }
