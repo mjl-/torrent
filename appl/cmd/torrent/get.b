@@ -172,7 +172,7 @@ init(nil: ref Draw->Context, args: list of string)
 		# all new files, we don't have pieces yet
 		trackerevent = "started";
 		say("no state file needed, all new files");
-		state->piecehave = Bits.new(len torrent.piecehashes);
+		state->piecehave = Bits.new(torrent.piececount);
 	} else {
 		# attempt to read state of pieces from .torrent.state file
 		statefd = sys->open(torrent.statepath, Sys->ORDWR);
@@ -181,23 +181,23 @@ init(nil: ref Draw->Context, args: list of string)
 			(d, rerr) := readfd(statefd);
 			if(rerr != nil)
 				fail(sprint("%s: %s", torrent.statepath, rerr));
-			(state->piecehave, err) = Bits.mk(len torrent.piecehashes, d);
+			(state->piecehave, err) = Bits.mk(torrent.piececount, d);
 			if(err != nil)
 				fail(sprint("%s: invalid state", torrent.statepath));
 		} else {
 			# otherwise, read through all data
 			say("starting to check all pieces in files...");
 
-			reqch := chan[len torrent.piecehashes+1] of ref (int, big, chan of (array of byte, string));
+			reqch := chan[torrent.piececount+1] of ref (int, big, chan of (array of byte, string));
 			spawn verify->chunkreader(dstfds, reqch);
 
 			chunkch := chan[1] of (array of byte, string);
-			for(i := 0; i < len torrent.piecehashes; i++)
+			for(i := 0; i < torrent.piececount; i++)
 				reqch <-= ref (torrent.piecelength(i), big i*big torrent.piecelen, chunkch);
 			reqch <-= nil;
 
-			state->piecehave = Bits.new(len torrent.piecehashes);
-			for(i = 0; i < len torrent.piecehashes; i++) {
+			state->piecehave = Bits.new(torrent.piececount);
+			for(i = 0; i < torrent.piececount; i++) {
 				digeststate: ref DigestState;
 				for(;;) {
 					(buf, cerr) := <-chunkch;
@@ -253,7 +253,7 @@ init(nil: ref Draw->Context, args: list of string)
 	trafficmetadown = Traffic.new();
 
 	pieces->prepare(torrent);
-	state->prepare(len torrent.piecehashes);
+	state->prepare(torrent.piececount);
 
 	rotateips = Pool[string].new(Pools->PoolRotateRandom);
 
@@ -379,7 +379,7 @@ peersend(p: ref Peer, msg: ref Msg)
 blocksize(req: Req): int
 {
 	# first a quick check
-	if(req.pieceindex < len torrent.piecehashes-1)
+	if(req.pieceindex < torrent.piececount-1)
 		return Blocksize;
 
 	# otherwise, the full check
@@ -743,7 +743,7 @@ main()
 		} else if(isfaulty(np.ip)) {
 			say(sprint("connected to faulty ip %s, dropping connection...", np.ip));
 		} else {
-			peer := Peer.new(np, peerfd, extensions, peerid, dialed, len torrent.piecehashes);
+			peer := Peer.new(np, peerfd, extensions, peerid, dialed, torrent.piececount);
 			spawn peernetreader(peer);
 			spawn peernetwriter(peer);
 			peers->peeradd(peer);
@@ -850,7 +850,7 @@ main()
 			# xxx if this peer was choked, unchoke another peer?
 
                 Have =>
-			if(m.index >= len torrent.piecehashes) {
+			if(m.index >= torrent.piececount) {
 				say(sprint("%s sent 'have' for invalid piece %d, disconnecting", peer.text(), m.index));
 				peerdrop(peer);
 				continue;
@@ -876,7 +876,7 @@ main()
 			}
 
 			err: string;
-			(peer.piecehave, err) = Bits.mk(len torrent.piecehashes, m.d);
+			(peer.piecehave, err) = Bits.mk(torrent.piececount, m.d);
 			if(err != nil) {
 				say(sprint("%s sent bogus bitfield message: %s, disconnecting", peer.text(), err));
 				peerdrop(peer);

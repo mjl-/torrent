@@ -579,7 +579,7 @@ Torrent.open(path: string): (ref Torrent, string)
 
 	# xxx sanity checks
 	statepath := hd revstr(sys->tokenize(path, "/").t1)+".state";
-	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, pieces, files, origfiles, length, statepath), nil);
+	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, len pieces, pieces, files, origfiles, length, statepath), nil);
 }
 
 
@@ -671,7 +671,7 @@ Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref 
 Torrent.piecelength(t: self ref Torrent, index: int): int
 {
 	piecelen := t.piecelen;
-	if(index+1 == len t.piecehashes) {
+	if(index+1 == t.piececount) {
 		piecelen = int (t.length % big t.piecelen);
 		if(piecelen == 0)
 			piecelen = t.piecelen;

@@ -56,7 +56,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	print("announce url:   %s\n", t.announce);
 	print("piece length:   %s (%d bytes)\n", bittorrent->bytefmt(big t.piecelen), t.piecelen);
-	print("pieces:         %d\n", len t.piecehashes);
+	print("pieces:         %d\n", t.piececount);
 	print("total length:   %s (%bd bytes)\n", bittorrent->bytefmt(t.length), t.length);
 	print("files:\n");
 	for(l := t.files; l != nil; l = tl l) {

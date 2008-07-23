@@ -62,9 +62,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# xxx should print progress per file
 
-	haves := Bits.new(len t.piecehashes);
+	haves := Bits.new(t.piececount);
 	if(dstfds != nil)
-	for(i := 0; i < len t.piecehashes; i++) {
+	for(i := 0; i < t.piececount; i++) {
 		wanthash := t.piecehashes[i];
 		(buf, err) := bittorrent->pieceread(t, dstfds, i);
 		if(err != nil)
@@ -76,9 +76,9 @@ init(nil: ref Draw->Context, args: list of string)
 			haves.set(i);
 	}
 
-	print("progress:  %d/%d pieces\n", haves.have, len t.piecehashes);
+	print("progress:  %d/%d pieces\n", haves.have, t.piececount);
 	print("pieces:\n");
-	for(i = 0; i < len t.piecehashes; i++)
+	for(i = 0; i < t.piececount; i++)
 		if(haves.get(i))
 			print("1");
 		else

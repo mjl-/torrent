@@ -1,5 +1,5 @@
 Bittorrent: module {
-	PATH:	con "/dis/lib/bittorrent.dis";
+	PATH:	con "/dis/lib/bittorrent/bittorrent.dis";
 
 	dflag:	int;
 	init:	fn(bitarray: Bitarray);
@@ -52,6 +52,7 @@ Bittorrent: module {
 		announce:	string;
 		piecelen:	int;
 		hash:	array of byte;
+		piececount:	int;
 		piecehashes:	array of array of byte;
 		files:	list of ref (string, big);  # path, length
 		origfiles: list of ref (string, big);  # files as found in .torrent
