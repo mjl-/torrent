@@ -73,19 +73,21 @@ l2a[T](l: list of T): array of T
 	return a;
 }
 
-maskinitialized:	int;
+maskinitialized := 0;
 ip4mask:        IPaddr;
 ip6mask:	IPaddr;
 
 maskip(ipstr: string): string
 {
 	if(!maskinitialized) {
-		(ok, mask) := IPaddr.parse(Torrentget->ip4maskstr);
+		(ok, mask) := IPaddr.parsemask(Torrentget->ip4maskstr);
 		if(ok != 0)
 			raise "bad ip4mask";
-		(ok, mask) = IPaddr.parse(Torrentget->ip6maskstr);
+		ip4mask = mask;
+		(ok, mask) = IPaddr.parsemask(Torrentget->ip6maskstr);
 		if(ok != 0)
 			raise "bad ip6mask";
+		ip6mask = mask;
 		maskinitialized = 1;
 	}
 

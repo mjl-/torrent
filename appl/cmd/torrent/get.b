@@ -229,11 +229,6 @@ init(nil: ref Draw->Context, args: list of string)
 			writestate();
 	}
 
-	ipok: int;
-	(ipok, ip4mask) = IPaddr.parse(ip4maskstr);
-	if(ipok != 0)
-		fail(sprint("bad ip4 mask: %q", ip4maskstr));
-
 	totalleft = torrent.length;
 	localpeerid = bittorrent->genpeerid();
 	localpeeridhex = hex(localpeerid);
