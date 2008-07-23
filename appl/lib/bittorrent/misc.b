@@ -1,14 +1,20 @@
 implement Misc;
 
 include "torrentget.m";
+include "ip.m";
 
 sys: Sys;
 rand: Rand;
+ipmod: IP;
+
+IPaddr: import ipmod;
 
 init(randmod: Rand)
 {
 	sys = load Sys Sys->PATH;
 	rand = randmod;
+	ipmod = load IP IP->PATH;
+	ipmod->init();
 }
 
 randomize[T](a: array of T)
@@ -65,4 +71,29 @@ l2a[T](l: list of T): array of T
 	for(; l != nil; l = tl l)
 		a[i++] = hd l;
 	return a;
+}
+
+maskinitialized:	int;
+ip4mask:        IPaddr;
+ip6mask:	IPaddr;
+
+maskip(ipstr: string): string
+{
+	if(!maskinitialized) {
+		(ok, mask) := IPaddr.parse(Torrentget->ip4maskstr);
+		if(ok != 0)
+			raise "bad ip4mask";
+		(ok, mask) = IPaddr.parse(Torrentget->ip6maskstr);
+		if(ok != 0)
+			raise "bad ip6mask";
+		maskinitialized = 1;
+	}
+
+        (ok, ip) := IPaddr.parse(ipstr);
+        if(ok != 0)
+                return ipstr;
+	mask := ip4mask;
+	if(!ip.isv4())
+		mask = ip6mask;
+        return ip.mask(mask).text();
 }

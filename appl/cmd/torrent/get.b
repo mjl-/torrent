@@ -11,7 +11,6 @@ include "string.m";
 include "keyring.m";
 include "security.m";
 include "rand.m";
-include "ip.m";
 include "lists.m";
 include "math.m";
 
@@ -27,7 +26,6 @@ str: String;
 keyring: Keyring;
 random: Random;
 rand: Rand;
-ipmod: IP;
 lists: Lists;
 
 bittorrent: Bittorrent;
@@ -43,7 +41,6 @@ state: State;
 
 print, sprint, fprint, fildes: import sys;
 Bee, Msg, Torrent: import bittorrent;
-IPaddr: import ipmod;
 DigestState: import keyring;
 Pool: import pools;
 Traffic: import rate;
@@ -71,9 +68,6 @@ trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global t
 maxratio := 0.0;
 maxdownload := big -1;
 maxupload := big -1;
-
-ip4maskstr:	con "255.255.255.0";
-ip4mask:	IPaddr;
 
 # tracker
 trackkickchan:	chan of int;
@@ -112,8 +106,6 @@ init(nil: ref Draw->Context, args: list of string)
 	random = load Random Random->PATH;
 	rand = load Rand Rand->PATH;
 	rand->init(random->randomint(Random->ReallyRandom));
-	ipmod = load IP IP->PATH;
-	ipmod->init();
 	lists = load Lists Lists->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
@@ -577,7 +569,7 @@ nextoptimisticunchoke(): ref Peer
 		peer: ref Peer;
 		for(l := peers->peers; l != nil; l = tl l) {
 			p := hd l;
-			if(maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
+			if(misc->maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
 				peer = p;
 		}
 		if(peer != nil)
@@ -762,7 +754,7 @@ main()
 			peers->peeradd(peer);
 			say("new peer "+peer.fulltext());
 
-			rotateips.pooladdunique(maskip(np.ip));
+			rotateips.pooladdunique(misc->maskip(np.ip));
 
 			if((state->piecehave).have == 0) {
 				peersend(peer, ref Msg.Keepalive());
@@ -1354,14 +1346,6 @@ peernetwriter(peer: ref Peer)
 
 
 # misc
-
-maskip(ipstr: string): string
-{
-	(ok, ip) := IPaddr.parse(ipstr);
-	if(ok != 0)
-		return ipstr;
-	return ip.mask(ip4mask).text();
-}
 
 ratio(): real
 {

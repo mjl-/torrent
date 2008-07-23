@@ -20,6 +20,7 @@ SYSMODULES=\
 	bufio.m\
 	daytime.m\
 	filter.m\
+	ip.m\
 	keyring.m\
 	lists.m\
 	security.m\

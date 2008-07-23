@@ -29,6 +29,9 @@ Torrentget: module {
 	Unchokedmax:	con 4;
 	Seedunchokedmax:	con 4;
 	Ignorefaultyperiod:	con 300;
+
+	ip4maskstr:	con "255.255.255.0";
+	ip6maskstr:	con "/48";
 };
 
 Misc: module {
@@ -38,11 +41,11 @@ Misc: module {
 
 	randomize:	fn[T](a: array of T);
 	sort:		fn[T](a: array of T, cmp: ref fn(a, b: T): int);
-
 	readfile:	fn(f: string): (string, string);
 	readfd:	fn(fd: ref Sys->FD): (array of byte, string);
 	hex:	fn(d: array of byte): string;
 	l2a:	fn[T](l: list of T): array of T;
+	maskip:	fn(ipstr: string): string;
 };
 
 Pools: module {

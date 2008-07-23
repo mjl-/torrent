@@ -18,7 +18,6 @@ SYSMODULES=\
 	bundle.m\
 	daytime.m\
 	draw.m\
-	ip.m\
 	keyring.m\
 	math.m\
 	lists.m\
