@@ -1,8 +1,10 @@
 <../../mkconfig
 
+DIRS=\
+	bittorrent\
+
 TARG=\
 	bitarray.dis\
-	bittorrent.dis\
 
 MODULES=\
 
@@ -13,3 +15,4 @@ SYSMODULES=\
 DISBIN=$ROOT/dis/lib
 
 <$ROOT/mkfiles/mkdis
+<$ROOT/mkfiles/mksubdirs

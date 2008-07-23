@@ -10,13 +10,16 @@ include "daytime.m";
 include "string.m";
 include "keyring.m";
 include "security.m";
-include "ip.m";
 include "rand.m";
+include "ip.m";
+include "lists.m";
 include "math.m";
+
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
+include "../../lib/bittorrent/get.m";
 
 sys: Sys;
 daytime: Daytime;
@@ -25,17 +28,28 @@ keyring: Keyring;
 random: Random;
 rand: Rand;
 ipmod: IP;
+lists: Lists;
+
 bittorrent: Bittorrent;
+misc: Misc;
+pools: Pools;
+rate: Rate;
+pieces: Pieces;
+peers: Peers;
+requests: Requests;
+verify: Verify;
 
 print, sprint, fprint, fildes: import sys;
 Bee, Msg, Torrent: import bittorrent;
 IPaddr: import ipmod;
 DigestState: import keyring;
+Pool: import pools;
+Traffic: import rate;
+Req, Reqs, Batch: import requests;
+Peer, Newpeer, Buf: import peers;
+Piece, Block: import pieces;
+sort, l2a, hex, readfd, readfile: import misc;
 
-
-Torrentget: module {
-	init:	fn(nil: ref Draw->Context, args: list of string);
-};
 
 Dflag: int;
 Pflag: int;
@@ -56,27 +70,14 @@ trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global t
 maxratio := 0.0;
 maxdownload := big -1;
 maxupload := big -1;
-pieces: list of ref Piece;  # only active pieces
 
 ip4maskstr:	con "255.255.255.0";
 ip4mask:	IPaddr;
-
-# piecekeeper
-piecechan: chan of (int, int, int, chan of int);
-Add, Remove, Request: con iota;
 
 # tracker
 trackkickchan:	chan of int;
 trackreqchan:	chan of (big, big, big, int, string);  # up, down, left, listenport, event
 trackchan:	chan of (int, array of (string, int, array of byte), string);  # interval, peers, error
-
-Newpeer: adt {
-	addr:	string;
-	ip:	string;
-	peerid:	array of byte;  # may be nil, for incoming connections or compact track responses
-
-	text:	fn(np: self Newpeer): string;
-};
 
 # dialer/listener
 canlistenchan: chan of int;
@@ -85,187 +86,10 @@ newpeerchan: chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, s
 # upload/download rate limiter
 upchan, downchan: chan of (int, chan of int);
 
-
-Piece: adt {
-	hashstate:	ref DigestState;
-	hashstateoff:	int;
-	index:	int;
-	have:	ref Bits;
-	length:	int;
-	busy:	array of (int, int);  # peerid, peerid
-	done:	array of int;  # peerid
-
-	new:	fn(index: int): ref Piece;
-	isdone:	fn(p: self ref Piece): int;
-	orphan:	fn(p: self ref Piece): int;
-	hashadd:	fn(p: self ref Piece, buf: array of byte);
-	text:	fn(p: self ref Piece): string;
-};
-
-Traffic: adt {
-	last:	int;  # last element in `d' that may have been used
-	d:	array of (int, int);  # time, bytes
-	winsum:	int;
-	sum:	big;
-	npackets:	int;
-
-	new:	fn(): ref Traffic;
-	add:	fn(t: self ref Traffic, bytes: int);
-	packet:	fn(t: self ref Traffic);
-	rate:	fn(t: self ref Traffic): int;
-	total:	fn(t: self ref Traffic): big;
-	text:	fn(t: self ref Traffic): string;
-};
-
-Block: adt {
-	piece, begin, length:	int;
-
-	new:	fn(piece, begin, length: int): ref Block;
-	eq:	fn(b1, b2: ref Block): int;
-	text:	fn(b: self ref Block): string;
-};
-
-Req: adt {
-	pieceindex, blockindex, cancelled: int;
-
-	new:	fn(pieceindex, blockindex: int): Req;
-	eq:	fn(r1, r2: Req): int;
-	text:	fn(r: self Req): string;
-};
-
-Reqs: adt {
-	a:	array of Req;
-	first, next:	int;
-	lastreq:	ref Req;
-
-	new:	fn(size: int): ref Reqs;
-	take:	fn(r: self ref Reqs, req: Req): int;
-	add:	fn(r: self ref Reqs, req: Req);
-	peek:	fn(r: self ref Reqs): Req;
-	cancel:	fn(r: self ref Reqs, req: Req);
-	flush:	fn(r: self ref Reqs);
-	last:	fn(r: self ref Reqs): ref Req;
-	isempty:	fn(r: self ref Reqs): int;
-	isfull:		fn(r: self ref Reqs): int;
-	count:	fn(r: self ref Reqs): int;
-	size:	fn(r: self ref Reqs): int;
-	text:	fn(r: self ref Reqs): string;
-};
-
-Batch: adt {
-	blocks:	array of int;
-	piece:	ref Piece;
-
-	new:	fn(first, n: int, piece: ref Piece): ref Batch;
-	unused:	fn(b: self ref Batch): list of Req;
-	usedpartial:	fn(b: self ref Batch, peer: ref Peer): list of Req;
-	text:	fn(b: self ref Batch): string;
-};
-
-Buf: adt {
-	data:	array of byte;
-	piece:	int;
-	pieceoff:	int;
-
-	new:	fn(): ref Buf;
-	tryadd:	fn(b: self ref Buf, index, begin: int, buf: array of byte): int;
-	isfull:	fn(b: self ref Buf): int;
-	clear:	fn(b: self ref Buf);
-	overlaps:	fn(b: self ref Buf, piece, begin, end: int): int;
-};
-
-Peer: adt {
-	id:	int;
-	np:	Newpeer;
-	fd:	ref Sys->FD;
-	extensions, peerid: array of byte;
-	peeridhex:	string;
-	outmsgs:	chan of ref Msg;
-	reqs:	ref Reqs;
-	piecehave:	ref Bits;
-	state:	int;
-	msgseq:	int;
-	up, down, metaup, metadown: ref Traffic;
-	wants:	list of ref Block;
-	netwriting:	int;
-	lastunchoke:	int;
-	dialed:	int;
-	buf:	ref Buf;
-
-	new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int): ref Peer;
-	remotechoking:	fn(p: self ref Peer): int;
-	remoteinterested:	fn(p: self ref Peer): int;
-	localchoking:	fn(p: self ref Peer): int;
-	localinterested:	fn(p: self ref Peer): int;
-	send:	fn(p: self ref Peer, m: ref Msg);
-	isdone:	fn(p: self ref Peer): int;
-	text:	fn(p: self ref Peer): string;
-	fulltext:	fn(p: self ref Peer): string;
-};
-
-
-PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # pool mode
-
-Pool: adt[T] {
-	active:	array of T;
-	pool:	array of T;
-	poolnext:	int;
-	mode:	int;
-
-	new:	fn(mode: int): ref Pool[T];
-	fill:	fn(p: self ref Pool);
-	take:	fn(p: self ref Pool): T;
-	pooladd:	fn(p: self ref Pool, e: T);
-	pooladdunique:	fn(p: self ref Pool, e: T);
-	poolhas:	fn(p: self ref Pool, e: T): int;
-	pooldel:	fn(p: self ref Pool, e: T);
-	text:	fn(p: self ref Pool): string;
-};
-
-
-Dialersmax:	con 5;  # max number of dialer procs
-Dialtimeout:	con 20;  # timeout for connecting to peer
-Peersmax:	con 80;
-Peersdialedmax:	con 40;
-Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
-Blocksize:	con 16*1024;  # block size of blocks we request
-Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
-Blockqueuesize:	con 30;  # number of pending blocks to request to peer
-Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
-Batchsize:	con Diskchunksize/Blocksize;
-Netiounit:	con 1500-20-20;  # typical network data io unit, ethernet-ip-tcp
-
-Peeridlen:	con 20;
-
-Listenhost:	con "*";
-Listenport:	con 6881;
-Listenportrange:	con 100;
-
-Intervalmin:	con 30;
-Intervalmax:	con 24*3600;
-Intervalneed:	con 10;  # when we need more peers during startup period
-Intervaldefault:	con 1800;
-Intervalstartupperiod:	con 120;
-
-Blocksizemax:	con 32*1024;  # max block size allowed for incoming blocks
-Unchokedmax:	con 4;
-Seedunchokedmax:	con 4;
-Stablesecs:	con 10;  # xxx related to TrafficHistorysize...
-TrafficHistorysize:	con 10;
-Ignorefaultyperiod:	con 300;
-
-# Peer.state
-RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
-
-
 # progress/state
 stopped := 0;
 ndialers:	int;  # number of active dialers
-trackerpeers:	list of Newpeer;  # peers we are not connected to
-peers:	list of ref Peer;  # peers we are connected to
 rotateips:	ref Pool[string];  # masked ip address
-luckypeer:	ref Peer;  # current optimistic unchoked peer.  may be stale (not in peers)
-peergen:	int;  # sequence number for peers
 piecehave:	ref Bits;
 piecebusy:	ref Bits;
 faulty:		list of (string, int);  # ip, time
@@ -291,9 +115,25 @@ init(nil: ref Draw->Context, args: list of string)
 	rand->init(random->randomint(Random->ReallyRandom));
 	ipmod = load IP IP->PATH;
 	ipmod->init();
+	lists = load Lists Lists->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init(bitarray);
+
+	misc = load Misc Misc->PATH;
+	misc->init(rand);
+	pools = load Pools Pools->PATH;
+	pools->init(rand);
+	rate = load Rate Rate->PATH;
+	rate->init();
+	pieces = load Pieces Pieces->PATH;
+	pieces->init();
+	requests = load Requests Requests->PATH;
+	requests->init();
+	peers = load Peers Peers->PATH;
+	peers->init(rand);
+	verify = load Verify Verify->PATH;
+	verify->init();
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-DPLn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
@@ -354,7 +194,7 @@ init(nil: ref Draw->Context, args: list of string)
 			say("starting to check all pieces in files...");
 
 			reqch := chan[len torrent.piecehashes+1] of ref (int, big, chan of (array of byte, string));
-			spawn chunkreader(reqch);
+			spawn verify->chunkreader(dstfds, reqch);
 
 			chunkch := chan[1] of (array of byte, string);
 			for(i := 0; i < len torrent.piecehashes; i++)
@@ -403,7 +243,6 @@ init(nil: ref Draw->Context, args: list of string)
 	localpeerid = bittorrent->genpeerid();
 	localpeeridhex = hex(localpeerid);
 
-	piecechan = chan of (int, int, int, chan of int);
 	trackkickchan = chan of int;
 	trackreqchan = chan of (big, big, big, int, string);
 	trackchan = chan of (int, array of (string, int, array of byte), string);
@@ -415,7 +254,6 @@ init(nil: ref Draw->Context, args: list of string)
 	upchan = chan of (int, chan of int);
 	downchan = chan of (int, chan of int);
 
-	peers = nil;
 	piecebusy = Bits.new(len torrent.piecehashes);
 
 	peerinmsgchan = chan of (ref Peer, ref Msg);
@@ -428,7 +266,7 @@ init(nil: ref Draw->Context, args: list of string)
 	trafficmetaup = Traffic.new();
 	trafficmetadown = Traffic.new();
 
-	rotateips = Pool[string].new(PoolRotateRandom);
+	rotateips = Pool[string].new(Pools->PoolRotateRandom);
 
 	# start listener, for incoming connections
 	ok := -1;
@@ -450,7 +288,6 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	spawn listener(conn);
-	spawn piecekeeper();
 	spawn ticker();
 	spawn track();
 	spawn limiter(upchan, int maxupload);
@@ -481,67 +318,6 @@ writestate()
 		say("state written");
 }
 
-trackerpeerdel(np: Newpeer)
-{
-	n := trackerpeers;
-	n = nil;
-	for(; trackerpeers != nil; trackerpeers = tl trackerpeers) {
-		e := hd trackerpeers;
-		if(e.addr == np.addr)
-			;
-		else
-			n = hd trackerpeers::n;
-	}
-	trackerpeers = n;
-}
-
-trackerpeeradd(np: Newpeer)
-{
-	trackerpeers = np::trackerpeers;
-}
-
-trackerpeertake(): Newpeer
-{
-	np := hd trackerpeers;
-	trackerpeers = tl trackerpeers;
-	return np;
-}
-
-
-isascii(d: array of byte): int
-{
-	for(i := 0; i < len d; i++)
-		if(!str->in(int d[i], " -~"))
-			return 0;
-	return 1;
-}
-
-peeridfmt(d: array of byte): string
-{
-	if(isascii(d))
-		return string d;
-	return hex(d);
-}
-
-Newpeer.text(np: self Newpeer): string
-{
-	peerid := "nil";
-	if(np.peerid != nil)
-		peerid = peeridfmt(np.peerid);
-	return sprint("(newpeer %s peerid %s)", np.addr, peerid);
-}
-
-
-peerconnected(addr: string): int
-{
-	for(l := peers; l != nil; l = tl l) {
-		e := hd l;
-		if(e.np.addr == addr)
-			return 1;
-	}
-	return 0;
-}
-
 
 peerdrop(peer: ref Peer)
 {
@@ -551,24 +327,10 @@ peerdrop(peer: ref Peer)
 			piececounts[i]--;
 			n++;
 		}
-}
 
-peerdel(peer: ref Peer)
-{
-	npeers: list of ref Peer;
-	for(; peers != nil; peers = tl peers)
-		if(hd peers != peer)
-			npeers = hd peers::npeers;
-		else
-			peerdrop(peer);
-	peers = npeers;
-
-	if(luckypeer == peer)
-		luckypeer = nil;
-
-	for(l := pieces; l != nil; l = tl l) {
+	for(l := pieces->pieces; l != nil; l = tl l) {
 		piece := hd l;
-		for(i := 0; i < len piece.busy; i++) {
+		for(i = 0; i < len piece.busy; i++) {
 			if(piece.busy[i].t0 == peer.id)
 				piece.busy[i].t0 = -1;
 			if(piece.busy[i].t1 == peer.id)
@@ -580,54 +342,17 @@ peerdel(peer: ref Peer)
 		dialpeers();
 	else
 		awaitpeer();
-}
 
-peeradd(p: ref Peer)
-{
-	peerdel(p);
-	peers = p::peers;
-}
-
-peerknownip(ip: string): int
-{
-	for(l := peers; l != nil; l = tl l)
-		if((hd l).np.ip == ip)
-			return 1;
-	return 0;
-}
-
-peerhas(p: ref Peer): int
-{
-	for(l := peers; l != nil; l = tl l)
-		if(p == hd l)
-			return 1;
-	return 0;
-}
-
-peersdialed(): int
-{
-	i := 0;
-	for(l := peers; l != nil; l = tl l)
-		if((hd l).dialed)
-			i++;
-	return i;
-}
-
-peerfind(id: int): ref Peer
-{
-	for(l := peers; l != nil; l = tl l)
-		if((hd l).id == id)
-			return hd l;
-	return nil;
+	peers->peerdel(peer);
 }
 
 dialpeers()
 {
-	say(sprint("dialpeers, %d trackerpeers %d peers", len trackerpeers, len peers));
+	say(sprint("dialpeers, %d trackerpeers %d peers", len peers->trackerpeers, len peers->peers));
 
-	while(trackerpeers != nil && ndialers < Dialersmax && len peers < Peersmax && peersdialed() < Peersdialedmax) {
-		np := trackerpeertake();
-		if(peerknownip(np.ip))
+	while(peers->trackerpeers != nil && ndialers < Dialersmax && len peers->peers < Peersmax && peers->peersdialed() < Peersdialedmax) {
+		np := peers->trackerpeertake();
+		if(peers->peerknownip(np.ip))
 			continue;
 		if(isfaulty(np.ip))
 			continue;
@@ -640,190 +365,12 @@ dialpeers()
 
 awaitpeer()
 {
-	if(peersdialed() < Peersmax-Peersdialedmax && !islistening) {
+	if(peers->peersdialed() < Peersmax-Peersdialedmax && !islistening) {
 		islistening = 1;
 		spawn kicklistener();
 	}
 }
 
-
-Req.new(pieceindex, blockindex: int): Req
-{
-	return Req(pieceindex, blockindex, 0);
-}
-
-Req.eq(r1, r2: Req): int
-{
-	return r1.pieceindex == r2.pieceindex && r1.blockindex == r2.blockindex;
-}
-
-Req.text(r: self Req): string
-{
-	return sprint("<req piece=%d block=%d begin=%d>", r.pieceindex, r.blockindex, r.blockindex*Blocksize);
-}
-
-
-Reqs.new(size: int): ref Reqs
-{
-	return ref Reqs(array[size] of Req, 0, 0, nil);
-}
-
-Reqs.take(r: self ref Reqs, req: Req): int
-{
-	if(r.isempty())
-		raise "take on empty list";
-
-	# first, skip over cancelled requests if necessary
-	first := r.first; 
-	for(; first != r.next && !Req.eq(r.a[first], req); first = (first+1) % len r.a)
-		if(!r.a[first].cancelled)
-			return 0;
-
-	# then see if request was the one expected, if any
-	if(first == r.next && !Req.eq(r.a[first], req))
-		return 0;
-	r.first = (first+1) % len r.a;
-	return 1;
-}
-
-Reqs.peek(r: self ref Reqs): Req
-{
-	if(r.isempty())
-		raise "peek on empty list";
-	return r.a[r.first];
-}
-
-Reqs.cancel(r: self ref Reqs, req: Req)
-{
-	for(i := r.first; i != r.next; i = (i+1) % len r.a)
-		if(Req.eq(req, r.a[i]))
-			r.a[i].cancelled = 1;
-}
-
-Reqs.add(r: self ref Reqs, req: Req)
-{
-	if(r.isfull())
-		raise "add on full list";
-	r.a[r.next] = req;
-	r.next = (r.next+1) % len r.a;
-	r.lastreq = ref req;
-}
-
-Reqs.flush(r: self ref Reqs)
-{
-	r.first = r.next = 0;
-}
-
-Reqs.last(r: self ref Reqs): ref Req
-{
-	return r.lastreq;
-}
-
-Reqs.isempty(r: self ref Reqs): int
-{
-	return r.first == r.next;
-}
-
-Reqs.isfull(r: self ref Reqs): int
-{
-	return (r.next+1) % len r.a == r.first;
-}
-
-Reqs.count(r: self ref Reqs): int
-{
-	return (len r.a+r.next-r.first) % len r.a;
-}
-
-Reqs.size(r: self ref Reqs): int
-{
-	return len r.a;
-}
-
-Reqs.text(r: self ref Reqs): string
-{
-	return sprint("<reqs first=%d next=%d size=%d>", r.first, r.next, len r.a);
-}
-
-
-Batch.new(first, n: int, piece: ref Piece): ref Batch
-{
-	blocks := array[n] of int;
-	for(i := 0; i < n; i++)
-		blocks[i] = first+i;
-	return ref Batch(blocks, piece);
-}
-
-Batch.unused(b: self ref Batch): list of Req
-{
-	reqs: list of Req;
-	for(i := len b.blocks-1; i >= 0; i--) {
-		busy := b.piece.busy[b.blocks[i]];
-		if(busy.t0 < 0 && busy.t1 < 0)
-			reqs = Req.new(b.piece.index, b.blocks[i])::reqs;
-	}
-	return reqs;
-}
-
-Batch.usedpartial(b: self ref Batch, peer: ref Peer): list of Req
-{
-	reqs: list of Req;
-	for(i := len b.blocks-1; i >= 0; i--)
-		busy := b.piece.busy[b.blocks[i]];
-		if(busy.t0 != peer.id && busy.t1 != peer.id && (busy.t0 < 0 || busy.t1 < 0))
-			reqs = Req.new(b.piece.index, b.blocks[i])::reqs;
-	return reqs;
-}
-
-Batch.text(nil: self ref Batch): string
-{
-	return "<batch ...>";
-}
-
-
-Buf.new(): ref Buf
-{
-	return ref Buf(array[0] of byte, -1, 0);
-}
-
-Buf.tryadd(b: self ref Buf, index, begin: int, buf: array of byte): int
-{
-	if(len b.data == 0) {
-		b.data = array[len buf] of byte;
-		b.data[:] = buf;
-		b.piece = index;
-		b.pieceoff = begin;
-		return 1;
-	}
-
-	if(index != b.piece)
-		return 0;
-
-	if(b.isfull())
-		return 0;
-
-	# append data to buf, only if it won't cross disk chunk
-	if(begin % Diskchunksize != 0 && begin == b.pieceoff+len b.data) {
-		say("buf: appending data to buffer");
-		ndata := array[len b.data+len buf] of byte;
-		ndata[:] = b.data;
-		ndata[len b.data:] = buf;
-		b.data = ndata;
-		return 1;
-	}
-
-	# prepend data to buf, only if it won't cross disk chunk
-	if(b.pieceoff % Diskchunksize != 0 && begin == b.pieceoff-len buf) {
-		say("buf: prepending data to buffer");
-		ndata := array[len buf+len b.data] of byte;
-		ndata[:] = buf;
-		ndata[len buf:] = b.data;
-		b.data = ndata;
-		b.pieceoff = begin;
-		return 1;
-	}
-
-	return 0;
-}
 
 bufflush(b: ref Buf)
 {
@@ -835,68 +382,8 @@ bufflush(b: ref Buf)
 	b.clear();
 }
 
-Buf.isfull(b: self ref Buf): int
-{
-	piecelength := torrent.piecelength(b.piece);
-	return len b.data == Diskchunksize || b.pieceoff+len b.data == piecelength;
-}
 
-Buf.clear(b: self ref Buf)
-{
-	b.data = array[0] of byte;
-	b.piece = -1;
-	b.pieceoff = 0;
-}
-
-Buf.overlaps(b: self ref Buf, piece, begin, end: int): int
-{
-	bufstart := b.pieceoff;
-	bufend := b.pieceoff+len b.data;
-	return b.piece == piece && (bufstart >= begin && bufstart <= end || bufend >= begin && bufend <= end);
-}
-
-Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int): ref Peer
-{
-	outmsgs := chan of ref Msg;
-	state := RemoteChoking|LocalChoking;
-	msgseq := 0;
-	return ref Peer(
-		peergen++,
-		np, fd, extensions, peerid, hex(peerid),
-		outmsgs, Reqs.new(Blockqueuesize),
-		Bits.new(piecehave.n),
-		state,
-		msgseq,
-		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, 0, dialed, Buf.new());
-}
-
-Peer.remotechoking(p: self ref Peer): int
-{
-	return p.state & RemoteChoking;
-}
-
-Peer.remoteinterested(p: self ref Peer): int
-{
-	return p.state & RemoteInterested;
-}
-
-Peer.localchoking(p: self ref Peer): int
-{
-	return p.state & LocalChoking;
-}
-
-Peer.localinterested(p: self ref Peer): int
-{
-	return p.state & LocalInterested;
-}
-
-Peer.isdone(p: self ref Peer): int
-{
-	return p.piecehave.isfull();
-}
-
-Peer.send(p: self ref Peer, msg: ref Msg)
+peersend(p: ref Peer, msg: ref Msg)
 {
 	msize := msg.packedsize();
 	dsize := 0;
@@ -916,245 +403,11 @@ Peer.send(p: self ref Peer, msg: ref Msg)
 	p.outmsgs <-= msg;
 }
 
-Peer.text(p: self ref Peer): string
-{
-	return sprint("<peer %s id %d>", p.np.addr, p.id);
-}
-
-Peer.fulltext(p: self ref Peer): string
-{
-	return sprint("<peer %s, id %d, wantblocks %d peerid %s>", p.np.text(), p.id, len p.wants, peeridfmt(p.peerid));
-}
-
-
-Pool[T].new(mode: int): ref Pool[T]
-{
-	return ref Pool[T](array[0] of T, array[0] of T, 0, mode);
-}
-
-Pool[T].fill(p: self ref Pool)
-{
-	case p.mode {
-	PoolRandom =>
-		return;
-	PoolRotateRandom or PoolInorder =>
-		n := len p.pool-len p.active;
-
-		newa := array[len p.pool] of T;
-		newa[:] = p.active;
-		start := len p.active;
-		for(i := 0; i < n; i++) {
-			newa[start+i] = p.pool[p.poolnext];
-			p.poolnext = (p.poolnext+1) % len p.pool;
-		}
-		p.active = newa;
-
-		if(p.mode == PoolRotateRandom)
-			randomize(p.active[len p.active-n:]);
-	* =>
-		raise sprint("bad mode for pool: %d", p.mode);
-	}
-}
-
-Pool[T].take(p: self ref Pool): T
-{
-	if(len p.active == 0)
-		return nil;
-
-	case p.mode {
-	PoolRandom =>
-		return p.pool[rand->rand(len p.pool)];
-	PoolRotateRandom or PoolInorder =>
-		e := p.active[0];
-		p.active = p.active[1:];
-		return e;
-	* =>
-		raise sprint("bad mode for pool: %d", p.mode);
-	}
-}
-
-Pool[T].pooladd(p: self ref Pool, e: T)
-{
-	newp := array[len p.pool+1] of T;
-	newp[:] = p.pool;
-	newp[len p.pool] = e;
-}
-
-Pool[T].pooladdunique(p: self ref Pool, e: T)
-{
-	if(!p.poolhas(e))
-		p.pooladd(e);
-}
-
-Pool[T].poolhas(p: self ref Pool, e: T): int
-{
-	for(i := 0; i < len p.pool; i++)
-		if(p.pool[i] == e)
-			return 1;
-	return 0;
-}
-
-Pool[T].pooldel(p: self ref Pool, e: T)
-{
-	i := 0;
-	while(i < len p.pool) {
-		if(p.pool[i] == e) {
-			p.pool[i:] = p.pool[i+1:];
-			p.pool = p.pool[:len p.pool-1];
-		} else
-			i++;
-	}
-}
-
-poolmodes := array[] of {
-	"random",
-	"rotaterandom",
-	"inorder"
-};
-
-Pool[T].text(p: self ref Pool): string
-{
-	return sprint("<rotation len active=%d len pool=%d poolnext=%d mode=%s>", len p.active, len p.pool, p.poolnext, poolmodes[p.mode]);
-}
-
-
-Piece.new(index: int): ref Piece
-{
-	length := torrent.piecelength(index);
-	nblocks := (length+Blocksize-1)/Blocksize;
-	return ref Piece(nil, 0, index, Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
-}
-
-Piece.orphan(p: self ref Piece): int
-{
-	for(i := 0; i < len p.busy; i++)
-		if(p.busy[i].t0 >= 0 || p.busy[i].t1 >= 0)
-			return 0;
-	return 1;
-}
-
-Piece.isdone(p: self ref Piece): int
-{
-	return p.have.n == p.have.have;
-}
-
-
-Piece.hashadd(p: self ref Piece, buf: array of byte)
-{
-	p.hashstate = keyring->sha1(buf, len buf, nil, p.hashstate);
-	p.hashstateoff += len buf;
-}
-
-Piece.text(p: self ref Piece): string
-{
-	return sprint("<piece %d have %s>", p.index, p.have.text());
-}
-
-
-Traffic.new(): ref Traffic
-{
-	return ref Traffic(0, array[TrafficHistorysize] of {* => (0, 0)}, 0, big 0, 0);
-}
-
-Traffic.add(t: self ref Traffic, bytes: int)
-{
-	time := daytime->now();
-
-	if(t.d[t.last].t0 != time) {
-		reclaim(t, time);
-		t.last = (t.last+1) % len t.d;
-		t.winsum -= t.d[t.last].t1;
-		t.d[t.last] = (time, 0);
-	}
-	t.d[t.last].t1 += bytes;
-	t.winsum += bytes;
-	t.sum += big bytes;
-}
-
-reclaim(t: ref Traffic, time: int)
-{
-	first := t.last+1;
-	for(i := 0; t.d[pos := (first+i) % len t.d].t0 < time-TrafficHistorysize && i < TrafficHistorysize; i++) {
-		t.winsum -= t.d[pos].t1;
-		t.d[pos] = (0, 0);
-	}
-}
-
-Traffic.packet(t: self ref Traffic)
-{
-	t.npackets++;
-}
-
-Traffic.rate(t: self ref Traffic): int
-{
-	time := daytime->now();
-	reclaim(t, time);
-
-	div := TrafficHistorysize;
-	if(time-starttime < TrafficHistorysize)
-		div = time-starttime;
-	if(div == 0)
-		div = 1;
-	return t.winsum/div;
-}
-
-Traffic.total(t: self ref Traffic): big
-{
-	return t.sum;
-}
-
-Traffic.text(t: self ref Traffic): string
-{
-	return sprint("<rate %s/s total %s>", bittorrent->bytefmt(big t.rate()), bittorrent->bytefmt(t.total()));
-}
-
-
-
-Block.new(piece, begin, length: int): ref Block
-{
-	return ref Block(piece, begin, length);
-}
-
-Block.eq(b1, b2: ref Block): int
-{
-	return b1.piece == b2.piece &&
-		b1.begin == b2.begin &&
-		b1.length == b2.length;
-}
-
-Block.text(b: self ref Block): string
-{
-	return sprint("<block piece %d, begin %d, length %d>", b.piece, b.begin, b.length);
-}
-
-blockhave(l: list of ref Block, b: ref Block): int
-{
-	for(; l != nil; l = tl l)
-		if(Block.eq(hd l, b))
-			return 1;
-	return 0;
-}
-
-blockdel(l: list of ref Block, b: ref Block): list of ref Block
-{
-	r: list of ref Block;
-	for(; l != nil; l = tl l)
-		if(!Block.eq(hd l, b))
-			r = hd l::r;
-	return rev(r);
-}
-
-blocktake(l: list of ref Block): (list of ref Block, ref Block)
-{
-	l = rev(l);
-	b := hd l;
-	return (rev(tl l), b);
-}
 
 blockreadsend(p: ref Peer)
 {
 	b: ref Block;
-	(p.wants, b) = blocktake(p.wants);
+	(p.wants, b) = pieces->blocktake(p.wants);
 	say(sprint("%s: sending to %s", b.text(), p.text()));
 
 	(d, rerr) := bittorrent->blockread(torrent, dstfds, b.piece, b.begin, b.length);
@@ -1164,31 +417,13 @@ blockreadsend(p: ref Peer)
 	}
 
 	p.netwriting = 1;
-	p.send(ref Msg.Piece(b.piece, b.begin, d));
-}
-
-peersunchoked(): list of ref Peer
-{
-	r: list of ref Peer;
-	for(l := peers; l != nil; l = tl l)
-		if(!(hd l).localchoking())
-			r = hd l::r;
-	return r;
-}
-
-peersactive(): list of ref Peer
-{
-	r: list of ref Peer;
-	for(l := peers; l != nil; l = tl l)
-		if(!(hd l).localchoking() && (hd l).remoteinterested())
-			r = hd l::r;
-	return r;
+	peersend(p, ref Msg.Piece(b.piece, b.begin, d));
 }
 
 cmp(n1, n2: int): int
 {
 	if(n1 == n2)
-		return n1;
+		return -1;
 	return n2-n1;
 }
 
@@ -1218,7 +453,7 @@ nextoptimisticunchoke(): ref Peer
 
 		# find peer from the address pool with oldest unchoke
 		peer: ref Peer;
-		for(l := peers; l != nil; l = tl l) {
+		for(l := peers->peers; l != nil; l = tl l) {
 			p := hd l;
 			if(maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
 				peer = p;
@@ -1233,14 +468,14 @@ nextoptimisticunchoke(): ref Peer
 
 choke(p: ref Peer)
 {
-	p.send(ref Msg.Choke());
-	p.state |= LocalChoking;
+	peersend(p, ref Msg.Choke());
+	p.state |= Peers->LocalChoking;
 }
 
 unchoke(p: ref Peer)
 {
-	p.send(ref Msg.Unchoke());
-	p.state &= ~LocalChoking;
+	peersend(p, ref Msg.Unchoke());
+	p.state &= ~Peers->LocalChoking;
 	p.lastunchoke = daytime->now();
 }
 
@@ -1278,7 +513,7 @@ batchflushcomplete(piece: ref Piece, block: int): int
 
 	start := (block/Batchsize)*Batchsize*Blocksize;
 	end := start+Batchsize*Blocksize;
-	for(l := peers; l != nil; l = tl l) {
+	for(l := peers->peers; l != nil; l = tl l) {
 		peer := hd l;
 		if(peer.buf.overlaps(piece.index, start, end))
 			bufflush(peer.buf);
@@ -1301,8 +536,8 @@ main()
 
 	for(;;) alt {
 	<-tickchan =>
-		say(sprint("ticking, %d peers", len peers));
-		for(l := peers; l != nil; l = tl l) {
+		say(sprint("ticking, %d peers", len peers->peers));
+		for(l := peers->peers; l != nil; l = tl l) {
 			peer := hd l;
 			say(sprint("%s: up %s, down %s, meta %s %s", peer.fulltext(), peer.up.text(), peer.down.text(), peer.metaup.text(), peer.metadown.text()));
 		}
@@ -1331,8 +566,8 @@ main()
 			# find the peer that has been unchoked longest
 			oldest: ref Peer;
 			nunchoked := 0;
-			for(l = peers; l != nil; l = tl l) {
-				p := hd peers;
+			for(l = peers->peers; l != nil; l = tl l) {
+				p := hd l;
 				if(!p.localchoking() && p.remoteinterested()) {
 					nunchoked++;
 					if(oldest == nil || p.lastunchoke < oldest.lastunchoke)
@@ -1342,8 +577,8 @@ main()
 
 			# find all peers that we may want to unchoke randomly
 			others: list of ref Peer;
-			for(l = peers; l != nil; l = tl l) {
-				p := hd peers;
+			for(l = peers->peers; l != nil; l = tl l) {
+				p := hd l;
 				if(p.remoteinterested() && p.localchoking() && p != oldest)
 					others = p::others;
 			}
@@ -1355,7 +590,7 @@ main()
 			}
 
 			othersa := l2a(others);
-			randomize(othersa);
+			misc->randomize(othersa);
 			for(i := 0; i < len othersa && nunchoked+i < Seedunchokedmax; i++)
 				unchoke(othersa[i]);
 
@@ -1365,16 +600,16 @@ main()
 
 			# new optimistic unchoke?
 			if(gen % 3 == 0)
-				luckypeer = nextoptimisticunchoke();
+				peers->luckypeer = nextoptimisticunchoke();
 
 			# make sorted array of all peers, sorted by upload rate, then by interestedness
-			allpeers := array[len peers] of ref (ref Peer, int);  # peer, rate
+			allpeers := array[len peers->peers] of ref (ref Peer, int);  # peer, rate
 			i := 0;
 			luckyindex := -1;
-			for(l = peers; l != nil; l = tl l) {
-				if(luckypeer != nil && hd peers == luckypeer)
+			for(l = peers->peers; l != nil; l = tl l) {
+				if(peers->luckypeer != nil && hd l == peers->luckypeer)
 					luckyindex = i;
-				allpeers[i++] = ref (hd peers, (hd peers).down.rate());
+				allpeers[i++] = ref (hd l, (hd l).down.rate());
 			}
 			sort(allpeers, peerratecmp);
 
@@ -1388,14 +623,14 @@ main()
 			# replace slowest of N by optimistic unchoke if lucky peer was not already going to be unchoked
 			if(luckyindex >= 0 && luckyindex >= unchokeend && unchokeend-1 >= 0) {
 				allpeers[luckyindex] = allpeers[unchokeend-1];
-				allpeers[unchokeend-1] = ref (luckypeer, 0);
+				allpeers[unchokeend-1] = ref (peers->luckypeer, 0);
 			}
 
 			# now unchoke the N peers, and all non-interested peers that are faster.  choke all other peers if they weren't already.
 			for(i = 0; i < len allpeers; i++) {
 				(p, nil) := *allpeers[i];
 				if(p == nil)
-					say(sprint("bad allpeers, len allpeers %d, len peers %d, i %d, unchokeend %d, luckyindex %d, nintr %d", len allpeers, len peers, i, unchokeend, luckyindex, nintr));
+					say(sprint("bad allpeers, len allpeers %d, len peers %d, i %d, unchokeend %d, luckyindex %d, nintr %d", len allpeers, len peers->peers, i, unchokeend, luckyindex, nintr));
 				if(i < unchokeend && p.localchoking())
 					unchoke(p);
 				else if(i >= unchokeend && !p.localchoking())
@@ -1421,9 +656,9 @@ main()
 					continue;  # skip self
 				np := Newpeer(sprint("%s!%d", ip, port), ip, peerid);
 				say("new: "+np.text());
-				trackerpeerdel(np);
-				if(!peerconnected(np.addr))
-					trackerpeeradd(np);
+				peers->trackerpeerdel(np);
+				if(!peers->peerconnected(np.addr))
+					peers->trackerpeeradd(np);
 				else
 					say("already connected to "+np.text());
 			}
@@ -1435,7 +670,7 @@ main()
 			interval = Intervalmin;
 		if(interval > Intervalmax)
 			interval = Intervalmax;
-		if(daytime->now() < starttime+Intervalstartupperiod && !isdone() && len peers+len trackerpeers < Peersmax && interval > Intervalneed)
+		if(daytime->now() < starttime+Intervalstartupperiod && !isdone() && len peers->peers+len peers->trackerpeers < Peersmax && interval > Intervalneed)
 			interval = Intervalneed;
 
 		say(sprint("next call to tracker will be in %d seconds", interval));
@@ -1449,27 +684,27 @@ main()
 			warn(sprint("%s: %s", np.text(), err));
 		} else if(hex(peerid) == localpeeridhex) {
 			say("connected to self, dropping connection...");
-		} else if(peerknownip(np.ip)) {
+		} else if(peers->peerknownip(np.ip)) {
 			say("new connection from known ip address, dropping new connection...");
 		} else if(isfaulty(np.ip)) {
 			say(sprint("connected to faulty ip %s, dropping connection...", np.ip));
 		} else {
-			peer := Peer.new(np, peerfd, extensions, peerid, dialed);
+			peer := Peer.new(np, peerfd, extensions, peerid, dialed, len torrent.piecehashes);
 			spawn peernetreader(peer);
 			spawn peernetwriter(peer);
-			peeradd(peer);
+			peers->peeradd(peer);
 			say("new peer "+peer.fulltext());
 
 			rotateips.pooladdunique(maskip(np.ip));
 
 			if(piecehave.have == 0) {
-				peer.send(ref Msg.Keepalive());
+				peersend(peer, ref Msg.Keepalive());
 			} else {
 				say("sending bitfield to peer: "+piecehave.text());
-				peer.send(ref Msg.Bitfield(piecehave.bytes()));
+				peersend(peer, ref Msg.Bitfield(piecehave.bytes()));
 			}
 
-			if(len peersactive() < Unchokedmax) {
+			if(len peers->peersactive() < Unchokedmax) {
 				say("unchoking rare new peer: "+peer.text());
 				unchoke(peer);
 			}
@@ -1486,7 +721,7 @@ main()
 
 		if(msg == nil) {
 			warn("eof from peer "+peer.text());
-			peerdel(peer);
+			peerdrop(peer);
 			continue;
 		}
 
@@ -1520,7 +755,7 @@ main()
 			}
 
 			say(sprint("%s choked us...", peer.text()));
-			peer.state |= RemoteChoking;
+			peer.state |= Peers->RemoteChoking;
 
 		Unchoke =>
 			if(!peer.remotechoking()) {
@@ -1530,7 +765,7 @@ main()
 			}
 
 			say(sprint("%s unchoked us", peer.text()));
-			peer.state &= ~RemoteChoking;
+			peer.state &= ~Peers->RemoteChoking;
 
 			schedule(peer);
 
@@ -1542,9 +777,9 @@ main()
 			}
 
 			say(sprint("%s is interested", peer.text()));
-			peer.state |= RemoteInterested;
+			peer.state |= Peers->RemoteInterested;
 
-			if(!peer.localchoking() && len peersactive() >= Unchokedmax && !isdone()) {
+			if(!peer.localchoking() && len peers->peersactive() >= Unchokedmax && !isdone()) {
 				# xxx choke slowest peer that is not the optimistic unchoke
 			}
 
@@ -1556,14 +791,14 @@ main()
 			}
 
 			say(sprint("%s is no longer interested", peer.text()));
-			peer.state &= ~RemoteInterested;
+			peer.state &= ~Peers->RemoteInterested;
 
 			# xxx if this peer was choked, unchoke another peer?
 
                 Have =>
 			if(m.index >= len torrent.piecehashes) {
 				say(sprint("%s sent 'have' for invalid piece %d, disconnecting", peer.text(), m.index));
-				peerdel(peer);
+				peerdrop(peer);
 				continue;
 			}
 			if(peer.piecehave.get(m.index)) {
@@ -1582,7 +817,7 @@ main()
                 Bitfield =>
 			if(peer.msgseq != 1) {
 				say(sprint("%s sent bitfield after first message, disconnecting", peer.text()));
-				peerdel(peer);
+				peerdrop(peer);
 				continue;
 			}
 
@@ -1590,7 +825,7 @@ main()
 			(peer.piecehave, err) = Bits.mk(len torrent.piecehashes, m.d);
 			if(err != nil) {
 				say(sprint("%s sent bogus bitfield message: %s, disconnecting", peer.text(), err));
-				peerdel(peer);
+				peerdrop(peer);
 				continue;
 			}
 			say("remote sent bitfield, haves "+peer.piecehave.text());
@@ -1607,7 +842,7 @@ main()
                 Piece =>
 			say(sprint("%s sent data for piece=%d begin=%d length=%d", peer.text(), m.index, m.begin, len m.d));
 
-			piece := piecefind(m.index);
+			piece := pieces->piecefind(m.index);
 			if(piece == nil)
 				fail(sprint("could not find piece %d", m.index));
 
@@ -1615,7 +850,7 @@ main()
 			if(blocksize(req) != len m.d) {
 				warn(sprint("%s sent bad size for block %s, disconnecting", peer.text(), req.text()));
 				setfaulty(peer.np.ip);
-				peerdel(peer);
+				peerdrop(peer);
 				continue;
 			}
 
@@ -1625,7 +860,7 @@ main()
 					exp = peer.reqs.peek().text();
 				warn(sprint("%s sent block %s, expected %s, disconnecting", peer.text(), req.text(), exp));
 				setfaulty(peer.np.ip);
-				peerdel(peer);
+				peerdrop(peer);
 				continue;
 			}
 
@@ -1640,21 +875,21 @@ main()
 			busy := piece.busy[blockindex];
 			busypeer: ref Peer;
 			if(busy.t0 >= 0 && busy.t0 != peer.id) {
-				busypeer = peerfind(busy.t0);
+				busypeer = peers->peerfind(busy.t0);
 				piece.busy[blockindex].t0 = -1;
 			} else if(busy.t1 >= 0 && busy.t1 != peer.id) {
-				busypeer = peerfind(busy.t1);
+				busypeer = peers->peerfind(busy.t1);
 				piece.busy[blockindex].t1 = -1;
 			}
 			if(busypeer != nil) {
 				peer.reqs.cancel(Req.new(m.index, m.begin/Blocksize));
-				peer.send(ref Msg.Cancel(m.index, m.begin, len m.d));
+				peersend(peer, ref Msg.Cancel(m.index, m.begin, len m.d));
 			}
 
 			# add block to buffer.  if new block does not fit in, flush the old data.
-			if(!peer.buf.tryadd(m.index, m.begin, m.d)) {
+			if(!peer.buf.tryadd(piece, m.begin, m.d)) {
 				bufflush(peer.buf);
-				if(!peer.buf.tryadd(m.index, m.begin, m.d))
+				if(!peer.buf.tryadd(piece, m.begin, m.d))
 					fail("tryadd failed...");
 			}
 
@@ -1675,7 +910,7 @@ main()
 
 			if(piece.isdone()) {
 				# flush all bufs about this piece, also from other peers, to disk.  to make hash-checking read right data.
-				for(l := peers; l != nil; l = tl l) {
+				for(l := peers->peers; l != nil; l = tl l) {
 					p := hd l;
 					if(p.buf.piece == m.index) {
 						say("flushing buf of other peer before hash check");
@@ -1684,14 +919,14 @@ main()
 				}
 
 				wanthash := hex(torrent.piecehashes[piece.index]);
-				(piecehash, herr) := piecehash(piece);
+				(piecehash, herr) := verify->piecehash(dstfds, torrent.piecelen, piece);
 				if(herr != nil)
 					fail("verifying hash: "+herr);
 				havehash := hex(piecehash);
 				if(wanthash != havehash) {
 					say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
 					setfaulty(peer.np.ip);
-					peerdel(peer);
+					peerdrop(peer);
 					piece.hashstate = nil;
 					piece.hashstateoff = 0;
 					piece.have.clearall();
@@ -1706,16 +941,14 @@ main()
 				}
 
 				piecehave.set(piece.index);
-				piecedel(piecefind(piece.index));
+				pieces->piecedel(pieces->piecefind(piece.index));
 
 				writestate();
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", piecehave.text(), piecebusy.text()));
 
-				for(l = peers; l != nil; l = tl l) {
-					p := hd l;
-					p.send(ref Msg.Have(piece.index));
-				}
+				for(l = peers->peers; l != nil; l = tl l)
+					peersend(hd l, ref Msg.Have(piece.index));
 			}
 			schedule(peer);
 
@@ -1723,8 +956,8 @@ main()
 				trackerevent = "completed";
 				spawn trackkick(0);
 				npeers: list of ref Peer;
-				for(l := peers; l != nil; l = tl l) {
-					p := hd peers;
+				for(l := peers->peers; l != nil; l = tl l) {
+					p := hd l;
 					if(p.isdone()) {
 						say("done: dropping seed "+p.fulltext());
 						peerdrop(p);
@@ -1735,7 +968,7 @@ main()
 							choke(p);
 					}
 				}
-				peers = rev(npeers);
+				peers->peers = lists->reverse(npeers);
 				print("DONE!\n");
 			}
 
@@ -1745,24 +978,24 @@ main()
 
 			if(m.length > Blocksizemax) {
 				warn("requested block too large, disconnecting");
-				peerdel(peer);
+				peerdrop(peer);
 				continue;
 			}
 
 			if(peer.piecehave.get(m.index)) {
 				warn("peer requested piece it already claimed to have");
-				peerdel(peer);
+				peerdrop(peer);
 				setfaulty(peer.np.ip);
 				continue;
 			}
 
-			if(blockhave(peer.wants, b)) {
+			if(pieces->blockhave(peer.wants, b)) {
 				say("peer already wanted block, skipping");
 				continue;
 			}
 			if(len peer.wants >= Blockqueuemax) {
 				say(sprint("peer scheduled one too many blocks, already has %d scheduled, disconnecting", len peer.wants));
-				peerdel(peer);
+				peerdrop(peer);
 				continue;
 			}
 			peer.wants = b::peer.wants;
@@ -1772,7 +1005,7 @@ main()
 		Cancel =>
 			b := Block.new(m.index, m.begin, m.length);
 			say(sprint("%s sent cancel for %s", peer.text(), b.text()));
-			nwants := blockdel(peer.wants, b);
+			nwants := pieces->blockdel(peer.wants, b);
 			if(len nwants == len peer.wants) {
 				say("peer did not want block before, skipping");
 				continue;
@@ -1790,8 +1023,8 @@ main()
 				stopped = 1;
 
 				# disconnect from all peers and don't do further tracker requests
-				peers = nil;
-				luckypeer = nil;
+				peers->peers = nil;
+				peers->luckypeer = nil;
 				rotateips = nil;
 			}
 		}
@@ -1892,111 +1125,6 @@ limiter(ch: chan of (int, chan of int), max: int)
 }
 
 
-piecenew(index: int): ref Piece
-{
-	p := Piece.new(index);
-	pieces = p::pieces;
-	return p;
-}
-
-piecedel(p: ref Piece)
-{
-	new: list of ref Piece;
-	for(l := pieces; l != nil; l = tl l)
-		if(hd l != p)
-			new = hd l::new;
-	pieces = new;
-}
-
-piecefind(index: int): ref Piece
-{
-	for(l := pieces; l != nil; l = tl l)
-		if((hd l).index == index)
-			return hd l;
-	return nil;
-}
-
-chunkreader(reqch: chan of ref (int, big, chan of (array of byte, string)))
-{
-	for(;;) {
-		req := <-reqch;
-		if(req == nil)
-			break;
-
-		(n, off, chunkch) := *req;
-		while(n > 0) {
-			want := min(Diskchunksize, n);
-			buf := array[want] of byte;
-			err := bittorrent->torrentpreadx(dstfds, buf, len buf, off);
-			if(err != nil) {
-				chunkch <-= (nil, err);
-				return;
-			}
-			off += big len buf;
-			n -= len buf;
-			chunkch <-= (buf, nil);
-		}
-		chunkch <-= (nil, nil);
-	}
-}
-
-piecehash(p: ref Piece): (array of byte, string)
-{
-	reqch := chan[1] of ref (int, big, chan of (array of byte, string));
-	spawn chunkreader(reqch);
-
-	chunkch := chan of (array of byte, string);
-	reqch <-= ref (p.length-p.hashstateoff, big p.index*big torrent.piecelen+big p.hashstateoff, chunkch);
-	reqch <-= nil;
-
-	for(;;) {
-		(buf, err) := <-chunkch;
-		if(err != nil)
-			fail(sprint("reading piece %d: %s", p.index, err));
-		if(buf == nil)
-			break;
-		p.hashadd(buf);
-	}
-
-	hash := array[Keyring->SHA1dlen] of byte;
-	keyring->sha1(nil, 0, hash, p.hashstate);
-	return (hash, nil);
-}
-
-
-piecekeeper()
-{
-	awaiting: list of (int, int);  # piece, peer
-
-nextreq:
-	for(;;) {
-		(reqtype, pieceindex, peer, reqch) := <-piecechan;
-		case reqtype {
-		Add =>
-			# we are currently expecting pieceindex from peer
-			awaiting = (pieceindex, peer)::awaiting;
-		Remove =>
-			# we are no longer expecting pieceindex from peer.  if pieceindex is -1, we no longer expect anything from peer
-			new := awaiting;
-			new = nil;
-			for(; awaiting != nil; awaiting = tl awaiting)
-				if((pieceindex == -1 || (hd awaiting).t0 == pieceindex) && (hd awaiting).t1 == peer)
-					;
-				else
-					new = hd awaiting::new;
-		Request =>
-			# peer proc asks whether we are expecting piece from peer
-			for(l := awaiting; l != nil; l = tl l)
-				if((hd l).t0 == pieceindex && (hd l).t1 == peer) {
-					reqch <-= 1;
-					continue nextreq;
-				}
-			reqch <-= 0;
-		}
-	}
-}
-
-
 dialkiller(pidch: chan of int, pid: int, np: Newpeer)
 {
 	pidch <-= sys->pctl(0, nil);
@@ -2080,8 +1208,8 @@ interesting(p: ref Peer)
 	b := wantpeerpieces(p);
 	if(!b.isempty()) {
 		say("we are now interested in "+p.text());
-		p.state |= LocalInterested;
-		p.send(ref Msg.Interested());
+		p.state |= Peers->LocalInterested;
+		peersend(p, ref Msg.Interested());
 	}
 }
 
@@ -2092,7 +1220,7 @@ getrandompiece(): ref Piece
 	for(;;) {
 		i := rand->rand(piecebusy.n);
 		if(!piecebusy.get(i)) {
-			p := piecenew(i);
+			p := pieces->piecenew(i, torrent.piecelength(i));
 			piecebusy.set(i);
 			return p;
 		}
@@ -2175,7 +1303,7 @@ request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 		# xxx send in one packet?
 		say("request: requesting "+req.text());
 		peer.reqs.add(req);
-		peer.send(ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req)));
+		peersend(peer, ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req)));
 	}
 }
 
@@ -2232,7 +1360,7 @@ rarepiececmp(p1, p2: ref Piece): int
 piecesrareorphan(orphan: int): array of ref Piece
 {
 	r: list of ref Piece;
-	for(l := pieces; l != nil; l = tl l) {
+	for(l := pieces->pieces; l != nil; l = tl l) {
 		p := hd l;
 		if(p.orphan() && orphan)
 			r = p::r;
@@ -2257,7 +1385,7 @@ schedule(peer: ref Peer)
 		say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
 		req := peer.reqs.last();
 		if(req != nil) {
-			piece := piecefind(req.pieceindex);
+			piece := pieces->piecefind(req.pieceindex);
 			if(piece != nil)
 				schedpieces(peer, array[] of {piece});
 		}
@@ -2274,7 +1402,7 @@ schedule(peer: ref Peer)
 		rare := inactiverare();
 		for(i := 0; i < len rare; i++) {
 			say(sprint("using new rare piece %d", rare[i]));
-			p := piecenew(rare[i]);
+			p := pieces->piecenew(rare[i], torrent.piecelength(rare[i]));
 			piecebusy.set(rare[i]);
 			schedpieces(peer, array[] of {p});
 			if(!needblocks(peer))
@@ -2292,7 +1420,7 @@ schedule(peer: ref Peer)
 		say("schedule: doing random");
 
 		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-		a := l2a(pieces);
+		a := l2a(pieces->pieces);
 		sort(a, progresscmp);
 		for(i := 0; i < len a; i++) {
 			piece := a[i];
@@ -2380,8 +1508,6 @@ msgread(fd: ref Sys->FD): (ref Msg, string)
 		return (nil, sprint("short read"));
 	(size, nil) := bittorrent->g32(buf, 0);
 	buf = array[size] of byte;
-say(sprint("msg.read: have size=%d", size));
-
 
 	n = netread(fd, buf, len buf);
 	if(n < 0)
@@ -2456,56 +1582,10 @@ etastr(secs: int): string
 
 eta(): int
 {
-	rate := trafficdown.rate();
-	if(rate <= 0)
+	r := trafficdown.rate();
+	if(r <= 0)
 		return -1;
-	return int (totalleft / big rate);
-}
-
-randomize[T](a: array of T)
-{
-	for(i := 0; i < len a; i++) {
-		newi := rand->rand(len a);
-		tmp := a[i];
-		a[i] = a[newi];
-		a[newi] = tmp;
-	}
-}
-
-sort[T](a: array of T, cmp: ref fn(a, b: T): int)
-{ 
-        for(i := 1; i < len a; i++) { 
-                tmp := a[i]; 
-                for(j := i; j > 0 && cmp(a[j-1], tmp) > 0; j--) 
-                        a[j] = a[j-1]; 
-                a[j] = tmp; 
-        } 
-}
-readfile(f: string): (string, string)
-{
-	fd := sys->open(f, Sys->OREAD);
-	if(fd == nil)
-		return (nil, sprint("open: %r"));
-	(d, err) := readfd(fd);
-	if(err != nil)
-		return (nil, err);
-	return (string d, err);
-}
-
-readfd(fd: ref Sys->FD): (array of byte, string)
-{
-	n := sys->readn(fd, buf := array[32*1024] of byte, len buf);
-	if(n < 0)
-		return (nil, sprint("read: %r"));
-	return (buf[:n], nil);
-}
-
-hex(d: array of byte): string
-{
-	s := "";
-	for(i := 0; i < len d; i++)
-		s += sprint("%02x", int d[i]);
-	return s;
+	return int (totalleft / big r);
 }
 
 progctl(pid: int, s: string)
@@ -2524,31 +1604,6 @@ killgrp(pid: int)
 kill(pid: int)
 {
 	progctl(pid, "kill");
-}
-
-has[T](l: list of T, e: T): int
-{
-	for(; l != nil; l = tl l)
-		if(hd l == e)
-			return 1;
-	return 0;
-}
-
-rev[T](l: list of T): list of T
-{
-	r: list of T;
-	for(; l != nil; l = tl l)
-		r = hd l::r;
-	return r;
-}
-
-l2a[T](l: list of T): array of T
-{
-	a := array[len l] of T;
-	i := 0;
-	for(; l != nil; l = tl l)
-		a[i++] = hd l;
-	return a;
 }
 
 fail(s: string)

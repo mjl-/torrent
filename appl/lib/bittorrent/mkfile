@@ -1,0 +1,23 @@
+<../../../mkconfig
+
+TARG=\
+	bittorrent.dis\
+	misc.dis\
+	pools.dis\
+	rate.dis\
+	requests.dis\
+	peers.dis\
+	pieces.dis\
+	verify.dis\
+
+MODULES=\
+	get.m\
+	torrentget.m\
+
+SYSMODULES=\
+	sys.m\
+	bufio.m\
+
+DISBIN=$ROOT/dis/lib/bittorrent
+
+<$ROOT/mkfiles/mkdis
