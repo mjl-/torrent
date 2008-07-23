@@ -141,3 +141,21 @@ Batch.text(nil: self ref Batch): string
 {
 	return "<batch ...>";
 }
+
+
+min(a, b: int): int
+{
+	if(a < b)
+		return a;
+	return b;
+}
+
+batches(p: ref Pieces->Piece): array of ref Batch
+{
+	nblocks := p.have.n;
+	nbatches := (nblocks+Torrentget->Batchsize-1)/Torrentget->Batchsize;
+	b := array[nbatches] of ref Batch;
+	for(i := 0; i < len b; i++)
+		b[i] = Batch.new(i*Torrentget->Batchsize, min(Torrentget->Batchsize, nblocks-i*Torrentget->Batchsize), p);
+	return b;
+}

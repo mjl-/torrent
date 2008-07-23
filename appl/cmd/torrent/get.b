@@ -372,17 +372,6 @@ awaitpeer()
 }
 
 
-bufflush(b: ref Buf)
-{
-	say(sprint("buf: writing chunk to disk, pieceoff %d, len data %d", b.pieceoff, len b.data));
-	off := big b.piece*big torrent.piecelen + big b.pieceoff;
-	err := bittorrent->torrentpwritex(dstfds, b.data, len b.data, off);
-	if(err != nil)
-		fail("writing piece: "+err);  # xxx fail saner...
-	b.clear();
-}
-
-
 peersend(p: ref Peer, msg: ref Msg)
 {
 	msize := msg.packedsize();
@@ -403,6 +392,17 @@ peersend(p: ref Peer, msg: ref Msg)
 	p.outmsgs <-= msg;
 }
 
+blocksize(req: Req): int
+{
+	# first a quick check
+	if(req.pieceindex < len torrent.piecehashes-1)
+		return Blocksize;
+
+	# otherwise, the full check
+	if(big req.pieceindex*big torrent.piecelen + big (req.blockindex+1)*big Blocksize > torrent.length)
+		return int (torrent.length % big Blocksize);
+	return Blocksize;
+}
 
 blockreadsend(p: ref Peer)
 {
@@ -420,18 +420,45 @@ blockreadsend(p: ref Peer)
 	peersend(p, ref Msg.Piece(b.piece, b.begin, d));
 }
 
-cmp(n1, n2: int): int
+request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 {
-	if(n1 == n2)
-		return -1;
-	return n2-n1;
+	for(; reqs != nil; reqs = tl reqs) {
+		req := hd reqs;
+		busy := piece.busy[req.blockindex];
+		if(busy.t0 < 0)
+			piece.busy[req.blockindex].t0 = peer.id;
+		else if(busy.t1 < 0)
+			piece.busy[req.blockindex].t1 = peer.id;
+		else
+			fail("both slots busy...");
+
+		# xxx send in one packet?
+		say("request: requesting "+req.text());
+		peer.reqs.add(req);
+		peersend(peer, ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req)));
+	}
+}
+
+schedbatches(peer: ref Peer, b: array of ref Batch)
+{
+	for(i := 0; needblocks(peer) && i < len b; i++)
+		request(peer, b[i].piece, b[i].unused());
+}
+
+schedpieces(peer: ref Peer, a: array of ref Piece)
+{
+	for(i := 0; needblocks(peer) && i < len a; i++)
+		if(peer.piecehave.get(a[i].index)) {
+			b := requests->batches(a[i]);
+			schedbatches(peer, b);
+		}
 }
 
 peerratecmp(a1, a2: ref (ref Peer, int)): int
 {
 	(p1, r1) := *a1;
 	(p2, r2) := *a2;
-	n := cmp(r1, r2);
+	n := r2-r1;
 	if(n != 0)
 		return n;
 	if(p1.remoteinterested() == p2.remoteinterested())
@@ -441,30 +468,8 @@ peerratecmp(a1, a2: ref (ref Peer, int)): int
 	return 1;
 }
 
-nextoptimisticunchoke(): ref Peer
-{
-	rotateips.fill(); # xxx replace by markstart, and then lazily rotate
 
-	# find next masked ip address to pick peer from (if still present)
-	for(;;) {
-		ipmasked := rotateips.take();
-		if(ipmasked == nil)
-			break;
-
-		# find peer from the address pool with oldest unchoke
-		peer: ref Peer;
-		for(l := peers->peers; l != nil; l = tl l) {
-			p := hd l;
-			if(maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
-				peer = p;
-		}
-		if(peer != nil)
-			return peer;
-		else
-			rotateips.pooldel(ipmasked);
-	}
-	return nil;
-}
+# peer state
 
 choke(p: ref Peer)
 {
@@ -478,6 +483,34 @@ unchoke(p: ref Peer)
 	p.state &= ~Peers->LocalChoking;
 	p.lastunchoke = daytime->now();
 }
+
+wantpeerpieces(p: ref Peer): ref Bits
+{
+	b := Bits.union(array[] of {piecehave, piecebusy});
+	b.invert();
+	b = Bits.and(array[] of {p.piecehave, b});
+
+	say("pieces peer has and we are interested in: "+b.text());
+	return b;
+}
+
+interesting(p: ref Peer)
+{
+	b := wantpeerpieces(p);
+
+	if(p.localinterested() && b.isempty()) {
+		say("we are now interested in "+p.text());
+		p.state &= ~Peers->LocalInterested;
+		peersend(p, ref Msg.Notinterested());
+	} else if(!p.localinterested() && !b.isempty()) {
+		say("we are now interested in "+p.text());
+		p.state |= Peers->LocalInterested;
+		peersend(p, ref Msg.Interested());
+	}
+}
+
+
+# faulty
 
 isfaulty(ip: string): int
 {
@@ -504,9 +537,22 @@ clearfaulty(ip: string)
 	faulty = new;
 }
 
+
+# buf flushing
+
+bufflush(b: ref Buf)
+{
+	say(sprint("buf: writing chunk to disk, pieceoff %d, len data %d", b.pieceoff, len b.data));
+	off := big b.piece*big torrent.piecelen + big b.pieceoff;
+	err := bittorrent->torrentpwritex(dstfds, b.data, len b.data, off);
+	if(err != nil)
+		fail("writing piece: "+err);  # xxx fail saner...
+	b.clear();
+}
+
 batchflushcomplete(piece: ref Piece, block: int): int
 {
-	b := batches(piece)[block/Batchsize];
+	b := requests->batches(piece)[block/Batchsize];
 	for(i := 0; i < len b.blocks; i++)
 		if(!piece.have.get(b.blocks[i]))
 			return 0;
@@ -519,6 +565,31 @@ batchflushcomplete(piece: ref Piece, block: int): int
 			bufflush(peer.buf);
 	}
 	return 1;
+}
+
+nextoptimisticunchoke(): ref Peer
+{
+	rotateips.fill(); # xxx replace by markstart, and then lazily rotate
+
+	# find next masked ip address to pick peer from (if still present)
+	for(;;) {
+		ipmasked := rotateips.take();
+		if(ipmasked == nil)
+			break;
+
+		# find peer from the address pool with oldest unchoke
+		peer: ref Peer;
+		for(l := peers->peers; l != nil; l = tl l) {
+			p := hd l;
+			if(maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
+				peer = p;
+		}
+		if(peer != nil)
+			return peer;
+		else
+			rotateips.pooldel(ipmasked);
+	}
+	return nil;
 }
 
 
@@ -1190,278 +1261,8 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	return (extensions, peerid, nil);
 }
 
-wantpeerpieces(p: ref Peer): ref Bits
-{
-	b := Bits.union(array[] of {piecehave, piecebusy});
-	b.invert();
-	b = Bits.and(array[] of {p.piecehave, b});
 
-	say("pieces peer has and we are interested in: "+b.text());
-	return b;
-}
-
-interesting(p: ref Peer)
-{
-	b := wantpeerpieces(p);
-
-	if(p.localinterested() && b.isempty()) {
-		say("we are now interested in "+p.text());
-		p.state &= ~Peers->LocalInterested;
-		peersend(p, ref Msg.Notinterested());
-	} else if(!p.localinterested() && !b.isempty()) {
-		say("we are now interested in "+p.text());
-		p.state |= Peers->LocalInterested;
-		peersend(p, ref Msg.Interested());
-	}
-}
-
-
-getrandompiece(): ref Piece
-{
-	# will succeed, this is only called when few pieces are busy
-	for(;;) {
-		i := rand->rand(piecebusy.n);
-		if(!piecebusy.get(i)) {
-			p := pieces->piecenew(i, torrent.piecelength(i));
-			piecebusy.set(i);
-			return p;
-		}
-	}
-}
-
-getrarestpiece(b: ref Bits)
-{
-	# first, determine which pieces are the rarest
-	rarest: list of int;  # piece index
-	min := -1;
-	seen := 0;
-	for(i := 0; i < b.n && seen < b.have; i++) {
-		if(b.get(i)) {
-			seen++;
-			if(min < 0 || piececounts[i] < min) {
-				rarest = nil;
-				min = piececounts[i];
-			}
-			if(piececounts[i] <= min)
-				rarest = i::rarest;
-		}
-	}
-	if(rarest == nil)
-		return;
-
-	# next, pick a random element from the list
-	skip := rand->rand(b.have);
-	while(skip-- > 0)
-		rarest = tl rarest;
-	index := hd rarest;
-	say(sprint("choose rarest piece %d", index));
-}
-
-blocksize(req: Req): int
-{
-	# first a quick check
-	if(req.pieceindex < len torrent.piecehashes-1)
-		return Blocksize;
-
-	# otherwise, the full check
-	if(big req.pieceindex*big torrent.piecelen + big (req.blockindex+1)*big Blocksize > torrent.length)
-		return int (torrent.length % big Blocksize);
-	return Blocksize;
-}
-
-
-batches(p: ref Piece): array of ref Batch
-{
-	nblocks := p.have.n;
-	nbatches := (nblocks+Batchsize-1)/Batchsize;
-	b := array[nbatches] of ref Batch;
-	for(i := 0; i < len b; i++)
-		b[i] = Batch.new(i*Batchsize, min(Batchsize, nblocks-i*Batchsize), p);
-	return b;
-}
-
-needblocks(peer: ref Peer): int
-{
-	r := peer.reqs.count() == 0 || peer.reqs.count()+Batchsize < peer.reqs.size();
-	if(r)
-		say("need more blocks...");
-	else
-		say("no more blocks needed");
-	return r;
-}
-
-request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
-{
-	for(; reqs != nil; reqs = tl reqs) {
-		req := hd reqs;
-		busy := piece.busy[req.blockindex];
-		if(busy.t0 < 0)
-			piece.busy[req.blockindex].t0 = peer.id;
-		else if(busy.t1 < 0)
-			piece.busy[req.blockindex].t1 = peer.id;
-		else
-			fail("both slots busy...");
-
-		# xxx send in one packet?
-		say("request: requesting "+req.text());
-		peer.reqs.add(req);
-		peersend(peer, ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req)));
-	}
-}
-
-schedbatches(peer: ref Peer, b: array of ref Batch)
-{
-	for(i := 0; needblocks(peer) && i < len b; i++)
-		request(peer, b[i].piece, b[i].unused());
-}
-
-
-progresscmp(p1, p2: ref Piece): int
-{
-	return p2.have.n-p1.have.n;
-}
-
-schedpieces(peer: ref Peer, a: array of ref Piece)
-{
-	for(i := 0; needblocks(peer) && i < len a; i++)
-		if(peer.piecehave.get(a[i].index)) {
-			b := batches(a[i]);
-			schedbatches(peer, b);
-		}
-}
-
-
-inactiverare(): array of int
-{
-	a := array[piecebusy.n-piecebusy.have] of int;
-	say(sprint("inactiverare: %d pieces, %d busy, finding %d", piecebusy.n, piecebusy.have, len a));
-	j := 0;
-	for(i := 0; j < len a && i < piecebusy.n; i++)
-		if(!piecebusy.get(i))
-			a[j++] = i;
-
-	randomizeint(a);
-	return a;
-}
-
-randomizeint(a: array of int)
-{
-	for(i := 0; i < len a; i++) {
-		newi := rand->rand(len a);
-		tmp := a[i];
-		a[i] = a[newi];
-		a[newi] = tmp;
-	}
-}
-
-rarepiececmp(p1, p2: ref Piece): int
-{
-	return piececounts[p1.index]-piececounts[p2.index];
-}
-
-piecesrareorphan(orphan: int): array of ref Piece
-{
-	r: list of ref Piece;
-	for(l := pieces->pieces; l != nil; l = tl l) {
-		p := hd l;
-		if(p.orphan() && orphan)
-			r = p::r;
-		else if(!p.orphan() && !orphan)
-			r = p::r;
-	}
-
-	a := l2a(r);
-	sort(a, rarepiececmp);
-	return a;
-}
-
-schedule(peer: ref Peer)
-{
-	if(!needblocks(peer))
-		return;
-
-	if(rarestfirst()) {
-		say("schedule: doing rarest first");
-
-		# attempt to work on last piece this peer was working on
-		say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
-		req := peer.reqs.last();
-		if(req != nil) {
-			piece := pieces->piecefind(req.pieceindex);
-			if(piece != nil)
-				schedpieces(peer, array[] of {piece});
-		}
-
-		# find rarest orphan pieces to work on
-		say("schedule: trying rarest orphans");
-		a := piecesrareorphan(1);
-		schedpieces(peer, a);
-		if(!needblocks(peer))
-			return;
-
-		# find rarest inactive piece to work on
-		say("schedule: trying inactive pieces");
-		rare := inactiverare();
-		for(i := 0; i < len rare; i++) {
-			say(sprint("using new rare piece %d", rare[i]));
-			p := pieces->piecenew(rare[i], torrent.piecelength(rare[i]));
-			piecebusy.set(rare[i]);
-			schedpieces(peer, array[] of {p});
-			if(!needblocks(peer))
-				return;
-		}
-
-		# find rarest active non-orphan piece to work on
-		say("schedule: trying rarest non-orphans");
-		a = piecesrareorphan(0);
-		schedpieces(peer, a);
-		if(!needblocks(peer))
-			return;
-		
-	} else {
-		say("schedule: doing random");
-
-		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-		a := l2a(pieces->pieces);
-		sort(a, progresscmp);
-		for(i := 0; i < len a; i++) {
-			piece := a[i];
-			say(sprint("schedule: looking at piece %d", piece.index));
-
-			# skip piece if this peer doesn't have it
-			if(!peer.piecehave.get(piece.index))
-				continue;
-
-			# divide piece into batches
-			b := batches(piece);
-
-			# request blocks from unused batches first
-			say("schedule: trying unused batches from piece");
-			schedbatches(peer, b);
-			if(!needblocks(peer))
-				return;
-
-			# if more requests needed, start on partially used batches too, in reverse order (for fewer duplicate data)
-			say("schedule: trying partially used batches from piece");
-			for(k := len b-1; k >= 0; k--) {
-				request(peer, piece, b[k].usedpartial(peer));
-				if(!needblocks(peer))
-					return;
-			}
-		}
-
-		# otherwise, get new random pieces to work on
-		say("schedule: trying random pieces");
-		while(needblocks(peer) && piecebusy.have < piecebusy.n) {
-			say("schedule: getting another random piece...");
-			piece := getrandompiece();
-			b := batches(piece);
-			schedbatches(peer, b);
-		}
-	}
-}
-
-
+# read, going through limiter
 netread(fd: ref Sys->FD, buf: array of byte, n: int): int
 {
 	read := 0;
@@ -1480,6 +1281,7 @@ netread(fd: ref Sys->FD, buf: array of byte, n: int): int
 	return read;
 }
 
+# write, going through limiter
 netwrite(fd: ref Sys->FD, buf: array of byte, n: int): int
 {
 	wrote := 0;
@@ -1550,6 +1352,184 @@ peernetwriter(peer: ref Peer)
 	}
 }
 
+
+# piece/block scheduler
+
+getrandompiece(): ref Piece
+{
+	# will succeed, this is only called when few pieces are busy
+	for(;;) {
+		i := rand->rand(piecebusy.n);
+		if(!piecebusy.get(i)) {
+			p := pieces->piecenew(i, torrent.piecelength(i));
+			piecebusy.set(i);
+			return p;
+		}
+	}
+}
+
+getrarestpiece(b: ref Bits)
+{
+	# first, determine which pieces are the rarest
+	rarest: list of int;  # piece index
+	min := -1;
+	seen := 0;
+	for(i := 0; i < b.n && seen < b.have; i++) {
+		if(b.get(i)) {
+			seen++;
+			if(min < 0 || piececounts[i] < min) {
+				rarest = nil;
+				min = piececounts[i];
+			}
+			if(piececounts[i] <= min)
+				rarest = i::rarest;
+		}
+	}
+	if(rarest == nil)
+		return;
+
+	# next, pick a random element from the list
+	skip := rand->rand(b.have);
+	while(skip-- > 0)
+		rarest = tl rarest;
+	index := hd rarest;
+	say(sprint("choose rarest piece %d", index));
+}
+
+needblocks(peer: ref Peer): int
+{
+	return peer.reqs.count() == 0 || peer.reqs.count()+Batchsize < peer.reqs.size();
+}
+
+inactiverare(): array of ref (int, int)
+{
+	# we just use .t0 of the ref (int, int).  it's used here so we can use polymorphic functions
+	a := array[piecebusy.n-piecebusy.have] of ref (int, int);
+	say(sprint("inactiverare: %d pieces, %d busy, finding %d", piecebusy.n, piecebusy.have, len a));
+	j := 0;
+	for(i := 0; j < len a && i < piecebusy.n; i++)
+		if(!piecebusy.get(i))
+			a[j++] = ref (i, 0);
+
+	misc->randomize(a);
+	return a;
+}
+
+rarepiececmp(p1, p2: ref Piece): int
+{
+	return piececounts[p1.index]-piececounts[p2.index];
+}
+
+piecesrareorphan(orphan: int): array of ref Piece
+{
+	r: list of ref Piece;
+	for(l := pieces->pieces; l != nil; l = tl l) {
+		p := hd l;
+		if(p.orphan() && orphan)
+			r = p::r;
+		else if(!p.orphan() && !orphan)
+			r = p::r;
+	}
+
+	a := l2a(r);
+	sort(a, rarepiececmp);
+	return a;
+}
+
+progresscmp(p1, p2: ref Piece): int
+{
+	return p2.have.n-p1.have.n;
+}
+
+schedule(peer: ref Peer)
+{
+	if(!needblocks(peer))
+		return;
+
+	if(rarestfirst()) {
+		say("schedule: doing rarest first");
+
+		# attempt to work on last piece this peer was working on
+		say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
+		req := peer.reqs.last();
+		if(req != nil) {
+			piece := pieces->piecefind(req.pieceindex);
+			if(piece != nil)
+				schedpieces(peer, array[] of {piece});
+		}
+
+		# find rarest orphan pieces to work on
+		say("schedule: trying rarest orphans");
+		a := piecesrareorphan(1);
+		schedpieces(peer, a);
+		if(!needblocks(peer))
+			return;
+
+		# find rarest inactive piece to work on
+		say("schedule: trying inactive pieces");
+		rare := inactiverare();
+		for(i := 0; i < len rare; i++) {
+			v := rare[i].t0;  # it's a ref tuple to allow using polymorphic functions
+			say(sprint("using new rare piece %d", v));
+			p := pieces->piecenew(v, torrent.piecelength(v));
+			piecebusy.set(v);
+			schedpieces(peer, array[] of {p});
+			if(!needblocks(peer))
+				return;
+		}
+
+		# find rarest active non-orphan piece to work on
+		say("schedule: trying rarest non-orphans");
+		a = piecesrareorphan(0);
+		schedpieces(peer, a);
+		if(!needblocks(peer))
+			return;
+		
+	} else {
+		say("schedule: doing random");
+
+		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
+		a := l2a(pieces->pieces);
+		sort(a, progresscmp);
+		for(i := 0; i < len a; i++) {
+			piece := a[i];
+			say(sprint("schedule: looking at piece %d", piece.index));
+
+			# skip piece if this peer doesn't have it
+			if(!peer.piecehave.get(piece.index))
+				continue;
+
+			# divide piece into batches
+			b := requests->batches(piece);
+
+			# request blocks from unused batches first
+			say("schedule: trying unused batches from piece");
+			schedbatches(peer, b);
+			if(!needblocks(peer))
+				return;
+
+			# if more requests needed, start on partially used batches too, in reverse order (for fewer duplicate data)
+			say("schedule: trying partially used batches from piece");
+			for(k := len b-1; k >= 0; k--) {
+				request(peer, piece, b[k].usedpartial(peer));
+				if(!needblocks(peer))
+					return;
+			}
+		}
+
+		# otherwise, get new random pieces to work on
+		say("schedule: trying random pieces");
+		while(needblocks(peer) && piecebusy.have < piecebusy.n) {
+			say("schedule: getting another random piece...");
+			piece := getrandompiece();
+			b := requests->batches(piece);
+			schedbatches(peer, b);
+		}
+	}
+}
+
+
+# misc
 
 maskip(ipstr: string): string
 {

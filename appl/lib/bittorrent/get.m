@@ -258,6 +258,8 @@ Requests: module {
 		usedpartial:	fn(b: self ref Batch, peer: ref Peers->Peer): list of Req;
 		text:	fn(b: self ref Batch): string;
 	};
+
+	batches:	fn(p: ref Pieces->Piece): array of ref Batch;
 };
 
 Verify: module {
