@@ -1010,6 +1010,10 @@ main()
 				(state->piecehave).set(piece.index);
 				pieces->piecedel(pieces->piecefind(piece.index));
 
+				# this could have been the last piece this peer had, making us no longer interested
+				for(l = peers->peers; l != nil; l = tl l)
+					interesting(hd l);
+
 				writestate();
 				say("piece now done: "+piece.text());
 				say(sprint("pieces: have %s, busy %s", (state->piecehave).text(), (state->piecebusy).text()));
