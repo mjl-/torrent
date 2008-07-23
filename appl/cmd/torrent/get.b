@@ -39,6 +39,7 @@ peers: Peers;
 requests: Requests;
 verify: Verify;
 sched: Schedule;
+state: State;
 
 print, sprint, fprint, fildes: import sys;
 Bee, Msg, Torrent: import bittorrent;
@@ -132,8 +133,10 @@ init(nil: ref Draw->Context, args: list of string)
 	peers->init(rand);
 	verify = load Verify Verify->PATH;
 	verify->init();
+	state = load State State->PATH;
+	state->init();
 	sched = load Schedule Schedule->PATH;
-	sched->init(rand, peers, pieces);
+	sched->init(rand, state, peers, pieces);
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-DPLn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
@@ -177,7 +180,7 @@ init(nil: ref Draw->Context, args: list of string)
 		# all new files, we don't have pieces yet
 		trackerevent = "started";
 		say("no state file needed, all new files");
-		sched->piecehave = Bits.new(len torrent.piecehashes);
+		state->piecehave = Bits.new(len torrent.piecehashes);
 	} else {
 		# attempt to read state of pieces from .torrent.state file
 		statefd = sys->open(torrent.statepath, Sys->ORDWR);
@@ -186,7 +189,7 @@ init(nil: ref Draw->Context, args: list of string)
 			(d, rerr) := readfd(statefd);
 			if(rerr != nil)
 				fail(sprint("%s: %s", torrent.statepath, rerr));
-			(sched->piecehave, err) = Bits.mk(len torrent.piecehashes, d);
+			(state->piecehave, err) = Bits.mk(len torrent.piecehashes, d);
 			if(err != nil)
 				fail(sprint("%s: invalid state", torrent.statepath));
 		} else {
@@ -201,23 +204,23 @@ init(nil: ref Draw->Context, args: list of string)
 				reqch <-= ref (torrent.piecelength(i), big i*big torrent.piecelen, chunkch);
 			reqch <-= nil;
 
-			sched->piecehave = Bits.new(len torrent.piecehashes);
+			state->piecehave = Bits.new(len torrent.piecehashes);
 			for(i = 0; i < len torrent.piecehashes; i++) {
-				state: ref DigestState;
+				digeststate: ref DigestState;
 				for(;;) {
 					(buf, cerr) := <-chunkch;
 					if(cerr != nil)
 						fail(sprint("reading piece %d for verification: %s", i, cerr));
 					if(buf == nil)
 						break;
-					state = keyring->sha1(buf, len buf, nil, state);
+					digeststate = keyring->sha1(buf, len buf, nil, digeststate);
 				}
 
 				hash := array[Keyring->SHA1dlen] of byte;
-				keyring->sha1(nil, 0, hash, state);
+				keyring->sha1(nil, 0, hash, digeststate);
 
 				if(hex(hash) == hex(torrent.piecehashes[i]))
-					(sched->piecehave).set(i);
+					(state->piecehave).set(i);
 			}
 		}
 	}
@@ -263,7 +266,7 @@ init(nil: ref Draw->Context, args: list of string)
 	trafficmetadown = Traffic.new();
 
 	pieces->prepare(torrent);
-	sched->prepare(len torrent.piecehashes);
+	state->prepare(len torrent.piecehashes);
 
 	rotateips = Pool[string].new(Pools->PoolRotateRandom);
 
@@ -299,12 +302,12 @@ init(nil: ref Draw->Context, args: list of string)
 
 isdone(): int
 {
-	return (sched->piecehave).n == (sched->piecehave).have;
+	return (state->piecehave).n == (state->piecehave).have;
 }
 
 writestate()
 {
-	d := (sched->piecehave).d;
+	d := (state->piecehave).d;
 	n := sys->pwrite(statefd, d, len d, big 0);
 	if(n != len d)
 		warn(sprint("writing state: %r"));
@@ -318,7 +321,7 @@ peerdrop(peer: ref Peer)
 	n := 0;
 	for(i := 0; i < (peer.piecehave).n && n < (peer.piecehave).have; i++)
 		if((peer.piecehave).get(i)) {
-			sched->piececounts[i]--;
+			state->piececounts[i]--;
 			n++;
 		}
 
@@ -479,7 +482,7 @@ unchoke(p: ref Peer)
 
 wantpeerpieces(p: ref Peer): ref Bits
 {
-	b := Bits.union(array[] of {sched->piecehave, sched->piecebusy});
+	b := Bits.union(array[] of {state->piecehave, state->piecebusy});
 	b.invert();
 	b = Bits.and(array[] of {p.piecehave, b});
 
@@ -761,11 +764,11 @@ main()
 
 			rotateips.pooladdunique(maskip(np.ip));
 
-			if((sched->piecehave).have == 0) {
+			if((state->piecehave).have == 0) {
 				peersend(peer, ref Msg.Keepalive());
 			} else {
-				say("sending bitfield to peer: "+(sched->piecehave).text());
-				peersend(peer, ref Msg.Bitfield((sched->piecehave).bytes()));
+				say("sending bitfield to peer: "+(state->piecehave).text());
+				peersend(peer, ref Msg.Bitfield((state->piecehave).bytes()));
 			}
 
 			if(len peers->peersactive() < Unchokedmax) {
@@ -869,7 +872,7 @@ main()
 				say(sprint("%s already had piece %d", peer.text(), m.index));
 				# xxx disconnect?
 			} else
-				sched->piececounts[m.index]++;
+				state->piececounts[m.index]++;
 
 			say(sprint("remote now has piece %d", m.index));
 			peer.piecehave.set(m.index);
@@ -897,7 +900,7 @@ main()
 			n := 0;
 			for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
 				if(peer.piecehave.get(i)) {
-					sched->piececounts[i]++;
+					state->piececounts[i]++;
 					n++;
 				}
 
@@ -1004,12 +1007,12 @@ main()
 					continue;
 				}
 
-				(sched->piecehave).set(piece.index);
+				(state->piecehave).set(piece.index);
 				pieces->piecedel(pieces->piecefind(piece.index));
 
 				writestate();
 				say("piece now done: "+piece.text());
-				say(sprint("pieces: have %s, busy %s", (sched->piecehave).text(), (sched->piecebusy).text()));
+				say(sprint("pieces: have %s, busy %s", (state->piecehave).text(), (state->piecebusy).text()));
 
 				for(l = peers->peers; l != nil; l = tl l)
 					peersend(hd l, ref Msg.Have(piece.index));

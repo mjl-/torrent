@@ -5,10 +5,11 @@ include "torrentget.m";
 sys: Sys;
 rand: Rand;
 bitarray: Bitarray;
+misc: Misc;
 peers: Peers;
 pieces: Pieces;
 requests: Requests;
-misc: Misc;
+state: State;
 
 sprint: import sys;
 Bits: import bitarray;
@@ -16,23 +17,17 @@ Peer: import peers;
 Piece: import pieces;
 Req, Reqs, Batch: import requests;
 
-init(randmod: Rand, peersmod: Peers, piecesmod: Pieces)
+init(randmod: Rand, statemod: State, peersmod: Peers, piecesmod: Pieces)
 {
 	sys = load Sys Sys->PATH;
 	rand = randmod;
 	bitarray = load Bitarray Bitarray->PATH;
 	misc = load Misc Misc->PATH;
 	misc->init(rand);
+	state = statemod;
 	peers = peersmod;
 	pieces = piecesmod;
 	requests = load Requests Requests->PATH;
-}
-
-prepare(npieces: int)
-{
-	piecehave = Bits.new(npieces);
-	piecebusy = Bits.new(npieces);
-	piececounts = array[npieces] of {* => 0};
 }
 
 request(reqch: chan of ref (ref Piece, list of Req, chan of int), p: ref Piece, reqs: list of Req)
@@ -62,10 +57,10 @@ getrandompiece(): ref Piece
 {
 	# will succeed, this is only called when few pieces are busy
 	for(;;) {
-		i := rand->rand(piecebusy.n);
-		if(!piecebusy.get(i)) {
+		i := rand->rand((state->piecebusy).n);
+		if(!(state->piecebusy).get(i)) {
 			p := pieces->piecenew(i);
-			piecebusy.set(i);
+			(state->piecebusy).set(i);
 			return p;
 		}
 	}
@@ -80,11 +75,11 @@ getrarestpiece(b: ref Bits)
 	for(i := 0; i < b.n && seen < b.have; i++) {
 		if(b.get(i)) {
 			seen++;
-			if(min < 0 || piececounts[i] < min) {
+			if(min < 0 || (state->piececounts)[i] < min) {
 				rarest = nil;
-				min = piececounts[i];
+				min = (state->piececounts)[i];
 			}
-			if(piececounts[i] <= min)
+			if(state->piececounts[i] <= min)
 				rarest = i::rarest;
 		}
 	}
@@ -107,11 +102,11 @@ needblocks(peer: ref Peer): int
 inactiverare(): array of ref (int, int)
 {
 	# we just use .t0 of the ref (int, int).  it's used here so we can use polymorphic functions
-	a := array[piecebusy.n-piecebusy.have] of ref (int, int);
-	say(sprint("inactiverare: %d pieces, %d busy, finding %d", piecebusy.n, piecebusy.have, len a));
+	a := array[(state->piecebusy).n-(state->piecebusy).have] of ref (int, int);
+	say(sprint("inactiverare: %d pieces, %d busy, finding %d", (state->piecebusy).n, (state->piecebusy).have, len a));
 	j := 0;
-	for(i := 0; j < len a && i < piecebusy.n; i++)
-		if(!piecebusy.get(i))
+	for(i := 0; j < len a && i < (state->piecebusy).n; i++)
+		if(!(state->piecebusy).get(i))
 			a[j++] = ref (i, 0);
 
 	misc->randomize(a);
@@ -120,7 +115,7 @@ inactiverare(): array of ref (int, int)
 
 rarepiececmp(p1, p2: ref Piece): int
 {
-	return piececounts[p1.index]-piececounts[p2.index];
+	return state->piececounts[p1.index]-state->piececounts[p2.index];
 }
 
 piecesrareorphan(orphan: int): array of ref Piece
@@ -146,7 +141,7 @@ progresscmp(p1, p2: ref Piece): int
 
 rarestfirst(): int
 {
-	return piecehave.have >= Torrentget->Piecesrandom;
+	return (state->piecehave).have >= Torrentget->Piecesrandom;
 }
 
 schedule(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)
@@ -183,7 +178,7 @@ schedule0(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pe
 			v := rare[i].t0;  # it's a ref tuple to allow using polymorphic functions
 			say(sprint("using new rare piece %d", v));
 			p := pieces->piecenew(v);
-			piecebusy.set(v);
+			(state->piecebusy).set(v);
 			schedpieces(reqch, peer, array[] of {p});
 			if(!needblocks(peer))
 				return;
@@ -230,7 +225,7 @@ schedule0(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pe
 
 		# otherwise, get new random pieces to work on
 		say("schedule: trying random pieces");
-		while(needblocks(peer) && piecebusy.have < piecebusy.n) {
+		while(needblocks(peer) && (state->piecebusy).have < (state->piecebusy).n) {
 			say("schedule: getting another random piece...");
 			piece := getrandompiece();
 			b := requests->batches(piece);

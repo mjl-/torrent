@@ -272,15 +272,21 @@ Verify: module {
 	piecehash:	fn(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Pieces->Piece): (array of byte, string);
 };
 
-Schedule: module {
-	PATH:	con "/dis/lib/bittorrent/schedule.dis";
+State: module {
+	PATH:	con "/dis/lib/bittorrent/state.dis";
 
-	init:	fn(randmod: Rand, peersmod: Peers, piecesmod: Pieces);
+	init:	fn();
 	prepare:	fn(npieces: int);
 
 	piecehave:	ref Bitarray->Bits;
 	piecebusy:	ref Bitarray->Bits;
 	piececounts:	array of int;  # for each piece, count of peers that have it
+};
+
+Schedule: module {
+	PATH:	con "/dis/lib/bittorrent/schedule.dis";
+
+	init:	fn(randmod: Rand, state: State, peersmod: Peers, piecesmod: Pieces);
 
 	needblocks:	fn(p: ref Peers->Peer): int;
 	schedule:	fn(reqch: chan of ref (ref Pieces->Piece, list of Requests->Req, chan of int), p: ref Peers->Peer);
