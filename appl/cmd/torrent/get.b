@@ -428,7 +428,7 @@ request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 		else if(busy.t1 < 0)
 			piece.busy[req.blockindex].t1 = peer.id;
 		else
-			fail("both slots busy...");
+			raise "both slots busy...";
 
 		# xxx send in one packet?
 		say("request: requesting "+req.text());
@@ -897,8 +897,12 @@ main()
 			say(sprint("%s sent data for piece=%d begin=%d length=%d", peer.text(), m.index, m.begin, len m.d));
 
 			piece := pieces->piecefind(m.index);
-			if(piece == nil)
-				fail(sprint("could not find piece %d", m.index));
+			if(piece == nil) {
+				warn(sprint("got data for inactive piece %d", m.index));
+				setfaulty(peer.np.ip);
+				peerdrop(peer);
+				continue;
+			}
 
 			req := Req.new(m.index, m.begin/Blocksize);
 			if(blocksize(req) != len m.d) {
@@ -944,7 +948,7 @@ main()
 			if(!peer.buf.tryadd(piece, m.begin, m.d)) {
 				bufflush(peer.buf);
 				if(!peer.buf.tryadd(piece, m.begin, m.d))
-					fail("tryadd failed...");
+					raise "tryadd failed...";
 			}
 
 			# flush now, rather then delaying it
@@ -1229,7 +1233,7 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	d[i:] = localpeerid;
 	i += 20;
 	if(i != len d)
-		fail("bad peer header, internal error");
+		raise "bad peer header, internal error";
 
 	n := netwrite(fd, d, len d);
 	if(n != len d)
