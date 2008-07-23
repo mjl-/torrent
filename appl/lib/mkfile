@@ -9,8 +9,7 @@ TARG=\
 MODULES=\
 
 SYSMODULES=\
-	sys.m\
-	bufio.m\
+	bitarray.m\
 
 DISBIN=$ROOT/dis/lib
 

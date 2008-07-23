@@ -10,35 +10,22 @@ TARG=\
 	info.dis\
 
 MODULES=\
+	../../lib/bittorrent/get.m\
 
 SYSMODULES=\
+	arg.m\
 	bufio.m\
 	bundle.m\
 	daytime.m\
 	draw.m\
-	env.m\
-	filepat.m\
-	filter.m\
-	fslib.m\
-	ir.m\
+	ip.m\
 	keyring.m\
-	man.m\
-	newns.m\
-	prefab.m\
-	readdir.m\
-	regex.m\
-	security.m\
-	sh.m\
-	srv.m\
+	math.m\
+	lists.m\
 	string.m\
-	styx.m\
-	styxlib.m\
 	sys.m\
-	tk.m\
-	tkclient.m\
-	url.m\
-	webget.m\
-	workdir.m\
+	bitarray.m\
+	bittorrent.m\
 
 DISBIN=$ROOT/dis/torrent
 
