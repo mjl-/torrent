@@ -553,6 +553,85 @@ nextoptimisticunchoke(): ref Peer
 	return nil;
 }
 
+chokingupload(gen: int)
+{
+	if(gen % 3 == 2)
+		return;
+
+	# find the peer that has been unchoked longest
+	oldest: ref Peer;
+	nunchoked := 0;
+	for(l := peers->peers; l != nil; l = tl l) {
+		p := hd l;
+		if(!p.localchoking() && p.remoteinterested()) {
+			nunchoked++;
+			if(oldest == nil || p.lastunchoke < oldest.lastunchoke)
+				oldest = p;
+		}
+	}
+
+	# find all peers that we may want to unchoke randomly
+	others: list of ref Peer;
+	for(l = peers->peers; l != nil; l = tl l) {
+		p := hd l;
+		if(p.remoteinterested() && p.localchoking() && p != oldest)
+			others = p::others;
+	}
+
+	# choke oldest unchoked peer if we want to reuse its slot
+	if(oldest != nil && nunchoked+len others >= Seedunchokedmax) {
+		choke(oldest);
+		nunchoked--;
+	}
+
+	othersa := l2a(others);
+	misc->randomize(othersa);
+	for(i := 0; i < len othersa && nunchoked+i < Seedunchokedmax; i++)
+		unchoke(othersa[i]);
+}
+
+chokingdownload(gen: int)
+{
+	# new optimistic unchoke?
+	if(gen % 3 == 0)
+		peers->luckypeer = nextoptimisticunchoke();
+
+	# make sorted array of all peers, sorted by upload rate, then by interestedness
+	allpeers := array[len peers->peers] of ref (ref Peer, int);  # peer, rate
+	i := 0;
+	luckyindex := -1;
+	for(l := peers->peers; l != nil; l = tl l) {
+		if(peers->luckypeer != nil && hd l == peers->luckypeer)
+			luckyindex = i;
+		allpeers[i++] = ref (hd l, (hd l).down.rate());
+	}
+	sort(allpeers, peerratecmp);
+
+	# determine N interested peers with highest upload rate
+	nintr := 0;
+	for(i = 0; nintr < Unchokedmax && i < len allpeers; i++)
+		if(allpeers[i].t0.remoteinterested())
+			nintr++;
+	unchokeend := i;  # index of first peer to choke.  element before (if any) is slowest peer to unchoke
+
+	# replace slowest of N by optimistic unchoke if lucky peer was not already going to be unchoked
+	if(luckyindex >= 0 && luckyindex >= unchokeend && unchokeend-1 >= 0) {
+		allpeers[luckyindex] = allpeers[unchokeend-1];
+		allpeers[unchokeend-1] = ref (peers->luckypeer, 0);
+	}
+
+	# now unchoke the N peers, and all non-interested peers that are faster.  choke all other peers if they weren't already.
+	for(i = 0; i < len allpeers; i++) {
+		(p, nil) := *allpeers[i];
+		if(p == nil)
+			say(sprint("bad allpeers, len allpeers %d, len peers %d, i %d, unchokeend %d, luckyindex %d, nintr %d", len allpeers, len peers->peers, i, unchokeend, luckyindex, nintr));
+		if(i < unchokeend && p.localchoking())
+			unchoke(p);
+		else if(i >= unchokeend && !p.localchoking())
+			choke(p);
+	}
+}
+
 
 ticker()
 {
@@ -587,89 +666,11 @@ main()
 		say(sprint("eta: %d: %s", etasecs, etastr(etasecs)));
 
 		# do choking/unchoking algorithm round
-		if(isdone()) {
-			# we are seeding...
-
-			if(gen % 3 == 2) {
-				gen++;
-				continue;
-			}
-
-			# find the peer that has been unchoked longest
-			oldest: ref Peer;
-			nunchoked := 0;
-			for(l = peers->peers; l != nil; l = tl l) {
-				p := hd l;
-				if(!p.localchoking() && p.remoteinterested()) {
-					nunchoked++;
-					if(oldest == nil || p.lastunchoke < oldest.lastunchoke)
-						oldest = p;
-				}
-			}
-
-			# find all peers that we may want to unchoke randomly
-			others: list of ref Peer;
-			for(l = peers->peers; l != nil; l = tl l) {
-				p := hd l;
-				if(p.remoteinterested() && p.localchoking() && p != oldest)
-					others = p::others;
-			}
-
-			# choke oldest unchoked peer if we want to reuse its slot
-			if(oldest != nil && nunchoked+len others >= Seedunchokedmax) {
-				choke(oldest);
-				nunchoked--;
-			}
-
-			othersa := l2a(others);
-			misc->randomize(othersa);
-			for(i := 0; i < len othersa && nunchoked+i < Seedunchokedmax; i++)
-				unchoke(othersa[i]);
-
-			gen++;
-		} else {
-			# we are "leeching"...
-
-			# new optimistic unchoke?
-			if(gen % 3 == 0)
-				peers->luckypeer = nextoptimisticunchoke();
-
-			# make sorted array of all peers, sorted by upload rate, then by interestedness
-			allpeers := array[len peers->peers] of ref (ref Peer, int);  # peer, rate
-			i := 0;
-			luckyindex := -1;
-			for(l = peers->peers; l != nil; l = tl l) {
-				if(peers->luckypeer != nil && hd l == peers->luckypeer)
-					luckyindex = i;
-				allpeers[i++] = ref (hd l, (hd l).down.rate());
-			}
-			sort(allpeers, peerratecmp);
-
-			# determine N interested peers with highest upload rate
-			nintr := 0;
-			for(i = 0; nintr < Unchokedmax && i < len allpeers; i++)
-				if(allpeers[i].t0.remoteinterested())
-					nintr++;
-			unchokeend := i;  # index of first peer to choke.  element before (if any) is slowest peer to unchoke
-
-			# replace slowest of N by optimistic unchoke if lucky peer was not already going to be unchoked
-			if(luckyindex >= 0 && luckyindex >= unchokeend && unchokeend-1 >= 0) {
-				allpeers[luckyindex] = allpeers[unchokeend-1];
-				allpeers[unchokeend-1] = ref (peers->luckypeer, 0);
-			}
-
-			# now unchoke the N peers, and all non-interested peers that are faster.  choke all other peers if they weren't already.
-			for(i = 0; i < len allpeers; i++) {
-				(p, nil) := *allpeers[i];
-				if(p == nil)
-					say(sprint("bad allpeers, len allpeers %d, len peers %d, i %d, unchokeend %d, luckyindex %d, nintr %d", len allpeers, len peers->peers, i, unchokeend, luckyindex, nintr));
-				if(i < unchokeend && p.localchoking())
-					unchoke(p);
-				else if(i >= unchokeend && !p.localchoking())
-					choke(p);
-			}
-			gen++;
-		}
+		if(isdone())
+			chokingupload(gen);
+		else
+			chokingdownload(gen);
+		gen++;
 
 	<-trackkickchan =>
 		if(!stopped) {
