@@ -444,7 +444,7 @@ unchoke(p: ref Peer)
 
 wantpeerpieces(p: ref Peer): ref Bits
 {
-	b := Bits.union(array[] of {state->piecehave, state->piecebusy});
+	b := (state->piecehave).clone();
 	b.invert();
 	b = Bits.and(array[] of {p.piecehave, b});
 
@@ -454,16 +454,19 @@ wantpeerpieces(p: ref Peer): ref Bits
 
 interesting(p: ref Peer)
 {
-	b := wantpeerpieces(p);
-
-	if(p.localinterested() && b.isempty()) {
-		say("we are now interested in "+p.text());
-		p.state &= ~Peers->LocalInterested;
-		peersend(p, ref Msg.Notinterested());
-	} else if(!p.localinterested() && !b.isempty()) {
-		say("we are now interested in "+p.text());
-		p.state |= Peers->LocalInterested;
-		peersend(p, ref Msg.Interested());
+	# xxx we should call this more often.  a peer may have a piece we don't have yet, but we may have assigned all remaining blocks to (multiple) other peers, or we may be in paranoid mode
+	if(p.localinterested()) {
+		if(p.reqs.isempty() && wantpeerpieces(p).isempty()) {
+			say("we are no longer interested in "+p.text());
+			p.state &= ~Peers->LocalInterested;
+			peersend(p, ref Msg.Notinterested());
+		}
+	} else {
+		if(!wantpeerpieces(p).isempty()) {
+			say("we are now interested in "+p.text());
+			p.state |= Peers->LocalInterested;
+			peersend(p, ref Msg.Interested());
+		}
 	}
 }
 
