@@ -277,9 +277,13 @@ writestate()
 		say("state written");
 }
 
-
-peerdrop(peer: ref Peer)
+peerdrop(peer: ref Peer, faulty: int, err: string)
 {
+	if(err != nil)
+		warn(err);
+	if(faulty)
+		setfaulty(peer.np.ip);
+
 	n := 0;
 	for(i := 0; i < (peer.piecehave).n && n < (peer.piecehave).have; i++)
 		if((peer.piecehave).get(i)) {
@@ -632,6 +636,266 @@ chokingdownload(gen: int)
 	}
 }
 
+handleinmsg(peer: ref Peer, msg: ref Msg)
+{
+	# xxx fix this code.  it can easily block now
+
+	if(msg == nil)
+		return peerdrop(peer, 0, "eof from peer "+peer.text());
+
+	peer.msgseq++;
+
+	msize := msg.packedsize();
+	dsize := 0;
+	pick m := msg {
+	Piece =>
+		# xxx count pieces we did not request as overhead (meta)?
+		dsize = len m.d;
+		peer.down.add(dsize);
+		trafficdown.add(dsize);
+		peer.down.packet();
+		trafficdown.packet();
+	* =>
+		peer.metadown.packet();
+		trafficmetadown.packet();
+	}
+	peer.metadown.add(msize-dsize);
+	trafficmetadown.add(msize-dsize);
+
+	pick m := msg {
+	Keepalive =>
+		say("keepalive");
+
+	Choke =>
+		if(peer.remotechoking())
+			return say(sprint("%s choked us twice...", peer.text())); # xxx disconnect?
+
+		say(sprint("%s choked us...", peer.text()));
+		peer.state |= Peers->RemoteChoking;
+
+	Unchoke =>
+		if(!peer.remotechoking())
+			return say(sprint("%s unchoked us twice...", peer.text())); # xxx disconnect?
+
+		say(sprint("%s unchoked us", peer.text()));
+		peer.state &= ~Peers->RemoteChoking;
+
+		schedule(peer);
+
+	Interested =>
+		if(peer.remoteinterested())
+			return say(sprint("%s is interested again...", peer.text())); # xxx disconnect?
+
+		say(sprint("%s is interested", peer.text()));
+		peer.state |= Peers->RemoteInterested;
+
+		if(!peer.localchoking() && len peers->peersactive() >= Unchokedmax && !isdone()) {
+			# xxx choke slowest peer that is not the optimistic unchoke
+		}
+
+	Notinterested =>
+		if(!peer.remoteinterested())
+			return say(sprint("%s is uninterested again...", peer.text())); # xxx disconnect?
+
+		say(sprint("%s is no longer interested", peer.text()));
+		peer.state &= ~Peers->RemoteInterested;
+
+		# xxx if this peer was choked, unchoke another peer?
+
+	Have =>
+		if(m.index >= torrent.piececount)
+			return peerdrop(peer, 1, sprint("%s sent 'have' for invalid piece %d, disconnecting", peer.text(), m.index));
+
+		if(peer.piecehave.get(m.index)) {
+			say(sprint("%s already had piece %d", peer.text(), m.index)); # xxx disconnect?
+		} else
+			state->piececounts[m.index]++;
+
+		say(sprint("remote now has piece %d", m.index));
+		peer.piecehave.set(m.index);
+
+		interesting(peer);
+		if(!peer.remotechoking())
+			schedule(peer);
+
+	Bitfield =>
+		if(peer.msgseq != 1)
+			return peerdrop(peer, 1, sprint("%s sent bitfield after first message, disconnecting", peer.text()));
+
+		err: string;
+		(peer.piecehave, err) = Bits.mk(torrent.piececount, m.d);
+		if(err != nil)
+			return peerdrop(peer, 1, sprint("%s sent bogus bitfield message: %s, disconnecting", peer.text(), err));
+
+		say("remote sent bitfield, haves "+peer.piecehave.text());
+
+		n := 0;
+		for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
+			if(peer.piecehave.get(i)) {
+				state->piececounts[i]++;
+				n++;
+			}
+
+		interesting(peer);
+
+	Piece =>
+		say(sprint("%s sent data for piece=%d begin=%d length=%d", peer.text(), m.index, m.begin, len m.d));
+
+		piece := pieces->piecefind(m.index);
+		if(piece == nil)
+			return peerdrop(peer, 1, sprint("got data for inactive piece %d", m.index));
+
+		req := Req.new(m.index, m.begin/Blocksize);
+		if(blocksize(req) != len m.d)
+			return peerdrop(peer, 1, sprint("%s sent bad size for block %s, disconnecting", peer.text(), req.text()));
+
+		if(!peer.reqs.take(req)) {
+			exp := "nothing";
+			if(!peer.reqs.isempty())
+				exp = peer.reqs.peek().text();
+			return peerdrop(peer, 1, sprint("%s sent block %s, expected %s, disconnecting", peer.text(), req.text(), exp));
+		}
+
+		blockindex := m.begin/Blocksize;
+
+		if(piece.have.get(blockindex))
+			return say("already have this block, skipping...");
+
+		# possibly send cancel to other peer
+		busy := piece.busy[blockindex];
+		busypeer: ref Peer;
+		if(busy.t0 >= 0 && busy.t0 != peer.id) {
+			busypeer = peers->peerfind(busy.t0);
+			piece.busy[blockindex].t0 = -1;
+		} else if(busy.t1 >= 0 && busy.t1 != peer.id) {
+			busypeer = peers->peerfind(busy.t1);
+			piece.busy[blockindex].t1 = -1;
+		}
+		if(busypeer != nil) {
+			peer.reqs.cancel(Req.new(m.index, m.begin/Blocksize));
+			peersend(peer, ref Msg.Cancel(m.index, m.begin, len m.d));
+		}
+
+		# add block to buffer.  if new block does not fit in, flush the old data.
+		if(!peer.buf.tryadd(piece, m.begin, m.d)) {
+			bufflush(peer.buf);
+			if(!peer.buf.tryadd(piece, m.begin, m.d))
+				raise "tryadd failed...";
+		}
+
+		# flush now, rather then delaying it
+		if(peer.buf.isfull())
+			bufflush(peer.buf);
+
+		# if this completes the batch, flush it for all peers that have blocks belonging to it
+		batchflushcomplete(piece, blockindex);
+
+		# progress with piece
+		if(piece.hashstateoff == m.begin)
+			piece.hashadd(m.d);
+
+		piece.have.set(blockindex);
+		piece.done[blockindex] = peer.id;
+		totalleft -= big len m.d;
+
+		if(piece.isdone()) {
+			# flush all bufs about this piece, also from other peers, to disk.  to make hash-checking read right data.
+			for(l := peers->peers; l != nil; l = tl l) {
+				p := hd l;
+				if(p.buf.piece == m.index) {
+					say("flushing buf of other peer before hash check");
+					bufflush(p.buf);
+				}
+			}
+
+			wanthash := hex(torrent.piecehashes[piece.index]);
+			(piecehash, herr) := verify->piecehash(dstfds, torrent.piecelen, piece);
+			if(herr != nil)
+				fail("verifying hash: "+herr);
+			havehash := hex(piecehash);
+			if(wanthash != havehash) {
+				say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
+				setfaulty(peer.np.ip);
+				peerdrop(peer, 0, nil);
+				piece.hashstate = nil;
+				piece.hashstateoff = 0;
+				piece.have.clearall();
+				if(Dflag) {
+					for(i := 0; i < len piece.busy; i++)
+						if(piece.busy[i].t0 >= 0 || piece.busy[i].t1 >= 0)
+							raise sprint("piece %d should be complete, but block %d is busy", piece.index, i);
+				}
+				
+				# xxx what do to with other peers?
+				return;
+			}
+
+			(state->piecehave).set(piece.index);
+			pieces->piecedel(pieces->piecefind(piece.index));
+
+			# this could have been the last piece this peer had, making us no longer interested
+			for(l = peers->peers; l != nil; l = tl l)
+				interesting(hd l);
+
+			writestate();
+			say("piece now done: "+piece.text());
+			say(sprint("pieces: have %s, busy %s", (state->piecehave).text(), (state->piecebusy).text()));
+
+			for(l = peers->peers; l != nil; l = tl l)
+				peersend(hd l, ref Msg.Have(piece.index));
+		}
+		schedule(peer);
+
+		if(isdone()) {
+			trackerevent = "completed";
+			spawn trackkick(0);
+			npeers: list of ref Peer;
+			for(l := peers->peers; l != nil; l = tl l) {
+				p := hd l;
+				if(p.isdone()) {
+					say("done: dropping seed "+p.fulltext());
+					peerdrop(p, 0, nil);
+				} else {
+					npeers = p::npeers;
+					# we won't act on becoming interested while unchoked anymore
+					if(!p.remoteinterested() && !p.localchoking())
+						choke(p);
+				}
+			}
+			peers->peers = lists->reverse(npeers);
+			print("DONE!\n");
+		}
+
+	Request =>
+		b := Block.new(m.index, m.begin, m.length);
+		say(sprint("%s sent request for %s", peer.text(), b.text()));
+
+		if(m.length > Blocksizemax)
+			return peerdrop(peer, 0, "requested block too large, disconnecting");
+
+		if(peer.piecehave.get(m.index))
+			return peerdrop(peer, 1, "peer requested piece it already claimed to have");
+
+		if(pieces->blockhave(peer.wants, b))
+			return say("peer already wanted block, skipping");
+
+		if(len peer.wants >= Blockqueuemax)
+			return peerdrop(peer, 0, sprint("peer scheduled one too many blocks, already has %d scheduled, disconnecting", len peer.wants));
+
+		peer.wants = b::peer.wants;
+		if(!peer.localchoking() && peer.remoteinterested() && !peer.netwriting && len peer.wants > 0)
+			blockreadsend(peer);
+
+	Cancel =>
+		b := Block.new(m.index, m.begin, m.length);
+		say(sprint("%s sent cancel for %s", peer.text(), b.text()));
+		nwants := pieces->blockdel(peer.wants, b);
+		if(len nwants == len peer.wants)
+			return say("peer did not want block before, skipping");
+		peer.wants = nwants;
+	}
+}
+
 
 ticker()
 {
@@ -750,309 +1014,7 @@ main()
 			awaitpeer();
 
 	(peer, msg) := <-peerinmsgchan =>
-		# xxx fix this code.  it can easily block now
-
-		if(msg == nil) {
-			warn("eof from peer "+peer.text());
-			peerdrop(peer);
-			continue;
-		}
-
-		peer.msgseq++;
-
-		msize := msg.packedsize();
-		dsize := 0;
-		pick m := msg {
-		Piece =>
-			dsize = len m.d;
-			peer.down.add(dsize);
-			trafficdown.add(dsize);
-			peer.down.packet();
-			trafficdown.packet();
-		* =>
-			peer.metadown.packet();
-			trafficmetadown.packet();
-		}
-		peer.metadown.add(msize-dsize);
-		trafficmetadown.add(msize-dsize);
-
-		pick m := msg {
-                Keepalive =>
-			say("keepalive");
-
-		Choke =>
-			if(peer.remotechoking()) {
-				say(sprint("%s choked us twice...", peer.text()));
-				# xxx disconnect?
-				continue;
-			}
-
-			say(sprint("%s choked us...", peer.text()));
-			peer.state |= Peers->RemoteChoking;
-
-		Unchoke =>
-			if(!peer.remotechoking()) {
-				say(sprint("%s unchoked us twice...", peer.text()));
-				# xxx disconnect?
-				continue;
-			}
-
-			say(sprint("%s unchoked us", peer.text()));
-			peer.state &= ~Peers->RemoteChoking;
-
-			schedule(peer);
-
-		Interested =>
-			if(peer.remoteinterested()) {
-				say(sprint("%s is interested again...", peer.text()));
-				# xxx disconnect?
-				continue;
-			}
-
-			say(sprint("%s is interested", peer.text()));
-			peer.state |= Peers->RemoteInterested;
-
-			if(!peer.localchoking() && len peers->peersactive() >= Unchokedmax && !isdone()) {
-				# xxx choke slowest peer that is not the optimistic unchoke
-			}
-
-		Notinterested =>
-			if(!peer.remoteinterested()) {
-				say(sprint("%s is uninterested again...", peer.text()));
-				# xxx disconnect?
-				continue;
-			}
-
-			say(sprint("%s is no longer interested", peer.text()));
-			peer.state &= ~Peers->RemoteInterested;
-
-			# xxx if this peer was choked, unchoke another peer?
-
-                Have =>
-			if(m.index >= torrent.piececount) {
-				say(sprint("%s sent 'have' for invalid piece %d, disconnecting", peer.text(), m.index));
-				peerdrop(peer);
-				continue;
-			}
-			if(peer.piecehave.get(m.index)) {
-				say(sprint("%s already had piece %d", peer.text(), m.index));
-				# xxx disconnect?
-			} else
-				state->piececounts[m.index]++;
-
-			say(sprint("remote now has piece %d", m.index));
-			peer.piecehave.set(m.index);
-
-			interesting(peer);
-			if(!peer.remotechoking())
-				schedule(peer);
-
-                Bitfield =>
-			if(peer.msgseq != 1) {
-				say(sprint("%s sent bitfield after first message, disconnecting", peer.text()));
-				peerdrop(peer);
-				continue;
-			}
-
-			err: string;
-			(peer.piecehave, err) = Bits.mk(torrent.piececount, m.d);
-			if(err != nil) {
-				say(sprint("%s sent bogus bitfield message: %s, disconnecting", peer.text(), err));
-				peerdrop(peer);
-				continue;
-			}
-			say("remote sent bitfield, haves "+peer.piecehave.text());
-
-			n := 0;
-			for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
-				if(peer.piecehave.get(i)) {
-					state->piececounts[i]++;
-					n++;
-				}
-
-			interesting(peer);
-
-                Piece =>
-			say(sprint("%s sent data for piece=%d begin=%d length=%d", peer.text(), m.index, m.begin, len m.d));
-
-			piece := pieces->piecefind(m.index);
-			if(piece == nil) {
-				warn(sprint("got data for inactive piece %d", m.index));
-				setfaulty(peer.np.ip);
-				peerdrop(peer);
-				continue;
-			}
-
-			req := Req.new(m.index, m.begin/Blocksize);
-			if(blocksize(req) != len m.d) {
-				warn(sprint("%s sent bad size for block %s, disconnecting", peer.text(), req.text()));
-				setfaulty(peer.np.ip);
-				peerdrop(peer);
-				continue;
-			}
-
-			if(!peer.reqs.take(req)) {
-				exp := "nothing";
-				if(!peer.reqs.isempty())
-					exp = peer.reqs.peek().text();
-				warn(sprint("%s sent block %s, expected %s, disconnecting", peer.text(), req.text(), exp));
-				setfaulty(peer.np.ip);
-				peerdrop(peer);
-				continue;
-			}
-
-			blockindex := m.begin/Blocksize;
-
-			if(piece.have.get(blockindex)) {
-				say("already have this block, skipping...");
-				continue;
-			}
-
-			# possibly send cancel to other peer
-			busy := piece.busy[blockindex];
-			busypeer: ref Peer;
-			if(busy.t0 >= 0 && busy.t0 != peer.id) {
-				busypeer = peers->peerfind(busy.t0);
-				piece.busy[blockindex].t0 = -1;
-			} else if(busy.t1 >= 0 && busy.t1 != peer.id) {
-				busypeer = peers->peerfind(busy.t1);
-				piece.busy[blockindex].t1 = -1;
-			}
-			if(busypeer != nil) {
-				peer.reqs.cancel(Req.new(m.index, m.begin/Blocksize));
-				peersend(peer, ref Msg.Cancel(m.index, m.begin, len m.d));
-			}
-
-			# add block to buffer.  if new block does not fit in, flush the old data.
-			if(!peer.buf.tryadd(piece, m.begin, m.d)) {
-				bufflush(peer.buf);
-				if(!peer.buf.tryadd(piece, m.begin, m.d))
-					raise "tryadd failed...";
-			}
-
-			# flush now, rather then delaying it
-			if(peer.buf.isfull())
-				bufflush(peer.buf);
-
-			# if this completes the batch, flush it for all peers that have blocks belonging to it
-			batchflushcomplete(piece, blockindex);
-
-			# progress with piece
-			if(piece.hashstateoff == m.begin)
-				piece.hashadd(m.d);
-
-			piece.have.set(blockindex);
-			piece.done[blockindex] = peer.id;
-			totalleft -= big len m.d;
-
-			if(piece.isdone()) {
-				# flush all bufs about this piece, also from other peers, to disk.  to make hash-checking read right data.
-				for(l := peers->peers; l != nil; l = tl l) {
-					p := hd l;
-					if(p.buf.piece == m.index) {
-						say("flushing buf of other peer before hash check");
-						bufflush(p.buf);
-					}
-				}
-
-				wanthash := hex(torrent.piecehashes[piece.index]);
-				(piecehash, herr) := verify->piecehash(dstfds, torrent.piecelen, piece);
-				if(herr != nil)
-					fail("verifying hash: "+herr);
-				havehash := hex(piecehash);
-				if(wanthash != havehash) {
-					say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
-					setfaulty(peer.np.ip);
-					peerdrop(peer);
-					piece.hashstate = nil;
-					piece.hashstateoff = 0;
-					piece.have.clearall();
-					if(Dflag) {
-						for(i := 0; i < len piece.busy; i++)
-							if(piece.busy[i].t0 >= 0 || piece.busy[i].t1 >= 0)
-								raise sprint("piece %d should be complete, but block %d is busy", piece.index, i);
-					}
-					
-					# xxx what do to with other peers?
-					continue;
-				}
-
-				(state->piecehave).set(piece.index);
-				pieces->piecedel(pieces->piecefind(piece.index));
-
-				# this could have been the last piece this peer had, making us no longer interested
-				for(l = peers->peers; l != nil; l = tl l)
-					interesting(hd l);
-
-				writestate();
-				say("piece now done: "+piece.text());
-				say(sprint("pieces: have %s, busy %s", (state->piecehave).text(), (state->piecebusy).text()));
-
-				for(l = peers->peers; l != nil; l = tl l)
-					peersend(hd l, ref Msg.Have(piece.index));
-			}
-			schedule(peer);
-
-			if(isdone()) {
-				trackerevent = "completed";
-				spawn trackkick(0);
-				npeers: list of ref Peer;
-				for(l := peers->peers; l != nil; l = tl l) {
-					p := hd l;
-					if(p.isdone()) {
-						say("done: dropping seed "+p.fulltext());
-						peerdrop(p);
-					} else {
-						npeers = p::npeers;
-						# we won't act on becoming interested while unchoked anymore
-						if(!p.remoteinterested() && !p.localchoking())
-							choke(p);
-					}
-				}
-				peers->peers = lists->reverse(npeers);
-				print("DONE!\n");
-			}
-
-                Request =>
-			b := Block.new(m.index, m.begin, m.length);
-			say(sprint("%s sent request for %s", peer.text(), b.text()));
-
-			if(m.length > Blocksizemax) {
-				warn("requested block too large, disconnecting");
-				peerdrop(peer);
-				continue;
-			}
-
-			if(peer.piecehave.get(m.index)) {
-				warn("peer requested piece it already claimed to have");
-				peerdrop(peer);
-				setfaulty(peer.np.ip);
-				continue;
-			}
-
-			if(pieces->blockhave(peer.wants, b)) {
-				say("peer already wanted block, skipping");
-				continue;
-			}
-			if(len peer.wants >= Blockqueuemax) {
-				say(sprint("peer scheduled one too many blocks, already has %d scheduled, disconnecting", len peer.wants));
-				peerdrop(peer);
-				continue;
-			}
-			peer.wants = b::peer.wants;
-			if(!peer.localchoking() && peer.remoteinterested() && !peer.netwriting && len peer.wants > 0)
-				blockreadsend(peer);
-
-		Cancel =>
-			b := Block.new(m.index, m.begin, m.length);
-			say(sprint("%s sent cancel for %s", peer.text(), b.text()));
-			nwants := pieces->blockdel(peer.wants, b);
-			if(len nwants == len peer.wants) {
-				say("peer did not want block before, skipping");
-				continue;
-			}
-			peer.wants = nwants;
-		}
+		handleinmsg(peer, msg);
 
 	peer := <-msgwrittenchan =>
 		say(sprint("%s: message written", peer.text()));
