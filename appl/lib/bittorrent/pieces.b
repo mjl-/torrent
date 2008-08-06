@@ -124,10 +124,3 @@ blockdel(l: list of ref Block, b: ref Block): list of ref Block
 			r = hd l::r;
 	return lists->reverse(r);
 }
-
-blocktake(l: list of ref Block): (list of ref Block, ref Block)
-{
-	l = lists->reverse(l);
-	b := hd l;
-	return (lists->reverse(tl l), b);
-}

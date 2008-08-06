@@ -61,19 +61,21 @@ Newpeer.text(np: self Newpeer): string
 
 Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
 {
-	outmsgs := chan of ref Bittorrent->Msg;
+	getmsgch := chan of list of ref Bittorrent->Msg;
 	state := RemoteChoking|LocalChoking;
 	msgseq := 0;
 	writech := chan[4] of ref (int, int, array of byte);
+	readch := chan of ref (int, int, int);
 	return ref Peer(
 		peergen++,
 		np, fd, extensions, peerid, misc->hex(peerid),
-		outmsgs, Reqs.new(Torrentget->Blockqueuesize),
+		0, getmsgch, nil, nil,
+		Reqs.new(Torrentget->Blockqueuesize),
 		Bits.new(npieces),
 		state,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, 0, dialed, Buf.new(), writech, nil);
+		nil, 0, dialed, Buf.new(), writech, readch, nil);
 }
 
 Peer.remotechoking(p: self ref Peer): int

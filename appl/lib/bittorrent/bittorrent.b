@@ -324,20 +324,20 @@ msizes := array[] of {
 Msg.packedsize(mm: self ref Msg): int
 {
 	if(tagof mm == tagof Msg.Keepalive)
-		return 0;
+		return 4;
 	msize := msizes[tag2type[tagof mm]];
 	pick m := mm {
 	Bitfield =>	msize += len m.d;
 	Piece =>	msize += len m.d;
 	}
-	return msize;
+	return 4+msize;
 }
 
 Msg.pack(mm: self ref Msg): array of byte
 {
 	msize := mm.packedsize();
-	d := array[4+msize] of byte;
-	i := p32(d, 0, msize);
+	d := array[msize] of byte;
+	i := p32(d, 0, msize-4);
 
 	if(tagof mm == tagof Msg.Keepalive)
 		return d;

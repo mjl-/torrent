@@ -137,7 +137,6 @@ Pieces: module {
 
 	blockhave:	fn(l: list of ref Block, b: ref Block): int;
 	blockdel:	fn(l: list of ref Block, b: ref Block): list of ref Block;
-	blocktake:	fn(l: list of ref Block): (list of ref Block, ref Block);
 };
 
 
@@ -165,18 +164,20 @@ Peers: module {
 		fd:	ref Sys->FD;
 		extensions, peerid: array of byte;
 		peeridhex:	string;
-		outmsgs:	chan of ref Bittorrent->Msg;
+		getmsg:	int;
+		getmsgch:	chan of list of ref Bittorrent->Msg;
+		metamsgs, datamsgs: list of ref Bittorrent->Msg;
 		reqs:	ref Requests->Reqs;  # we want from remote
 		piecehave:	ref Bitarray->Bits;
 		state:	int;  # interested/choked
 		msgseq:	int;
 		up, down, metaup, metadown: ref Rate->Traffic;
 		wants:	list of ref Pieces->Block;  # remote wants from us
-		netwriting:	int;
 		lastunchoke:	int;
 		dialed:	int;  # whether we initiated connection
 		buf:	ref Buf;  # unwritten part of piece
 		writech:	chan of ref (int, int, array of byte);
+		readch:		chan of ref (int, int, int);
 		pids:	list of int;  # pids of net reader/writer to kill for cleaning up
 
 		new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
