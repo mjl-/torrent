@@ -313,6 +313,8 @@ peerdrop(peer: ref Peer, faulty: int, err: string)
 		awaitpeer();
 
 	peers->peerdel(peer);
+	for(pids := peer.pids; pids != nil; pids = tl pids)
+		kill(hd pids);
 	peer.writech <-= nil;
 }
 
@@ -972,9 +974,11 @@ main()
 			say(sprint("connected to faulty ip %s, dropping connection...", np.ip));
 		} else {
 			peer := Peer.new(np, peerfd, extensions, peerid, dialed, torrent.piececount);
-			spawn peernetreader(peer);
-			spawn peernetwriter(peer);
+			pidch := chan of int;
+			spawn peernetreader(pidch, peer);
+			spawn peernetwriter(pidch, peer);
 			spawn diskwriter(peer.writech);
+			peer.pids = <-pidch::<-pidch::peer.pids;
 			peers->peeradd(peer);
 			say("new peer "+peer.fulltext());
 
@@ -1330,8 +1334,10 @@ msgread(fd: ref Sys->FD): (ref Msg, string)
 }
 
 
-peernetreader(peer: ref Peer)
+peernetreader(pidch: chan of int, peer: ref Peer)
 {
+	pidch <-= sys->pctl(0, nil);
+
 	needwritechan := chan of list of ref (int, int, array of byte);
 	for(;;) {
 		(m, err) := msgread(peer.fd);
@@ -1355,8 +1361,10 @@ peernetreader(peer: ref Peer)
 	}
 }
 
-peernetwriter(peer: ref Peer)
+peernetwriter(pidch: chan of int, peer: ref Peer)
 {
+	pidch <-= sys->pctl(0, nil);
+
 	for(;;) {
 		m := <- peer.outmsgs;
 		if(m == nil)

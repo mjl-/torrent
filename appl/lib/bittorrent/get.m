@@ -177,6 +177,7 @@ Peers: module {
 		dialed:	int;  # whether we initiated connection
 		buf:	ref Buf;  # unwritten part of piece
 		writech:	chan of ref (int, int, array of byte);
+		pids:	list of int;  # pids of net reader/writer to kill for cleaning up
 
 		new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
 		remotechoking:	fn(p: self ref Peer): int;

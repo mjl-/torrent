@@ -73,7 +73,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 		state,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, 0, dialed, Buf.new(), writech);
+		nil, 0, 0, dialed, Buf.new(), writech, nil);
 }
 
 Peer.remotechoking(p: self ref Peer): int
