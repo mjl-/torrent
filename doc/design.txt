@@ -25,7 +25,6 @@ program lifetime:
 	if open existing, also check .torrent.pieces file.
 		if it exists, use it to determine progress
 		else, read all data to determine current state
-- spawn proc that keeps track of pieces
 - spawn proc that connects to tracker
 - spawn proc that accepts incoming connections
 - start main event loop
@@ -38,15 +37,13 @@ every 30 seconds:
 	determine new optimistic unchoke
 every n minutes:
 	send new tracker request
-new list of peers from tracker:
+need to do tracker request:
+	do request.  results will come back as new event
+new list of peers from tracker, or error from tracker:
 	merge in list of known peer to which we are not connected
 	if below max number of connections, spawn proc to dial peers
-error from tracker:
-	log it somewhere, not much else to do
-dialed new peer:
+dialed new peer/new incoming peer:
 	spawn proc to initialize connection, sending bitstring of pieces we have, and reading response from remote
-initialized peer:
-	set state (choked/unchoked), possibly request pieces?  perhaps that should be handled in one place at another event
 incoming from remote peer:
 	unchoke:
 		we can send requests now.
@@ -79,18 +76,21 @@ incoming from remote peer:
 		pick next piece to request from peer, and queue requests.
 	keepalive:
 		peer says it is still alive, nothing to do...
-	
+
 
 processes:
 
 - main
-- tracker
-- peer dialer
+- ticker, for periodic events
+- listener for incoming connections
+- tracker requester
+- upload limiter
+- download limiter
+- peer dialer (multiple)
 - peer net reader (many)
 - peer net writer (many)
 - peer disk reader
 - peer disk writer
-- piecekeeper
 
 
 state:
@@ -109,13 +109,8 @@ state:
 
 
 considerations:
-- we assign pieces to peers.  we don't let multiple peers deliver parts of the same piece.  this is to detect fraudulent peers later on.  we don't want to invalidate our entire piece.
-- the procs reading pieces from peers need to be directly connected to the procs that write to disk.  and vice versa (procs writing pieces to peer need to be connect to procs that read from disk).  if this weren't so, we could be building up huge buffers (e.g. for very slow disk):  we read more from the network than we write to disk.  by directly connecting them (through a buffered channel probably), the procs get some leeway but the situation does not get out of hand.
+- the procs reading pieces from peers need to be directly connected to the procs that write to disk.  and vice versa (procs writing pieces to peer need to be connected to procs that read from disk).  if this weren't so, we could be building up huge buffers (e.g. for very slow disk):  we read more from the network than we write to disk.  by directly connecting them (through a buffered channel probably), the procs get some leeway but the situation does not get out of hand.
 - we send multiple blocks to peers, queued.  we need to keep track of a queue of blocks the remote side wants (if they queue too many request, we'll just have to disconnect them).  the queue has to be accessible because it may need to be flushed.
-- for a first implementation, we don't have to implement the end-game.  it's just an optimisation.
-- we might want to keep the main event-loop agnostic of blocks.  and have the procs handling peer comm only send events when a whole piece is in.  nehh, i think not.  we also have to keep track of upload/download bytes, and we don't want to introduce special locking/channels to that end.
-- for rarest-first, we have to keep track of how many peers have a piece.  it sounds reasonable to keep an array of piece-counts, each element the count for that piece.  we only need to keep track of it while in rarest-first mode.  at the very first, we can do without.
-
 
 writing/reading from the network/disk is a big issue, so it gets its own "section".
 
