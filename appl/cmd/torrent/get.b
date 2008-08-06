@@ -315,6 +315,8 @@ peerdrop(peer: ref Peer, faulty: int, err: string)
 	peers->peerdel(peer);
 	for(pids := peer.pids; pids != nil; pids = tl pids)
 		kill(hd pids);
+	# xxx send these in background?  they might block?
+	peer.outmsgs <-= nil;
 	peer.writech <-= nil;
 }
 
@@ -976,9 +978,9 @@ main()
 			peer := Peer.new(np, peerfd, extensions, peerid, dialed, torrent.piececount);
 			pidch := chan of int;
 			spawn peernetreader(pidch, peer);
-			spawn peernetwriter(pidch, peer);
+			spawn peernetwriter(peer);
 			spawn diskwriter(peer.writech);
-			peer.pids = <-pidch::<-pidch::peer.pids;
+			peer.pids = <-pidch::peer.pids;
 			peers->peeradd(peer);
 			say("new peer "+peer.fulltext());
 
@@ -1361,10 +1363,8 @@ peernetreader(pidch: chan of int, peer: ref Peer)
 	}
 }
 
-peernetwriter(pidch: chan of int, peer: ref Peer)
+peernetwriter(peer: ref Peer)
 {
-	pidch <-= sys->pctl(0, nil);
-
 	for(;;) {
 		m := <- peer.outmsgs;
 		if(m == nil)
