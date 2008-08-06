@@ -166,16 +166,16 @@ Peers: module {
 		extensions, peerid: array of byte;
 		peeridhex:	string;
 		outmsgs:	chan of ref Bittorrent->Msg;
-		reqs:	ref Requests->Reqs;
+		reqs:	ref Requests->Reqs;  # we want from remote
 		piecehave:	ref Bitarray->Bits;
-		state:	int;
+		state:	int;  # interested/choked
 		msgseq:	int;
 		up, down, metaup, metadown: ref Rate->Traffic;
-		wants:	list of ref Pieces->Block;
+		wants:	list of ref Pieces->Block;  # remote wants from us
 		netwriting:	int;
 		lastunchoke:	int;
-		dialed:	int;
-		buf:	ref Buf;
+		dialed:	int;  # whether we initiated connection
+		buf:	ref Buf;  # unwritten part of piece
 		writech:	chan of ref (int, int, array of byte);
 
 		new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;

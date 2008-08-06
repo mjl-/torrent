@@ -714,8 +714,9 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritechan: chan of list of ref (i
 
 		say(sprint("%s is no longer interested", peer.text()));
 		peer.state &= ~Peers->RemoteInterested;
+		peer.wants = nil;
 
-		# xxx if this peer was choked, unchoke another peer?
+		# if peer was unchoked, we'll unchoke another during next round
 
 	Have =>
 		if(m.index >= torrent.piececount)
