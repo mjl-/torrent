@@ -64,6 +64,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 	outmsgs := chan of ref Bittorrent->Msg;
 	state := RemoteChoking|LocalChoking;
 	msgseq := 0;
+	writech := chan[4] of ref (int, int, array of byte);
 	return ref Peer(
 		peergen++,
 		np, fd, extensions, peerid, misc->hex(peerid),
@@ -72,7 +73,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 		state,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, 0, dialed, Buf.new());
+		nil, 0, 0, dialed, Buf.new(), writech);
 }
 
 Peer.remotechoking(p: self ref Peer): int

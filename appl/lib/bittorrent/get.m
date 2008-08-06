@@ -108,6 +108,7 @@ Pieces: module {
 		hashstateoff:	int;
 		index:	int;
 		have:	ref Bitarray->Bits;
+		written:	ref Bitarray->Bits;
 		length:	int;
 		busy:	array of (int, int);  # peerid, peerid
 		done:	array of int;  # peerid
@@ -175,6 +176,7 @@ Peers: module {
 		lastunchoke:	int;
 		dialed:	int;
 		buf:	ref Buf;
+		writech:	chan of ref (int, int, array of byte);
 
 		new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
 		remotechoking:	fn(p: self ref Peer): int;

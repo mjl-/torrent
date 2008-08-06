@@ -32,7 +32,7 @@ prepare(t: ref Torrent)
 Piece.new(index, length: int): ref Piece
 {
 	nblocks := (length+Torrentget->Blocksize-1)/Torrentget->Blocksize;
-	return ref Piece(nil, 0, index, Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
+	return ref Piece(nil, 0, index, Bits.new(nblocks), Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
 }
 
 Piece.orphan(p: self ref Piece): int

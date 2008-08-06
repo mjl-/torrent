@@ -88,8 +88,11 @@ rotateips:	ref Pool[string];  # masked ip address
 faulty:		list of (string, int);  # ip, time
 islistening:	int;  # whether listener() is listening
 
-peerinmsgchan: chan of (ref Peer, ref Msg);
-msgwrittenchan: chan of ref Peer;
+peerinmsgchan:	chan of (ref Peer, ref Msg, chan of list of ref (int, int, array of byte));
+msgwrittenchan:	chan of ref Peer;
+diskwritechan:	chan of ref (int, int, array of byte);
+diskwrittenchan:	chan of (int, int, int, string);
+mainwrites:	list of ref (int, int, array of byte);
 
 # ticker
 tickchan: chan of int;
@@ -219,8 +222,10 @@ init(nil: ref Draw->Context, args: list of string)
 	upchan = chan of (int, chan of int);
 	downchan = chan of (int, chan of int);
 
-	peerinmsgchan = chan of (ref Peer, ref Msg);
+	peerinmsgchan = chan of (ref Peer, ref Msg, chan of list of ref (int, int, array of byte));
 	msgwrittenchan = chan of ref Peer;
+	diskwritechan = chan[4] of ref (int, int, array of byte);
+	diskwrittenchan = chan of (int, int, int, string);
 
 	trafficup = Traffic.new();
 	trafficdown = Traffic.new();
@@ -256,6 +261,7 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn track();
 	spawn limiter(upchan, int maxupload);
 	spawn limiter(downchan, int maxdownload);
+	spawn diskwriter(diskwritechan);
 
 	starttime = daytime->now();
 	spawn trackkick(0);
@@ -307,6 +313,7 @@ peerdrop(peer: ref Peer, faulty: int, err: string)
 		awaitpeer();
 
 	peers->peerdel(peer);
+	peer.writech <-= nil;
 }
 
 dialpeers()
@@ -503,15 +510,20 @@ clearfaulty(ip: string)
 }
 
 
-# buf flushing
-
-bufflush(b: ref Buf)
+peerbufflush(b: ref Buf): ref (int, int, array of byte)
 {
 	say(sprint("buf: writing chunk to disk, pieceoff %d, len data %d", b.pieceoff, len b.data));
-	off := big b.piece*big torrent.piecelen + big b.pieceoff;
-	err := bittorrent->torrentpwritex(dstfds, b.data, len b.data, off);
-	if(err != nil)
-		fail("writing piece: "+err);  # xxx fail saner...
+	say("letting peers diskwriter handle write");
+	tmp := ref (b.piece, b.pieceoff, b.data);
+	b.clear();
+	return tmp;
+}
+
+mainbufflush(b: ref Buf)
+{
+	say(sprint("buf: writing chunk to disk, pieceoff %d, len data %d", b.pieceoff, len b.data));
+	mainwrites = lists->reverse(ref (b.piece, b.pieceoff, b.data)::lists->reverse(mainwrites));
+	say("letting mains diskwriter handle write");
 	b.clear();
 }
 
@@ -527,7 +539,7 @@ batchflushcomplete(piece: ref Piece, block: int): int
 	for(l := peers->peers; l != nil; l = tl l) {
 		peer := hd l;
 		if(peer.buf.overlaps(piece.index, start, end))
-			bufflush(peer.buf);
+			mainbufflush(peer.buf);
 	}
 	return 1;
 }
@@ -636,13 +648,16 @@ chokingdownload(gen: int)
 	}
 }
 
-handleinmsg(peer: ref Peer, msg: ref Msg)
+handleinmsg(peer: ref Peer, msg: ref Msg, needwritechan: chan of list of ref (int, int, array of byte))
 {
-	# xxx fix this code.  it can easily block now
+	handleinmsg0(peer, msg, needwritechan);
+	if(tagof msg == tagof Msg.Piece)
+		needwritechan <-= nil;
+}
 
-	if(msg == nil)
-		return peerdrop(peer, 0, "eof from peer "+peer.text());
-
+# xxx fix this code to never either block entirely or delay on disk/net i/o
+handleinmsg0(peer: ref Peer, msg: ref Msg, needwritechan: chan of list of ref (int, int, array of byte))
+{
 	peer.msgseq++;
 
 	msize := msg.packedsize();
@@ -741,13 +756,13 @@ handleinmsg(peer: ref Peer, msg: ref Msg)
 	Piece =>
 		say(sprint("%s sent data for piece=%d begin=%d length=%d", peer.text(), m.index, m.begin, len m.d));
 
-		piece := pieces->piecefind(m.index);
-		if(piece == nil)
-			return peerdrop(peer, 1, sprint("got data for inactive piece %d", m.index));
-
 		req := Req.new(m.index, m.begin/Blocksize);
 		if(blocksize(req) != len m.d)
 			return peerdrop(peer, 1, sprint("%s sent bad size for block %s, disconnecting", peer.text(), req.text()));
+
+		piece := pieces->piecefind(m.index);
+		if(piece == nil)
+			return peerdrop(peer, 1, sprint("got data for inactive piece %d", m.index));
 
 		if(!peer.reqs.take(req)) {
 			exp := "nothing";
@@ -776,19 +791,29 @@ handleinmsg(peer: ref Peer, msg: ref Msg)
 			peersend(peer, ref Msg.Cancel(m.index, m.begin, len m.d));
 		}
 
+		needwrites: list of ref (int, int, array of byte);
+
 		# add block to buffer.  if new block does not fit in, flush the old data.
 		if(!peer.buf.tryadd(piece, m.begin, m.d)) {
-			bufflush(peer.buf);
+			needwrite := peerbufflush(peer.buf);
+			if(needwrite != nil)
+				needwrites = needwrite::needwrites;
 			if(!peer.buf.tryadd(piece, m.begin, m.d))
 				raise "tryadd failed...";
 		}
 
 		# flush now, rather then delaying it
-		if(peer.buf.isfull())
-			bufflush(peer.buf);
+		if(peer.buf.isfull()) {
+			needwrite := peerbufflush(peer.buf);
+			if(needwrite != nil)
+				needwrites = needwrite::needwrites;
+		} else  # if this completes the batch, flush it for all peers that have blocks belonging to it
+			batchflushcomplete(piece, blockindex);
 
-		# if this completes the batch, flush it for all peers that have blocks belonging to it
-		batchflushcomplete(piece, blockindex);
+		if(needwrites != nil) {
+			say(sprint("sending %d needwrites to peernetreader", len needwrites));
+			needwritechan <-= lists->reverse(needwrites);
+		}
 
 		# progress with piece
 		if(piece.hashstateoff == m.begin)
@@ -804,67 +829,11 @@ handleinmsg(peer: ref Peer, msg: ref Msg)
 				p := hd l;
 				if(p.buf.piece == m.index) {
 					say("flushing buf of other peer before hash check");
-					bufflush(p.buf);
+					mainbufflush(p.buf);
 				}
 			}
-
-			wanthash := hex(torrent.piecehashes[piece.index]);
-			(piecehash, herr) := verify->piecehash(dstfds, torrent.piecelen, piece);
-			if(herr != nil)
-				fail("verifying hash: "+herr);
-			havehash := hex(piecehash);
-			if(wanthash != havehash) {
-				say(sprint("%s from %s did not check out, want %s, have %s, disconnecting", piece.text(), peer.text(), wanthash, havehash));
-				setfaulty(peer.np.ip);
-				peerdrop(peer, 0, nil);
-				piece.hashstate = nil;
-				piece.hashstateoff = 0;
-				piece.have.clearall();
-				if(Dflag) {
-					for(i := 0; i < len piece.busy; i++)
-						if(piece.busy[i].t0 >= 0 || piece.busy[i].t1 >= 0)
-							raise sprint("piece %d should be complete, but block %d is busy", piece.index, i);
-				}
-				
-				# xxx what do to with other peers?
-				return;
-			}
-
-			(state->piecehave).set(piece.index);
-			pieces->piecedel(pieces->piecefind(piece.index));
-
-			# this could have been the last piece this peer had, making us no longer interested
-			for(l = peers->peers; l != nil; l = tl l)
-				interesting(hd l);
-
-			writestate();
-			say("piece now done: "+piece.text());
-			say(sprint("pieces: have %s, busy %s", (state->piecehave).text(), (state->piecebusy).text()));
-
-			for(l = peers->peers; l != nil; l = tl l)
-				peersend(hd l, ref Msg.Have(piece.index));
 		}
-		schedule(peer);
-
-		if(isdone()) {
-			trackerevent = "completed";
-			spawn trackkick(0);
-			npeers: list of ref Peer;
-			for(l := peers->peers; l != nil; l = tl l) {
-				p := hd l;
-				if(p.isdone()) {
-					say("done: dropping seed "+p.fulltext());
-					peerdrop(p, 0, nil);
-				} else {
-					npeers = p::npeers;
-					# we won't act on becoming interested while unchoked anymore
-					if(!p.remoteinterested() && !p.localchoking())
-						choke(p);
-				}
-			}
-			peers->peers = lists->reverse(npeers);
-			print("DONE!\n");
-		}
+		schedule(peer);  # xxx will this work?  piece.have != piece.written may cause trouble
 
 	Request =>
 		b := Block.new(m.index, m.begin, m.length);
@@ -908,8 +877,23 @@ ticker()
 main()
 {
 	gen := 0;
+	boguschan := chan of ref (int, int, array of byte);
 
-	for(;;) alt {
+	for(;;) {
+	# warning: for block runs to end of main()
+
+	# the alt statement doesn't do conditional sending/receiving on a channel.
+	# so, before we start the alt, we evaluate the condition.
+	# if true, we use the real channel we want to send on.
+	# if false, we use a bogus channel without receiver, so the case is never taken.
+	curwritechan := boguschan;
+	curmainwrite: ref (int, int, array of byte);
+	if(mainwrites != nil) {
+		curmainwrite = hd mainwrites;
+		curwritechan = diskwritechan;
+	}
+ 
+	alt {
 	<-tickchan =>
 		say(sprint("ticking, %d peers", len peers->peers));
 		for(l := peers->peers; l != nil; l = tl l) {
@@ -989,6 +973,7 @@ main()
 			peer := Peer.new(np, peerfd, extensions, peerid, dialed, torrent.piececount);
 			spawn peernetreader(peer);
 			spawn peernetwriter(peer);
+			spawn diskwriter(peer.writech);
 			peers->peeradd(peer);
 			say("new peer "+peer.fulltext());
 
@@ -1013,8 +998,89 @@ main()
 		} else
 			awaitpeer();
 
-	(peer, msg) := <-peerinmsgchan =>
-		handleinmsg(peer, msg);
+	(peer, msg, needwritech) := <-peerinmsgchan =>
+		if(msg == nil)
+			return peerdrop(peer, 0, "eof from peer "+peer.text());
+
+		handleinmsg(peer, msg, needwritech);
+
+	(pieceindex, begin, length, err) := <-diskwrittenchan =>
+		if(err != nil)
+			raise sprint("error writing piece %d, begin %d, length %d: %s", pieceindex, begin, length, err);
+
+		piece := pieces->piecefind(pieceindex);
+		if(piece == nil)
+			raise sprint("data written for inactive piece %d", pieceindex);
+
+		# mark written blocks as such
+		first := begin/Blocksize; 
+		n := (length+Blocksize-1)/Blocksize;
+		for(i := 0; i < n; i++)
+			piece.written.set(first+i);
+
+		if(!piece.written.isfull())
+			continue;
+
+		say("last parts of piece have been written, verifying...");
+
+		wanthash := hex(torrent.piecehashes[piece.index]);
+		(piecehash, herr) := verify->piecehash(dstfds, torrent.piecelen, piece);
+		if(herr != nil)
+			fail("verifying hash: "+herr);
+		havehash := hex(piecehash);
+		if(wanthash != havehash) {
+			# xxx blame peers
+			say(sprint("%s did not check out, want %s, have %s, disconnecting", piece.text(), wanthash, havehash));
+			piece.hashstate = nil;
+			piece.hashstateoff = 0;
+			piece.have.clearall();
+			if(Dflag) {
+				for(i = 0; i < len piece.busy; i++)
+					if(piece.busy[i].t0 >= 0 || piece.busy[i].t1 >= 0)
+						raise sprint("piece %d should be complete, but block %d is busy", piece.index, i);
+			}
+			
+			# xxx what do to with other peers?
+			return;
+		}
+
+		(state->piecehave).set(piece.index);
+		pieces->piecedel(pieces->piecefind(piece.index));
+
+		# this could have been the last piece this peer had, making us no longer interested
+		for(l := peers->peers; l != nil; l = tl l)
+			interesting(hd l);
+
+		writestate();
+		say("piece now done: "+piece.text());
+		say(sprint("pieces: have %s, busy %s", (state->piecehave).text(), (state->piecebusy).text()));
+
+		for(l = peers->peers; l != nil; l = tl l)
+			peersend(hd l, ref Msg.Have(piece.index));
+
+		if(isdone()) {
+			trackerevent = "completed";
+			spawn trackkick(0);
+			npeers: list of ref Peer;
+			for(l = peers->peers; l != nil; l = tl l) {
+				p := hd l;
+				if(p.isdone()) {
+					say("done: dropping seed "+p.fulltext());
+					peerdrop(p, 0, nil);
+				} else {
+					npeers = p::npeers;
+					# we won't act on becoming interested while unchoked anymore
+					if(!p.remoteinterested() && !p.localchoking())
+						choke(p);
+				}
+			}
+			peers->peers = lists->reverse(npeers);
+			print("DONE!\n");
+		}
+
+	curwritechan <-= curmainwrite =>
+		say("queued mainwrite to diskwriter");
+		mainwrites = tl mainwrites;
 
 	peer := <-msgwrittenchan =>
 		say(sprint("%s: message written", peer.text()));
@@ -1035,6 +1101,7 @@ main()
 		peer.netwriting = 0;
 		if(!peer.localchoking() && peer.remoteinterested() && len peer.wants > 0)
 			blockreadsend(peer);
+	}
 	}
 }
 
@@ -1264,13 +1331,26 @@ msgread(fd: ref Sys->FD): (ref Msg, string)
 
 peernetreader(peer: ref Peer)
 {
+	needwritechan := chan of list of ref (int, int, array of byte);
 	for(;;) {
 		(m, err) := msgread(peer.fd);
 		if(err != nil)
 			fail("reading msg: "+err);  # xxx return error to main
 		if(Pflag)
 			fprint(fildes(2), "<< %s\n", m.text());
-		peerinmsgchan <-= (peer, m);
+		peerinmsgchan <-= (peer, m, needwritechan);
+		if(m == nil)
+			break;
+
+		if(tagof m == tagof Msg.Piece) {
+			needwrites := <-needwritechan;
+			say(sprint("peernetreader: have %d needwrites", len needwrites));
+			if(needwrites != nil) {
+				for(l := needwrites; l != nil; l = tl l)
+					peer.writech <-= hd l;  # will block if disk is slow, slowing down peer as well
+				<-needwritechan;
+			}
+		}
 	}
 }
 
@@ -1288,6 +1368,20 @@ peernetwriter(peer: ref Peer)
 			fail(sprint("writing msg: %r"));
 		if(tagof m == tagof Msg.Piece)
 			msgwrittenchan <-= peer;
+	}
+}
+
+diskwriter(reqch: chan of ref (int, int, array of byte))
+{
+	for(;;) {
+		req := <-reqch;
+		if(req == nil)
+			break;
+		(piece, begin, buf) := *req;
+
+		off := big piece*big torrent.piecelen + big begin;
+		err := bittorrent->torrentpwritex(dstfds, buf, len buf, off);
+		diskwrittenchan <-= (piece, begin, len buf, err);
 	}
 }
 
