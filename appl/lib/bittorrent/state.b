@@ -1,9 +1,8 @@
 implement State;
 
 include "torrentget.m";
-
-bitarray: Bitarray;
-Bits: import bitarray;
+	bitarray: Bitarray;
+	Bits: import bitarray;
 
 init()
 {

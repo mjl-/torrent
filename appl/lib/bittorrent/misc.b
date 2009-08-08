@@ -1,18 +1,17 @@
 implement Misc;
 
 include "torrentget.m";
+	sys: Sys;
+	rand: Rand;
 include "ip.m";
+	ipmod: IP;
+	IPaddr: import ipmod;
 
-sys: Sys;
-rand: Rand;
-ipmod: IP;
-
-IPaddr: import ipmod;
-
-init(randmod: Rand)
+init()
 {
 	sys = load Sys Sys->PATH;
-	rand = randmod;
+	rand = load Rand Rand->PATH;
+	rand->init(sys->pctl(0, nil)^sys->millisec());
 	ipmod = load IP IP->PATH;
 	ipmod->init();
 }

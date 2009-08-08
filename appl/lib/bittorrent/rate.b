@@ -1,22 +1,17 @@
 implement Rate;
 
 include "torrentget.m";
+	sys: Sys;
+	bittorrent: Bittorrent;
 include "daytime.m";
-
-sys: Sys;
-daytime: Daytime;
-bitarray: Bitarray;
-bittorrent: Bittorrent;
-
-Bits: import bitarray;
+	daytime: Daytime;
 
 init()
 {
 	sys = load Sys Sys->PATH;
 	daytime = load Daytime Daytime->PATH;
-	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init(bitarray);
+	bittorrent->init();
 }
 
 Traffic.new(): ref Traffic

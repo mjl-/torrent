@@ -1,17 +1,17 @@
 implement Pools;
 
 include "torrentget.m";
+	sys: Sys;
+	rand: Rand;
+	misc: Misc;
 
-sys: Sys;
-rand: Rand;
-misc: Misc;
-
-init(randmod: Rand)
+init()
 {
 	sys = load Sys Sys->PATH;
-	rand = randmod;
+	rand = load Rand Rand->PATH;
+	rand->init(sys->pctl(0, nil)^sys->millisec());
 	misc = load Misc Misc->PATH;
-	misc->init(rand);
+	misc->init();
 }
 
 Pool[T].new(mode: int): ref Pool[T]

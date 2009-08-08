@@ -1,26 +1,23 @@
 implement Verify;
 
 include "torrentget.m";
-
-sys: Sys;
-keyring: Keyring;
-bitarray: Bitarray;
-bittorrent: Bittorrent;
-misc: Misc;
-
-DigestState: import keyring;
-Bits: import bitarray;
-Torrent: import bittorrent;
+	sys: Sys;
+	kr: Keyring;
+	bitarray: Bitarray;
+	Bits: import bitarray;
+	bittorrent: Bittorrent;
+	Torrent: import bittorrent;
+	misc: Misc;
 
 init()
 {
 	sys = load Sys Sys->PATH;
-	keyring = load Keyring Keyring->PATH;
+	kr = load Keyring Keyring->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init(bitarray);
+	bittorrent->init();
 	misc = load Misc Misc->PATH;
-	misc->init(load Rand Rand->PATH);  # uninitialised, no rand in this instance
+	misc->init();
 }
 
 min(a, b: int): int
@@ -70,11 +67,11 @@ piecehash(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Pieces->Pie
 			return (nil, sys->sprint("reading piece %d: %s", p.index, err));
 		if(buf == nil)
 			break;
-		state = keyring->sha1(buf, len buf, nil, state);
+		state = kr->sha1(buf, len buf, nil, state);
 	}
 
 	hash := array[Keyring->SHA1dlen] of byte;
-	keyring->sha1(nil, 0, hash, p.hashstate);
+	kr->sha1(nil, 0, hash, p.hashstate);
 	return (hash, nil);
 }
 
@@ -89,18 +86,18 @@ torrenthash(fds: list of ref (ref Sys->FD, big), t: ref Torrent, haves: ref Bits
 	reqch <-= nil;
 
 	for(i = 0; i < t.piececount; i++) {
-		state: ref DigestState;
+		state: ref kr->DigestState;
 		for(;;) {
 			(buf, cerr) := <-chunkch;
 			if(cerr != nil)
 				return sys->sprint("reading piece %d for verification: %s", i, cerr);
 			if(buf == nil)
 				break;
-			state = keyring->sha1(buf, len buf, nil, state);
+			state = kr->sha1(buf, len buf, nil, state);
 		}
 
 		hash := array[Keyring->SHA1dlen] of byte;
-		keyring->sha1(nil, 0, hash, state);
+		kr->sha1(nil, 0, hash, state);
 
 		if(misc->hex(hash) == misc->hex(t.piecehashes[i]))
 			haves.set(i);

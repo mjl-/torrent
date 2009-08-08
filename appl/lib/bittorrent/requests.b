@@ -1,8 +1,7 @@
 implement Requests;
 
 include "torrentget.m";
-
-sys: Sys;
+	sys: Sys;
 
 init()
 {

@@ -1,16 +1,14 @@
 implement Pieces;
 
 include "torrentget.m";
+	sys: Sys;
+	keyring: Keyring;
+	bitarray: Bitarray;
+	Bits: import bitarray;
+	bittorrent: Bittorrent;
+	Torrent: import bittorrent;
 include "lists.m";
-
-sys: Sys;
-keyring: Keyring;
-lists: Lists;
-bitarray: Bitarray;
-bittorrent: Bittorrent;
-
-Bits: import bitarray;
-Torrent: import bittorrent;
+	lists: Lists;
 
 torrent: ref Torrent;
 
@@ -21,7 +19,7 @@ init()
 	lists = load Lists Lists->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init(bitarray);
+	bittorrent->init();
 }
 
 prepare(t: ref Torrent)

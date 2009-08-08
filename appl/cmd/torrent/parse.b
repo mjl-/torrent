@@ -1,6 +1,8 @@
 implement Torrentparse;
 
 include "sys.m";
+	sys: Sys;
+	sprint: import sys;
 include "draw.m";
 include "bufio.m";
 	bufio: Bufio;
@@ -10,13 +12,8 @@ include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
-
-sys: Sys;
-bittorrent: Bittorrent;
-
-print, sprint, fprint, fildes: import sys;
-Bee: import bittorrent;
-
+	bittorrent: Bittorrent;
+	Bee: import bittorrent;
 
 Torrentparse: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -32,23 +29,21 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init(bitarray);
+	bittorrent->init();
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'D' =>	Dflag++;
-		* =>
-			fprint(fildes(2), "bad option: -%c\n", c);
-			arg->usage();
+		* =>	arg->usage();
 		}
 
 	args = arg->argv();
 	if(len args != 1)
 		arg->usage();
 
-	bout = bufio->fopen(fildes(1), Bufio->OWRITE);
+	bout = bufio->fopen(sys->fildes(1), Bufio->OWRITE);
 	if(bout == nil)
 		fail(sprint("bufio open stdout: %r"));
 
@@ -72,7 +67,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	if(0) {
 		nd := b.pack();
-		if(sys->write(fildes(2), nd, len nd) != len nd)
+		if(sys->write(sys->fildes(2), nd, len nd) != len nd)
 			fail(sprint("writing: %r"));
 	}
 }
@@ -137,12 +132,12 @@ readfile(fd: ref Sys->FD): array of byte
 
 fail(s: string)
 {
-	fprint(fildes(2), "%s\n", s);
+	sys->fprint(sys->fildes(2), "%s\n", s);
 	raise "fail:"+s;
 }
 
 say(s: string)
 {
 	if(Dflag)
-		fprint(fildes(2), "%s\n", s);
+		sys->fprint(sys->fildes(2), "%s\n", s);
 }

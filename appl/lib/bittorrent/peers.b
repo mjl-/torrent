@@ -1,32 +1,26 @@
 implement Peers;
 
 include "torrentget.m";
+	sys: Sys;
+	bitarray: Bitarray;
+	Bits: import bitarray;
+	misc: Misc;
+	rate: Rate;
+	Traffic: import rate;
+	requests: Requests;
+	Reqs: import requests;
 include "string.m";
+	str: String;
 
-sys: Sys;
-str: String;
-rand: Rand;
-bitarray: Bitarray;
-misc: Misc;
-rate: Rate;
-requests: Requests;
+peergen: int;
 
-Traffic: import rate;
-Reqs: import requests;
-Bits: import bitarray;
-
-
-peergen:	int;
-
-
-init(randmod: Rand)
+init()
 {
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
-	rand = randmod;
 	bitarray = load Bitarray Bitarray->PATH;
 	misc = load Misc Misc->PATH;
-	misc->init(rand);
+	misc->init();
 	rate = load Rate Rate->PATH;	
 	rate->init();
 	requests = load Requests Requests->PATH;

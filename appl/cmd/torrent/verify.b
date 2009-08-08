@@ -1,26 +1,23 @@
 implement Torrentverify;
 
 include "sys.m";
+	sys: Sys;
+	sprint: import sys;
 include "draw.m";
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "arg.m";
-include "rand.m";
 include "keyring.m";
 include "bitarray.m";
+	bitarray: Bitarray;
+	Bits: import bitarray;
 include "bittorrent.m";
-
+	bittorrent: Bittorrent;
+	Bee, Msg, Torrent: import bittorrent;
+include "rand.m";
 include "../../lib/bittorrent/get.m";
-
-sys: Sys;
-bitarray: Bitarray;
-bittorrent: Bittorrent;
-verify: Verify;
-
-print, sprint, fprint, fildes: import sys;
-Bits: import bitarray;
-Bee, Msg, Torrent: import bittorrent;
+	verify: Verify;
 
 
 Torrentverify: module {
@@ -37,7 +34,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init(bitarray);
+	bittorrent->init();
 	verify = load Verify Verify->PATH;
 	verify->init();
 
@@ -47,9 +44,7 @@ init(nil: ref Draw->Context, args: list of string)
 		case c {
 		'D' =>	Dflag++;
 		'n' =>	nofix = 1;
-		* =>
-			fprint(fildes(2), "bad option: -%c\n", c);
-			arg->usage();
+		* =>	arg->usage();
 		}
 
 	args = arg->argv();
@@ -70,14 +65,14 @@ init(nil: ref Draw->Context, args: list of string)
 	if(dstfds != nil)
 		verify->torrenthash(dstfds, t, haves);
 
-	print("progress:  %d/%d pieces\n", haves.have, t.piececount);
-	print("pieces:\n");
+	sys->print("progress:  %d/%d pieces\n", haves.have, t.piececount);
+	sys->print("pieces:\n");
 	for(i := 0; i < t.piececount; i++)
 		if(haves.get(i))
-			print("1");
+			sys->print("1");
 		else
-			print("0");
-	print("\n");
+			sys->print("0");
+	sys->print("\n");
 }
 
 hex(d: array of byte): string
@@ -90,12 +85,12 @@ hex(d: array of byte): string
 
 fail(s: string)
 {
-	fprint(fildes(2), "%s\n", s);
+	sys->fprint(sys->fildes(2), "%s\n", s);
 	raise "fail:"+s;
 }
 
 say(s: string)
 {
 	if(Dflag)
-		fprint(fildes(2), "%s\n", s);
+		sys->fprint(sys->fildes(2), "%s\n", s);
 }

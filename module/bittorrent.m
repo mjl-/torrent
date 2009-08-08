@@ -2,7 +2,7 @@ Bittorrent: module {
 	PATH:	con "/dis/lib/bittorrent/bittorrent.dis";
 
 	dflag:	int;
-	init:	fn(bitarray: Bitarray);
+	init:	fn();
 
 	Bee: adt {
 		pick {
@@ -16,50 +16,58 @@ Bittorrent: module {
 			a:	cyclic array of (ref Bee.String, ref Bee);
 		}
 
-		pack:	fn(b: self ref Bee): array of byte;
+		pack:		fn(b: self ref Bee): array of byte;
 		packedsize:	fn(b: self ref Bee): int;
-		unpack:	fn(d: array of byte): (ref Bee, string);
-		find:	fn(b: self ref Bee, s: string): ref Bee;
-		get:	fn(b: self ref Bee, l: list of string): ref Bee;
-		gets:	fn(b: self ref Bee, l: list of string): ref Bee.String;
-		geti:	fn(b: self ref Bee, l: list of string): ref Bee.Integer;
-		getl:	fn(b: self ref Bee, l: list of string): ref Bee.List;
-		getd:	fn(b: self ref Bee, l: list of string): ref Bee.Dict;
+		unpack:		fn(d: array of byte): (ref Bee, string);
+		find:		fn(b: self ref Bee, s: string): ref Bee;
+		get:		fn(b: self ref Bee, l: list of string): ref Bee;
+		gets:		fn(b: self ref Bee, l: list of string): ref Bee.String;
+		geti:		fn(b: self ref Bee, l: list of string): ref Bee.Integer;
+		getl:		fn(b: self ref Bee, l: list of string): ref Bee.List;
+		getd:		fn(b: self ref Bee, l: list of string): ref Bee.Dict;
 	};
 
 	Msg: adt {
 		pick {
-		Keepalive or Choke or Unchoke or Interested or Notinterested =>
+		Keepalive or
+		Choke or
+		Unchoke or
+		Interested or
+		Notinterested =>
 		Have =>
-			index: int;
+			index:	int;
 		Bitfield =>
-			d: array of byte;
+			d:	array of byte;
 		Piece =>
-			index, begin: int;
-			d: array of byte;
-		Request or Cancel =>
-			index, begin, length: int;
+			index:	int;
+			begin:	int;
+			d:	array of byte;
+		Request or
+		Cancel =>
+			index:	int;
+			begin:	int;
+			length:	int;
 		}
 
-		read:	fn(fd: ref Sys->FD): (ref Msg, string);
+		read:		fn(fd: ref Sys->FD): (ref Msg, string);
 		packedsize:	fn(m: self ref Msg): int;
-		pack:	fn(m: self ref Msg): array of byte;
-		unpack:	fn(d: array of byte): (ref Msg, string);
-		text:	fn(m: self ref Msg): string;
+		pack:		fn(m: self ref Msg): array of byte;
+		unpack:		fn(d: array of byte): (ref Msg, string);
+		text:		fn(m: self ref Msg): string;
 	};
 
 	Torrent: adt {
 		announce:	string;
 		piecelen:	int;
-		hash:	array of byte;
+		hash:		array of byte;
 		piececount:	int;
 		piecehashes:	array of array of byte;
-		files:	list of ref (string, big);  # path, length
-		origfiles: list of ref (string, big);  # files as found in .torrent
-		length:	big;
+		files:		list of ref (string, big);  # path, length
+		origfiles:	list of ref (string, big);  # files as found in .torrent
+		length:		big;
 		statepath:	string;
 
-		open:	fn(path: string): (ref Torrent, string);
+		open:		fn(path: string): (ref Torrent, string);
 		openfiles:	fn(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string);
 		piecelength:	fn(t: self ref Torrent, index: int): int;
 	};

@@ -1,53 +1,48 @@
 implement Torrentget;
 
 include "sys.m";
+	sys: Sys;
+	sprint: import sys;
 include "draw.m";
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "arg.m";
 include "daytime.m";
+	daytime: Daytime;
 include "string.m";
-include "keyring.m";
-include "security.m";
+	str: String;
 include "rand.m";
+	rand: Rand;
 include "lists.m";
+	lists: Lists;
+include "keyring.m";
+	keyring: Keyring;
+include "security.m";
+	random: Random;
 include "math.m";
 
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
+	bittorrent: Bittorrent;
+	Bee, Msg, Torrent: import bittorrent;
 include "../../lib/bittorrent/get.m";
-
-sys: Sys;
-daytime: Daytime;
-str: String;
-keyring: Keyring;
-random: Random;
-rand: Rand;
-lists: Lists;
-
-bittorrent: Bittorrent;
-misc: Misc;
-pools: Pools;
-rate: Rate;
-pieces: Pieces;
-peers: Peers;
-requests: Requests;
-verify: Verify;
-sched: Schedule;
-state: State;
-
-print, sprint, fprint, fildes: import sys;
-Bee, Msg, Torrent: import bittorrent;
-DigestState: import keyring;
-Pool: import pools;
-Traffic: import rate;
-Req, Reqs, Batch: import requests;
-Peer, Newpeer, Buf: import peers;
-Piece, Block: import pieces;
-sort, l2a, hex, readfd, readfile: import misc;
+	util: Misc;
+	pools: Pools;
+	Pool: import pools;
+	rate: Rate;
+	Traffic: import rate;
+	pieces: Pieces;
+	Piece, Block: import pieces;
+	peers: Peers;
+	Peer, Newpeer, Buf: import peers;
+	requests: Requests;
+	Req, Reqs, Batch: import requests;
+	verify: Verify;
+	sched: Schedule;
+	state: State;
 
 
 Dflag: int;
@@ -55,19 +50,22 @@ Pflag: int;
 Lflag: int;
 nofix: int;
 
-torrent: ref Torrent;
-dstfds: list of ref (ref Sys->FD, big);  # fd, size
-statefd: ref Sys->FD;
-starttime: int;
-totalleft: big;
-listenport: int;
-localpeerid: array of byte;
-localpeeridhex: string;
-trackerevent: string;
-trafficup, trafficdown, trafficmetaup, trafficmetadown: ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
-maxratio := 0.0;
-maxdownload := big -1;
-maxupload := big -1;
+torrent:	ref Torrent;
+dstfds:		list of ref (ref Sys->FD, big);  # fd, size
+statefd:	ref Sys->FD;
+starttime:	int;
+totalleft:	big;
+listenport:	int;
+localpeerid:	array of byte;
+localpeeridhex:	string;
+trackerevent:	string;
+trafficup,
+trafficdown,
+trafficmetaup,
+trafficmetadown:	ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
+maxratio	:= 0.0;
+maxdownload	:= big -1;
+maxupload	:= big -1;
 
 # tracker
 trackkickchan:	chan of int;
@@ -75,11 +73,11 @@ trackreqchan:	chan of (big, big, big, int, string);  # up, down, left, listenpor
 trackchan:	chan of (int, array of (string, int, array of byte), string);  # interval, peers, error
 
 # dialer/listener
-canlistenchan: chan of int;
-newpeerchan: chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
+canlistenchan:	chan of int;
+newpeerchan:	chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
 
 # upload/download rate limiter
-upchan, downchan: chan of (int, chan of int);
+upchan, downchan:	chan of (int, chan of int);
 
 # progress/state
 stopped := 0;
@@ -113,12 +111,12 @@ init(nil: ref Draw->Context, args: list of string)
 	lists = load Lists Lists->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init(bitarray);
+	bittorrent->init();
 
-	misc = load Misc Misc->PATH;
-	misc->init(rand);
+	util = load Misc Misc->PATH;
+	util->init();
 	pools = load Pools Pools->PATH;
-	pools->init(rand);
+	pools->init();
 	rate = load Rate Rate->PATH;
 	rate->init();
 	pieces = load Pieces Pieces->PATH;
@@ -126,13 +124,13 @@ init(nil: ref Draw->Context, args: list of string)
 	requests = load Requests Requests->PATH;
 	requests->init();
 	peers = load Peers Peers->PATH;
-	peers->init(rand);
+	peers->init();
 	verify = load Verify Verify->PATH;
 	verify->init();
 	state = load State State->PATH;
 	state->init();
 	sched = load Schedule Schedule->PATH;
-	sched->init(rand, state, peers, pieces);
+	sched->init(state, peers, pieces);
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-DPLn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
@@ -152,7 +150,6 @@ init(nil: ref Draw->Context, args: list of string)
 			if(maxupload < big (10*1024))
 				fail("invalid maximum upload rate");
 		* =>
-			fprint(fildes(2), "bad option: -%c\n", c);
 			arg->usage();
 		}
 
@@ -182,7 +179,7 @@ init(nil: ref Draw->Context, args: list of string)
 		statefd = sys->open(torrent.statepath, Sys->ORDWR);
 		if(statefd != nil) {
 			say("using .state file");
-			(d, rerr) := readfd(statefd);
+			(d, rerr) := util->readfd(statefd);
 			if(rerr != nil)
 				fail(sprint("%s: %s", torrent.statepath, rerr));
 			(state->piecehave, err) = Bits.mk(torrent.piececount, d);
@@ -210,7 +207,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	totalleft = torrent.length;
 	localpeerid = bittorrent->genpeerid();
-	localpeeridhex = hex(localpeerid);
+	localpeeridhex = util->hex(localpeerid);
 
 	trackkickchan = chan of int;
 	trackreqchan = chan of (big, big, big, int, string);
@@ -634,7 +631,7 @@ nextoptimisticunchoke(): ref Peer
 		peer: ref Peer;
 		for(l := peers->peers; l != nil; l = tl l) {
 			p := hd l;
-			if(misc->maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
+			if(util->maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
 				peer = p;
 		}
 		if(peer != nil)
@@ -676,8 +673,8 @@ chokingupload(gen: int)
 		nunchoked--;
 	}
 
-	othersa := l2a(others);
-	misc->randomize(othersa);
+	othersa := util->l2a(others);
+	util->randomize(othersa);
 	for(i := 0; i < len othersa && nunchoked+i < Seedunchokedmax; i++)
 		unchoke(othersa[i]);
 }
@@ -697,7 +694,7 @@ chokingdownload(gen: int)
 			luckyindex = i;
 		allpeers[i++] = ref (hd l, (hd l).down.rate());
 	}
-	sort(allpeers, peerratecmp);
+	util->sort(allpeers, peerratecmp);
 
 	# determine N interested peers with highest upload rate
 	nintr := 0;
@@ -1010,7 +1007,7 @@ main()
 			say("main, new peers");
 			for(i := 0; i < len newpeers; i++) {
 				(ip, port, peerid) := newpeers[i];
-				if(hex(peerid) == localpeeridhex)
+				if(util->hex(peerid) == localpeeridhex)
 					continue;  # skip self
 				np := Newpeer(sprint("%s!%d", ip, port), ip, peerid);
 				say("new: "+np.text());
@@ -1040,7 +1037,7 @@ main()
 
 		if(err != nil) {
 			warn(sprint("%s: %s", np.text(), err));
-		} else if(hex(peerid) == localpeeridhex) {
+		} else if(util->hex(peerid) == localpeeridhex) {
 			say("connected to self, dropping connection...");
 		} else if(peers->peerknownip(np.ip)) {
 			say("new connection from known ip address, dropping new connection...");
@@ -1057,7 +1054,7 @@ main()
 			peers->peeradd(peer);
 			say("new peer "+peer.fulltext());
 
-			rotateips.pooladdunique(misc->maskip(np.ip));
+			rotateips.pooladdunique(util->maskip(np.ip));
 
 			if((state->piecehave).have == 0) {
 				peersend(peer, ref Msg.Keepalive());
@@ -1103,11 +1100,11 @@ main()
 
 		say("last parts of piece have been written, verifying...");
 
-		wanthash := hex(torrent.piecehashes[piece.index]);
+		wanthash := util->hex(torrent.piecehashes[piece.index]);
 		(piecehash, herr) := verify->piecehash(dstfds, torrent.piecelen, piece);
 		if(herr != nil)
 			fail("verifying hash: "+herr);
-		havehash := hex(piecehash);
+		havehash := util->hex(piecehash);
 		if(wanthash != havehash) {
 			# xxx blame peers
 			say(sprint("%s did not check out, want %s, have %s, disconnecting", piece.text(), wanthash, havehash));
@@ -1155,7 +1152,7 @@ main()
 				}
 			}
 			peers->peers = lists->reverse(npeers);
-			print("DONE!\n");
+			sys->print("DONE!\n");
 		}
 
 	curwritechan <-= curmainwrite =>
@@ -1228,7 +1225,7 @@ listener(aconn: Sys->Connection)
 		}
 
 		remote := conn.dir+"/remote";
-		(remaddr, rerr) := readfile(remote);
+		(remaddr, rerr) := util->readfile(remote);
 		if(rerr != nil) {
 			warn(sprint("reading %s: %s", remote, rerr));
 			continue;
@@ -1346,8 +1343,8 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	hash := rd[20+8:20+8+20];
 	peerid := rd[20+8+20:];
 
-	if(hex(hash) != hex(torrent.hash))
-		return (nil, nil, sprint("peer wants torrent hash %s, not %s", hex(hash), hex(torrent.hash)));
+	if(util->hex(hash) != util->hex(torrent.hash))
+		return (nil, nil, sprint("peer wants torrent hash %s, not %s", util->hex(hash), util->hex(torrent.hash)));
 
 	return (extensions, peerid, nil);
 }
@@ -1424,7 +1421,7 @@ peernetreader(pidch: chan of int, peer: ref Peer)
 		if(err != nil)
 			fail("reading msg: "+err);  # xxx return error to main
 		if(Pflag)
-			fprint(fildes(2), "<< %s\n", m.text());
+			sys->fprint(sys->fildes(2), "<< %s\n", m.text());
 		peerinmsgchan <-= (peer, m, needwritechan);
 		if(m == nil)
 			break;
@@ -1463,7 +1460,7 @@ peernetwriter(pidch: chan of int, peer: ref Peer)
 			m := hd ml;
 			
 			if(Pflag)
-				fprint(fildes(2), ">> %s\n", m.text());
+				sys->fprint(sys->fildes(2), ">> %s\n", m.text());
 			size := m.packedsize();
 			say(sprint("peernetwriter: len d %d, o %d, size %d", len d, o, size));
 			d[o:] = m.pack();
@@ -1542,10 +1539,7 @@ eta(): int
 
 progctl(pid: int, s: string)
 {
-	path := sprint("/prog/%d/ctl", pid);
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd != nil)
-		fprint(fd, "%s", s);
+	sys->fprint(sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE), "%s", s);
 }
 
 killgrp(pid: int)
@@ -1566,11 +1560,11 @@ fail(s: string)
 
 warn(s: string)
 {
-	fprint(fildes(2), "%s\n", s);
+	sys->fprint(sys->fildes(2), "%s\n", s);
 }
 
 say(s: string)
 {
 	if(Dflag)
-		fprint(fildes(2), "%s\n", s);
+		sys->fprint(sys->fildes(2), "%s\n", s);
 }

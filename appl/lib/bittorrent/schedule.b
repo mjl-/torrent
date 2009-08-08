@@ -1,29 +1,28 @@
 implement Schedule;
 
 include "torrentget.m";
+	sys: Sys;
+	sprint: import sys;
+	rand: Rand;
+	bitarray: Bitarray;
+	Bits: import bitarray;
+	misc: Misc;
+	peers: Peers;
+	Peer: import peers;
+	pieces: Pieces;
+	Piece: import pieces;
+	requests: Requests;
+	Req, Reqs, Batch: import requests;
+	state: State;
 
-sys: Sys;
-rand: Rand;
-bitarray: Bitarray;
-misc: Misc;
-peers: Peers;
-pieces: Pieces;
-requests: Requests;
-state: State;
-
-sprint: import sys;
-Bits: import bitarray;
-Peer: import peers;
-Piece: import pieces;
-Req, Reqs, Batch: import requests;
-
-init(randmod: Rand, statemod: State, peersmod: Peers, piecesmod: Pieces)
+init(statemod: State, peersmod: Peers, piecesmod: Pieces)
 {
 	sys = load Sys Sys->PATH;
-	rand = randmod;
+	rand = load Rand Rand->PATH;
+	rand->init(sys->pctl(0, nil)^sys->millisec());
 	bitarray = load Bitarray Bitarray->PATH;
 	misc = load Misc Misc->PATH;
-	misc->init(rand);
+	misc->init();
 	state = statemod;
 	peers = peersmod;
 	pieces = piecesmod;

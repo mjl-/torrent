@@ -37,7 +37,7 @@ Torrentget: module {
 Misc: module {
 	PATH:	con "/dis/lib/bittorrent/misc.dis";
 
-	init:	fn(randmod: Rand);
+	init:	fn();
 
 	randomize:	fn[T](a: array of T);
 	sort:		fn[T](a: array of T, cmp: ref fn(a, b: T): int);
@@ -53,7 +53,7 @@ Pools: module {
 
 	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # pool mode
 
-	init:	fn(randmod: Rand);
+	init:	fn();
 
 	Pool: adt[T] {
 		active:	array of T;
@@ -147,7 +147,7 @@ Peers: module {
 	# Peer.state
 	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
 
-	init:	fn(randmod: Rand);
+	init:	fn();
 
 
 	Newpeer: adt {
@@ -294,7 +294,7 @@ State: module {
 Schedule: module {
 	PATH:	con "/dis/lib/bittorrent/schedule.dis";
 
-	init:	fn(randmod: Rand, state: State, peersmod: Peers, piecesmod: Pieces);
+	init:	fn(state: State, peersmod: Peers, piecesmod: Pieces);
 
 	needblocks:	fn(p: ref Peers->Peer): int;
 	schedule:	fn(reqch: chan of ref (ref Pieces->Piece, list of Requests->Req, chan of int), p: ref Peers->Peer);

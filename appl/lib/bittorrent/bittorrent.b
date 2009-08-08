@@ -1,33 +1,31 @@
 implement Bittorrent;
 
 include "sys.m";
+	sys: Sys;
+	sprint: import sys;
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "string.m";
-include "security.m";
+	str: String;
 include "keyring.m";
+	keyring: Keyring;
+include "security.m";
+	random: Random;
 include "filter.m";
 include "ohttp.m";
+	http: Http;
+	Url, Rbuf: import http;
 include "bitarray.m";
+	bitarray: Bitarray;
+	Bits: import bitarray;
 include "bittorrent.m";
-
-sys: Sys;
-str: String;
-random: Random;
-keyring: Keyring;
-http: Http;
-bitarray: Bitarray;
-
-fprint, fildes, sprint: import sys;
-Bits: import bitarray;
-Url, Rbuf: import http;
 
 dflag = 0;
 version: con 0;
 Peeridlen: con 20;
 
-init(ba: Bitarray)
+init()
 {
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
@@ -36,7 +34,7 @@ init(ba: Bitarray)
 	bufio = load Bufio Bufio->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
-	bitarray = ba;
+	bitarray = load Bitarray Bitarray->PATH;
 }
 
 Bee.find(bb: self ref Bee, s: string): ref Bee
@@ -1003,5 +1001,5 @@ has[T](l: list of T, e: T): int
 say(s: string)
 {
 	if(dflag)
-		fprint(fildes(2), "%s\n", s);
+		sys->fprint(sys->fildes(2), "%s\n", s);
 }
