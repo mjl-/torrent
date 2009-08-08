@@ -373,8 +373,14 @@ awaitpeer()
 	}
 }
 
+peersendmany(p: ref Peer, msgs: list of ref Msg)
+{
+	for(; msgs != nil; msgs = tl msgs)
+		peersend0(p, hd msgs);
+	peergive(p);
+}
 
-peersend(p: ref Peer, msg: ref Msg)
+peersend0(p: ref Peer, msg: ref Msg)
 {
 	pick m := msg {
 	Piece =>
@@ -382,6 +388,11 @@ peersend(p: ref Peer, msg: ref Msg)
 	* =>
 		p.metamsgs = lists->reverse(m::lists->reverse(p.metamsgs));
 	}
+}
+
+peersend(p: ref Peer, msg: ref Msg)
+{
+	peersend0(p, msg);
 	peergive(p);
 }
 
@@ -469,6 +480,7 @@ peerratecmp(a1, a2: ref (ref Peer, int)): int
 
 request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 {
+	msgs: list of ref Msg;
 	for(; reqs != nil; reqs = tl reqs) {
 		req := hd reqs;
 		busy := piece.busy[req.blockindex];
@@ -479,11 +491,12 @@ request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 		else
 			raise "both slots busy...";
 
-		# xxx send in one packet?
 		say("request: requesting "+req.text());
 		peer.reqs.add(req);
-		peersend(peer, ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req)));
+		msgs = ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req))::msgs;
 	}
+	if(msgs != nil)
+		peersendmany(peer, lists->reverse(msgs));
 }
 
 schedule(p: ref Peer)
