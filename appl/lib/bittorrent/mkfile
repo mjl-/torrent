@@ -28,7 +28,7 @@ SYSMODULES=\
 	sys.m\
 	bitarray.m\
 	bittorrent.m\
-	ohttp.m\
+	mhttp.m\
 
 DISBIN=$ROOT/dis/lib/bittorrent
 

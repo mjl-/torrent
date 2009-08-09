@@ -1,5 +1,45 @@
-this package depends on "cgi", for "ohttp.m" (though this will change in the future).
+# status
 
-to install, bind/symlink a mkconfig (e.g. from your inferno install), and:
+in development.  don't expect things to work yet.
+
+
+# intro
+
+this package contains a bittorrent client and tools for verifying
+torrents, printing info from .torrent files.  in the future, tools
+for creating .torrent files and being a tracker.
+
+
+# install
+
+this package depends on "http".
+
+to install, bind/symlink/include a mkconfig (e.g. from your inferno
+install), and:
 
 	mk install
+
+
+# latest
+
+the latest version can be found at
+
+    http://www.ueber.net/code/r/torrent
+
+
+
+# licence & author
+
+all files are in the public domain.  this code has been written by
+mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
+
+
+# todo
+
+- collapse some code from appl/lib/bittorrent/*?
+- use multiple peers
+- implement rarest first and random
+- keep track of which peer has which piece
+- handle choke/unchoke correctly, send interested only when peer has data
+- think of file system interface, for torrent/get
+- write manual page

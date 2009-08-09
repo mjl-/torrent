@@ -13,9 +13,9 @@ include "keyring.m";
 include "security.m";
 	random: Random;
 include "filter.m";
-include "ohttp.m";
+include "mhttp.m";
 	http: Http;
-	Url, Rbuf: import http;
+	Url: import http;
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -698,7 +698,7 @@ readfile(fd: ref Sys->FD): array of byte
 
 trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string)
 {
-	(url, uerr) := Url.parse(t.announce);
+	(url, uerr) := Url.unpack(t.announce);
 	if(uerr != nil)
 		return (0, nil, nil, "parsing announce url: "+uerr);
 
@@ -711,17 +711,19 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
 	s += sprint("&left=%bd", left);
 	s += "&compact=1";
 	if(event != nil)
-		s += "&event="+http->encode(event);
-	if(url.searchpart == "")
-		s = s[1:];
-	url.searchpart += "?"+s;
+		s += "&event="+http->encodequery(event);
+	if(url.query == "")
+		url.query = "?"+s[1:];
+	else
+		url.query += s;
 
-	(rb, herr) := http->get(url, nil);
+	(nil, nil, fd, herr) := http->get(url, nil);
 	if(herr != nil)
 		return (0, nil, nil, "request: "+herr);
-	(d, rerr) := rb.readall();
-	if(rerr != nil)
-		return (0, nil, nil, "reading: "+rerr);
+	n := sys->readn(fd, d := array[32*1024] of byte, len d);
+	if(n < 0)
+		return (0, nil, nil, sprint("read: %r"));
+	d = d[:n];
 
 	(b, err) := Bee.unpack(d);
 	if(err != nil)
