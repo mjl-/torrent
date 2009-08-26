@@ -1,4 +1,5 @@
-Torrentget: module {
+Torrentget: module
+{
 	init:	fn(nil: ref Draw->Context, args: list of string);
 
 	Dialersmax:	con 5;  # max number of dialer procs
@@ -34,7 +35,8 @@ Torrentget: module {
 	ip6maskstr:	con "/48";
 };
 
-Misc: module {
+Misc: module
+{
 	PATH:	con "/dis/lib/bittorrent/misc.dis";
 
 	init:	fn();
@@ -48,7 +50,8 @@ Misc: module {
 	maskip:	fn(ipstr: string): string;
 };
 
-Pools: module {
+Pools: module
+{
 	PATH:	con "/dis/lib/bittorrent/pools.dis";
 
 	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # pool mode
@@ -72,7 +75,8 @@ Pools: module {
 	};
 };
 
-Rate: module {
+Rate: module
+{
 	PATH:	con "/dis/lib/bittorrent/rate.dis";
 
 	TrafficHistorysize:	con 10;
@@ -85,7 +89,7 @@ Rate: module {
 		winsum:	int;
 		sum:	big;
 		npackets:	int;
-		starttime:	int;
+		time0:	int;
 
 		new:	fn(): ref Traffic;
 		add:	fn(t: self ref Traffic, bytes: int);
@@ -97,7 +101,8 @@ Rate: module {
 };
 
 
-Pieces: module {
+Pieces: module
+{
 	PATH:	con "/dis/lib/bittorrent/pieces.dis";
 
 	init:	fn();
@@ -121,7 +126,9 @@ Pieces: module {
 	};
 
 	Block: adt {
-		piece, begin, length:	int;
+		piece,
+		begin,
+		length:	int;
 
 		new:	fn(piece, begin, length: int): ref Block;
 		eq:	fn(b1, b2: ref Block): int;
@@ -140,15 +147,11 @@ Pieces: module {
 };
 
 
-
-Peers: module {
+Peers: module
+{
 	PATH:	con "/dis/lib/bittorrent/peers.dis";
 
-	# Peer.state
-	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
-
 	init:	fn();
-
 
 	Newpeer: adt {
 		addr:   string;
@@ -158,35 +161,43 @@ Peers: module {
 		text:   fn(np: self Newpeer): string;
 	};
 
+	# Peer.state
+	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
+	peerstatestr:	fn(state: int): string;
 	Peer: adt {
-		id:	int;
-		np:	Newpeer;
-		fd:	ref Sys->FD;
-		extensions, peerid: array of byte;
+		id:		int;
+		np:		Newpeer;
+		fd:		ref Sys->FD;
+		extensions,
+		peerid:		array of byte;
 		peeridhex:	string;
-		getmsg:	int;
+		getmsg:		int;
 		getmsgch:	chan of list of ref Bittorrent->Msg;
-		metamsgs, datamsgs: list of ref Bittorrent->Msg;
-		reqs:	ref Requests->Reqs;  # we want from remote
+		metamsgs,
+		datamsgs: 	list of ref Bittorrent->Msg;
+		reqs:		ref Requests->Reqs;  # we want from remote
 		piecehave:	ref Bitarray->Bits;
-		state:	int;  # interested/choked
-		msgseq:	int;
-		up, down, metaup, metadown: ref Rate->Traffic;
-		wants:	list of ref Pieces->Block;  # remote wants from us
+		state:		int;  # interested/choked
+		msgseq:		int;
+		up,
+		down,
+		metaup,
+		metadown: 	ref Rate->Traffic;
+		wants:		list of ref Pieces->Block;  # remote wants from us
 		lastunchoke:	int;
-		dialed:	int;  # whether we initiated connection
-		buf:	ref Buf;  # unwritten part of piece
+		dialed:		int;  # whether we initiated connection
+		buf:		ref Buf;  # unwritten part of piece
 		writech:	chan of ref (int, int, array of byte);
 		readch:		chan of ref (int, int, int);
-		pids:	list of int;  # pids of net reader/writer to kill for cleaning up
+		pids:		list of int;  # pids of net reader/writer to kill for cleaning up
 
-		new:	fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
+		new:		fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
 		remotechoking:	fn(p: self ref Peer): int;
 		remoteinterested:	fn(p: self ref Peer): int;
 		localchoking:	fn(p: self ref Peer): int;
 		localinterested:	fn(p: self ref Peer): int;
-		isdone:	fn(p: self ref Peer): int;
-		text:	fn(p: self ref Peer): string;
+		isdone:		fn(p: self ref Peer): int;
+		text:		fn(p: self ref Peer): string;
 		fulltext:	fn(p: self ref Peer): string;
 	};
 
@@ -196,10 +207,10 @@ Peers: module {
 		pieceoff:	int;
 		piecelength:	int;
 
-		new:	fn(): ref Buf;
-		tryadd:	fn(b: self ref Buf, piece: ref Pieces->Piece, begin: int, buf: array of byte): int;
-		isfull:	fn(b: self ref Buf): int;
-		clear:	fn(b: self ref Buf);
+		new:		fn(): ref Buf;
+		tryadd:		fn(b: self ref Buf, piece: ref Pieces->Piece, begin: int, buf: array of byte): int;
+		isfull:		fn(b: self ref Buf): int;
+		clear:		fn(b: self ref Buf);
 		overlaps:	fn(b: self ref Buf, piece, begin, end: int): int;
 	};
 
@@ -225,7 +236,8 @@ Peers: module {
 	peersactive:	fn(): list of ref Peer;
 };
 
-Requests: module {
+Requests: module
+{
 	PATH:	con "/dis/lib/bittorrent/requests.dis";
 
 	init:	fn();
@@ -270,7 +282,8 @@ Requests: module {
 	batches:	fn(p: ref Pieces->Piece): array of ref Batch;
 };
 
-Verify: module {
+Verify: module
+{
 	PATH:	con "/dis/lib/bittorrent/verify.dis";
 
 	init:	fn();
@@ -280,7 +293,8 @@ Verify: module {
 	torrenthash:	fn(fds: list of ref (ref Sys->FD, big), t: ref Bittorrent->Torrent, haves: ref Bitarray->Bits): string;
 };
 
-State: module {
+State: module
+{
 	PATH:	con "/dis/lib/bittorrent/state.dis";
 
 	init:	fn();
@@ -291,7 +305,8 @@ State: module {
 	piececounts:	array of int;  # for each piece, count of peers that have it
 };
 
-Schedule: module {
+Schedule: module
+{
 	PATH:	con "/dis/lib/bittorrent/schedule.dis";
 
 	init:	fn(state: State, peersmod: Peers, piecesmod: Pieces);

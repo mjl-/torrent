@@ -1,4 +1,5 @@
-Bittorrent: module {
+Bittorrent: module
+{
 	PATH:	con "/dis/lib/bittorrent/bittorrent.dis";
 
 	dflag:	int;
@@ -56,14 +57,23 @@ Bittorrent: module {
 		text:		fn(m: self ref Msg): string;
 	};
 
+	File: adt {
+		index:	int;
+		path,
+		origpath:	string;
+		length,
+		off:	big;
+		pfirst,
+		plast:	int;
+	};
+
 	Torrent: adt {
 		announce:	string;
 		piecelen:	int;
 		hash:		array of byte;
 		piececount:	int;
 		piecehashes:	array of array of byte;
-		files:		list of ref (string, big);  # path, length
-		origfiles:	list of ref (string, big);  # files as found in .torrent
+		files:		list of ref File;
 		length:		big;
 		statepath:	string;
 

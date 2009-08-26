@@ -55,8 +55,8 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("total length:   %s (%bd bytes)\n", bittorrent->bytefmt(t.length), t.length);
 	sys->print("files:\n");
 	for(l := t.files; l != nil; l = tl l) {
-		(path, size) := *hd l;
-		sys->print("%10s  %s\n", bittorrent->bytefmt(size), path);
+		f := hd l;
+		sys->print("%10s  %s\n", bittorrent->bytefmt(f.length), f.path);
 	}
 }
 

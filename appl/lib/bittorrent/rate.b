@@ -54,8 +54,8 @@ Traffic.rate(t: self ref Traffic): int
 	reclaim(t, time);
 
 	div := TrafficHistorysize;
-	if(time-t.starttime < TrafficHistorysize)
-		div = time-t.starttime;
+	if(time-t.time0< TrafficHistorysize)
+		div = time-t.time0;
 	if(div == 0)
 		div = 1;
 	return t.winsum/div;

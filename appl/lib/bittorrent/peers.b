@@ -52,6 +52,23 @@ Newpeer.text(np: self Newpeer): string
 	return sys->sprint("(newpeer %s peerid %s)", np.addr, peerid);
 }
 
+peerstatestrs := array[] of {
+"remotechoking",
+"remoteinterested",
+"localchoking",
+"localinterested",
+};
+peerstatestr(state: int): string
+{
+	s := "";
+	for(i := 0; i < 4; i++)
+		if(state & (1<<i))
+			s += ","+peerstatestrs[i];
+	if(s != nil)
+		s = s[1:];
+	return s;
+}
+
 
 Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
 {

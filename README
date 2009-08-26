@@ -19,6 +19,9 @@ install), and:
 
 	mk install
 
+when building from within inferno, insert SYSHOST=Inferno and ROOT=
+in the mk invocations to override the values in the mkconfig.
+
 
 # latest
 
@@ -36,6 +39,14 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
+- torrent/get: seems verifying (or .state-file reading) doesn't work properly, we refetch the file.
+- put more in progress/peerevents, such as errors (eg from tracker, when writing to disk).
+- explain the design better
+- some tk ui to show activity & progress
+- perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
+- implement tracker
+- torrent/get: allow starting after being stopped.  implement start ctl.
+- torrent/get: move styx code to separate file?
 - collapse some code from appl/lib/bittorrent/*?
 - use multiple peers
 - implement rarest first and random

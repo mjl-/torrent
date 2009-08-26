@@ -122,6 +122,15 @@ Bits.bytes(b: self ref Bits): array of byte
 	return d;
 }
 
+Bits.all(b: self ref Bits): list of int
+{
+	l: list of int;
+	for(i := b.n-1; i >= 0; i--)
+		if(b.get(i))
+			l = i::l;
+	return l;
+}
+
 Bits.text(b: self ref Bits): string
 {
 	s := "";

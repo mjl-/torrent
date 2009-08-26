@@ -23,6 +23,7 @@ SYSMODULES=\
 	lists.m\
 	string.m\
 	sys.m\
+	tables.m\
 	bitarray.m\
 	bittorrent.m\
 

@@ -1,4 +1,5 @@
-Bitarray: module {
+Bitarray: module
+{
 	PATH:	con "/dis/lib/bitarray.dis";
 
 	Bits: adt {
@@ -19,6 +20,7 @@ Bitarray: module {
 		isempty:	fn(b: self ref Bits): int;
 		isfull:		fn(b: self ref Bits): int;
 		bytes:		fn(b: self ref Bits): array of byte;
+		all:		fn(b: self ref Bits): list of int;
 		text:		fn(b: self ref Bits): string;
 	};
 };

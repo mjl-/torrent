@@ -80,18 +80,62 @@ incoming from remote peer:
 
 processes:
 
-- main
-- ticker, for periodic events
-- listener for incoming connections
-- tracker requester
-- upload limiter
-- download limiter
-- peer dialer (multiple)
-- peer net reader (many)
-- peer net writer (many)
-- peer disk reader
-- peer disk writer
+main
+	where everything comes together
+ticker
+        for periodic events.  sends to main() once every 10 seconds
+        (for (un)choking, calculating stats)
+listener
+        for incoming connections.  handshakes with new peer, sends
+        peer on newpeerchan.  only listens after receive on
+        canlistenchan.
+track,
+        tracker requester.  waits on trackreqchan for stats to send
+        to tracker, performs request, and sends to new interval,peers,error
+        to trackchan (main).
+limiter (upload)
+        all uploaded traffic goes through this, upchan gets number
+        of requested bytes and response channel.  limiter gives
+        bandwidth it has, then waits until it can give out bandwidth
+        again.
+limiter (download)
+	same as uploader, but for incoming data.
+disk writer
+	xxx
 
+per peer:
+peernetreader
+        loops: msgread(), which uses netread() which uses the
+        limiter), sends msg,peer,xxx to peerinmsgchan (main()).
+        xxx does something smart with writing requests to peer, to
+        keep us from reading too many message without slowing down
+        on writes to that peer
+peernetwriter
+        loops: send on wantmsgchan (main()) to indicate it can
+        write, receive a list of messages to write on peer's getmsgch,
+        netwrite's the packed message.
+diskreader
+        loops: receives request (piece,begin,length) from peer's
+        readch (send by readblock(), from handleinmsg()), reads
+        data from file, responds on diskreadchan (main()).
+diskwriter
+        loops: receives request (piece, begin, buf), writes data
+        to file, sends on diskwrittenchan (main()).
+
+dialer
+        spawned in dialpeers(), called from main().  dials peers,
+        does handshake, and sends new peer on newpeerchan (main).
+sched->schedule()
+	xxx why in a prog?  i recall there was a reason to do that...
+trackkick
+        sleeps n msec, then sends to trackkickchan (main) to cause
+        a new tracker request (by sending stats on trackreqchan,
+        to prog track())
+kicklistener
+	just sends on canlistenchan to make listener() do another listen
+dialkiller
+        kills the dialer after Dialtimeout seconds, unless it is
+        killed first because the dialer was done.
 
 state:
 - pieces we currently have
@@ -136,7 +180,6 @@ writing to peer/reading from disk:
 
 rate limiting:
 - every read/write must go through a proc that handles the limiting.  it sends a request for reading/writing x bytes.  the proc then responds with the number of bytes that can be read/written.  this is like readn/read.
-- currently the proc divides time in 1-second slots, allocating bandwidth to them.  if bandwidth of the second is used, the proc waits with responding until the next second starts.
 
 
 file system:
@@ -163,8 +206,6 @@ pieces
 
 peers/list
 	read list of peers as received from tracker
-peers/n/
-        ctl
-		for disconnecting?
+peers/n
         state
 		for reading up/down speed/bytes, local/remote interested/chokeness, which pieces

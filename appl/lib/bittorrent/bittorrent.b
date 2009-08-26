@@ -12,6 +12,8 @@ include "keyring.m";
 	keyring: Keyring;
 include "security.m";
 	random: Random;
+include "lists.m";
+	lists: Lists;
 include "filter.m";
 include "mhttp.m";
 	http: Http;
@@ -32,6 +34,7 @@ init()
 	random = load Random Random->PATH;
 	keyring = load Keyring Keyring->PATH;
 	bufio = load Bufio Bufio->PATH;
+	lists = load Lists Lists->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 	bitarray = load Bitarray Bitarray->PATH;
@@ -511,6 +514,7 @@ Torrent.open(path: string): (ref Torrent, string)
 	bpiecelen := binfo.geti("piece length"::nil);
 	if(bpiecelen == nil)
 		return (nil, sprint("%s: missing 'piece length' field", path));
+	piecelen := int bpiecelen.i;
 
 
 	bpieces := binfo.gets("pieces"::nil);
@@ -531,28 +535,27 @@ Torrent.open(path: string): (ref Torrent, string)
 		return (nil, "missing destination file name");
 	name := sanitizepath(string bname.a);
 	if(name == nil)
-		return (nil, sprint("weird path, refusing to create: %q", name));
+		return (nil, sprint("weird path, refusing to create: %#q", name));
 
 	# determine paths for files, and total length
 	length := big 0;
 	blength := binfo.geti("length"::nil);
-	files: list of ref (string, big);
-	origfiles: list of ref (string, big);
+	files: list of ref File;
 	if(blength != nil) {
 		length = blength.i;
-		files = ref (simplepath(name), length)::nil;
-		origfiles = ref (name, length)::nil;
+		files = ref File (0, simplepath(name), name, length, big 0, 0, len pieces-1)::nil;
 	} else {
 		bfiles := binfo.getl("files"::nil);
 		if(bfiles == nil)
 			return (nil, sprint("%s: missing field 'length' or 'files' in 'info'", path));
 		if(len bfiles.a == 0)
 			return (nil, sprint("%s: no files in torrent", path));
+		length = big 0;
 		for(i = 0; i < len bfiles.a; i++) {
 			blen := bfiles.a[i].geti("length"::nil);
 			if(blen == nil)
 				return (nil, sprint("%s: missing field 'length' in 'files[%d]' in 'info'", path, i));
-			size := blen.i;
+			filelength := blen.i;
 
 			pathl := bfiles.a[i].getl("path"::nil);
 			if(pathl == nil)
@@ -568,16 +571,17 @@ Torrent.open(path: string): (ref Torrent, string)
 			dstpath := foldpath(name::pathls);
 			if(dstpath == nil)
 				return (nil, sprint("weird path, refusing to create: %q", join(pathls, "/")));
-			files = ref (simplepath(dstpath), size)::files;
-			origfiles = ref (dstpath, size)::files;
-			length += size;
+			pfirst := int (length/big piecelen);
+			plast := int ((length+filelength+big piecelen-big 1)/big piecelen);
+			files = ref File (i, simplepath(dstpath), dstpath, filelength, length, pfirst, plast)::files;
+			length += filelength;
 		}
 	}
-	files = rev(files);
+	files = lists->reverse(files);
 
 	# xxx sanity checks
-	statepath := hd revstr(sys->tokenize(path, "/").t1)+".state";
-	return (ref Torrent(string bannoun.a, int bpiecelen.i, hash, len pieces, pieces, files, origfiles, length, statepath), nil);
+	statepath := hd lists->reverse(sys->tokenize(path, "/").t1)+".state";
+	return (ref Torrent(string bannoun.a, piecelen, hash, len pieces, pieces, files, length, statepath), nil);
 }
 
 
@@ -602,17 +606,21 @@ mkdirs(elems: list of string): string
 	return nil;
 }
 
+filename(f: ref File, nofix: int): string
+{
+	if(nofix)
+		return f.origpath;
+	return f.path;
+}
+
 Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string)
 {
 	fds: list of ref (ref Sys->FD, big);
-	files := t.files;
-	if(nofix)
-		files = t.origfiles;
 
 	# verify file names are unique
 	filenames: list of string;
-	for(l := files; l != nil; l = tl l)
-		filenames = (hd l).t0::filenames;
+	for(l := t.files; l != nil; l = tl l)
+		filenames = filename(hd l, nofix)::filenames;
 
 	for(m := filenames; m != nil; m = tl m)
 		if(has(tl m, hd m))
@@ -620,22 +628,23 @@ Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref 
 
 	# attempt to open paths as existing files
 	opens: list of string;
-	for(l = files; l != nil; l = tl l) {
-		(path, length) := *hd l;
+	for(l = t.files; l != nil; l = tl l) {
+		f := hd l;
+		path := filename(f, nofix);
 		fd := sys->open("./"+path, Sys->ORDWR);
-		fds = ref (fd, length)::fds;
+		fds = ref (fd, f.length)::fds;
 		if(fd != nil) {
 			(ok, dir) := sys->fstat(fd);
 			if(ok != 0)
 				return (nil, 0, sprint("fstat %s: %r", path));
-			if(dir.length != length)
-				return (nil, 0, sprint("%s: length of existing file is %bd, torrent says %bd", path, dir.length, length));
+			if(dir.length != f.length)
+				return (nil, 0, sprint("%s: length of existing file is %bd, torrent says %bd", path, dir.length, f.length));
 			opens = path::opens;
 			say(sprint("opened %q", path));
 		}
 	}
-	fds = rev(fds);
-	if(len opens == len files)
+	fds = lists->reverse(fds);
+	if(len opens == len t.files)
 		return (fds, 0, nil);
 
 	if(len opens != 0)
@@ -646,23 +655,24 @@ Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref 
 
 	# none could be opened, create paths as new files
 	fds = nil;
-	for(l = files; l != nil; l = tl l) {
-		(path, length) := *hd l;
+	for(l = t.files; l != nil; l = tl l) {
+		f := hd l;
+		path := filename(f, nofix);
 		(nil, elems) := sys->tokenize(path, "/");
-		err := mkdirs(rev(tl rev(elems)));
+		err := mkdirs(lists->reverse(tl lists->reverse(elems)));
 		if(err != nil)
 			return (nil, 0, err);
 		fd := sys->create("./"+path, Sys->ORDWR, 8r666);
 		if(fd == nil)
 			return (nil, 0, sprint("create %s: %r", path));
 		dir := sys->nulldir;
-		dir.length = length;
+		dir.length = f.length;
 		if(sys->fwstat(fd, dir) != 0)
 			return (nil, 0, sprint("fwstat file size %s: %r", path));
-		fds = ref (fd, length)::fds;
+		fds = ref (fd, f.length)::fds;
 		say(sprint("created %q", path));
 	}
-	fds = rev(fds);
+	fds = lists->reverse(fds);
 	return (fds, 1, nil);
 }
 
@@ -950,22 +960,6 @@ g16(d: array of byte, i: int): (int, int)
 	v = (v<<8)|int d[i++];
 	v = (v<<8)|int d[i++];
 	return (v, i);
-}
-
-rev[T](l: list of T): list of T
-{
-	r: list of T;
-	for(; l != nil; l = tl l)
-		r = hd l::r;
-	return r;
-}
-
-revstr(l: list of string): list of string
-{
-	r: list of string;
-	for(; l != nil; l = tl l)
-		r = hd l::r;
-	return r;
 }
 
 join(l: list of string, s: string): string
