@@ -72,7 +72,7 @@ httpd -a net!*!80 -s /announce net!localhost!4020 GET /lib/empty
 .SH SOURCE
 .B /appl/cmd/torrent/track.b
 .SH SEE ALSO
-.IR torrentget (1),
+.IR torrentpeer (1),
 .IR torrentcreate (1),
 .IR shttpd (1).
 .br

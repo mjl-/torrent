@@ -1,6 +1,6 @@
 implement Peers;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -81,7 +81,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 		peergen++,
 		np, fd, extensions, peerid, misc->hex(peerid),
 		0, getmsgch, nil, nil,
-		Reqs.new(Torrentget->Blockqueuesize),
+		Reqs.new(Torrentpeer->Blockqueuesize),
 		Bits.new(npieces),
 		state,
 		msgseq,
@@ -148,7 +148,7 @@ Buf.tryadd(b: self ref Buf, piece: ref Pieces->Piece, begin: int, buf: array of 
 		return 0;
 
 	# append data to buf, only if it won't cross disk chunk
-	if(begin % Torrentget->Diskchunksize != 0 && begin == b.pieceoff+len b.data) {
+	if(begin % Torrentpeer->Diskchunksize != 0 && begin == b.pieceoff+len b.data) {
 		ndata := array[len b.data+len buf] of byte;
 		ndata[:] = b.data;
 		ndata[len b.data:] = buf;
@@ -157,7 +157,7 @@ Buf.tryadd(b: self ref Buf, piece: ref Pieces->Piece, begin: int, buf: array of 
 	}
 
 	# prepend data to buf, only if it won't cross disk chunk
-	if(b.pieceoff % Torrentget->Diskchunksize != 0 && begin == b.pieceoff-len buf) {
+	if(b.pieceoff % Torrentpeer->Diskchunksize != 0 && begin == b.pieceoff-len buf) {
 		ndata := array[len buf+len b.data] of byte;
 		ndata[:] = buf;
 		ndata[len buf:] = b.data;
@@ -171,7 +171,7 @@ Buf.tryadd(b: self ref Buf, piece: ref Pieces->Piece, begin: int, buf: array of 
 
 Buf.isfull(b: self ref Buf): int
 {
-	return len b.data == Torrentget->Diskchunksize || b.pieceoff+len b.data == b.piecelength;
+	return len b.data == Torrentpeer->Diskchunksize || b.pieceoff+len b.data == b.piecelength;
 }
 
 Buf.clear(b: self ref Buf)

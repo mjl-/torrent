@@ -49,7 +49,7 @@ Bittorrent regards the files to be transferred as a contiguous stream of bytes. 
 .SH SOURCE
 .B /appl/cmd/torrent/create.b
 .SH SEE ALSO
-.IR torrentget (1),
+.IR torrentpeer (1),
 .IR torrenttrack (1).
 
 .SH BUGS

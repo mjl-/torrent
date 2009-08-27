@@ -1,6 +1,6 @@
 implement Pools;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
 	rand: Rand;
 	misc: Misc;

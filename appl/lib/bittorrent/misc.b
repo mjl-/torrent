@@ -1,6 +1,6 @@
 implement Misc;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
 	rand: Rand;
 include "ip.m";
@@ -79,11 +79,11 @@ ip6mask:	IPaddr;
 maskip(ipstr: string): string
 {
 	if(!maskinitialized) {
-		(ok, mask) := IPaddr.parsemask(Torrentget->ip4maskstr);
+		(ok, mask) := IPaddr.parsemask(Torrentpeer->ip4maskstr);
 		if(ok != 0)
 			raise "bad ip4mask";
 		ip4mask = mask;
-		(ok, mask) = IPaddr.parsemask(Torrentget->ip6maskstr);
+		(ok, mask) = IPaddr.parsemask(Torrentpeer->ip6maskstr);
 		if(ok != 0)
 			raise "bad ip6mask";
 		ip6mask = mask;

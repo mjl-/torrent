@@ -1,4 +1,4 @@
-Torrentget: module
+Torrentpeer: module
 {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 

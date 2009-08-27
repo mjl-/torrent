@@ -1,6 +1,6 @@
 implement Schedule;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
 	sprint: import sys;
 	rand: Rand;
@@ -95,7 +95,7 @@ getrarestpiece(b: ref Bits)
 
 needblocks(peer: ref Peer): int
 {
-	return peer.reqs.count() == 0 || peer.reqs.count()+Torrentget->Batchsize < peer.reqs.size();
+	return peer.reqs.count() == 0 || peer.reqs.count()+Torrentpeer->Batchsize < peer.reqs.size();
 }
 
 inactiverare(): array of ref (int, int)
@@ -140,7 +140,7 @@ progresscmp(p1, p2: ref Piece): int
 
 rarestfirst(): int
 {
-	return (state->piecehave).have >= Torrentget->Piecesrandom;
+	return (state->piecehave).have >= Torrentpeer->Piecesrandom;
 }
 
 schedule(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)

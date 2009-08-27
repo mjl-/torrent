@@ -1,8 +1,8 @@
 implement Pieces;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
-	keyring: Keyring;
+	kr: Keyring;
 	bitarray: Bitarray;
 	Bits: import bitarray;
 	bittorrent: Bittorrent;
@@ -15,7 +15,7 @@ torrent: ref Torrent;
 init()
 {
 	sys = load Sys Sys->PATH;
-	keyring = load Keyring Keyring->PATH;
+	kr = load Keyring Keyring->PATH;
 	lists = load Lists Lists->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
@@ -29,7 +29,7 @@ prepare(t: ref Torrent)
 
 Piece.new(index, length: int): ref Piece
 {
-	nblocks := (length+Torrentget->Blocksize-1)/Torrentget->Blocksize;
+	nblocks := (length+Torrentpeer->Blocksize-1)/Torrentpeer->Blocksize;
 	return ref Piece(nil, 0, index, Bits.new(nblocks), Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
 }
 
@@ -49,7 +49,7 @@ Piece.isdone(p: self ref Piece): int
 
 Piece.hashadd(p: self ref Piece, buf: array of byte)
 {
-	p.hashstate = keyring->sha1(buf, len buf, nil, p.hashstate);
+	p.hashstate = kr->sha1(buf, len buf, nil, p.hashstate);
 	p.hashstateoff += len buf;
 }
 

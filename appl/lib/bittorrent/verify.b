@@ -1,6 +1,6 @@
 implement Verify;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
 	kr: Keyring;
 	bitarray: Bitarray;
@@ -36,7 +36,7 @@ chunkreader(fds: list of ref (ref Sys->FD, big), reqch: chan of ref (int, big, c
 
 		(n, off, chunkch) := *req;
 		while(n > 0) {
-			want := min(Torrentget->Diskchunksize, n);
+			want := min(Torrentpeer->Diskchunksize, n);
 			buf := array[want] of byte;
 			err := bittorrent->torrentpreadx(fds, buf, len buf, off);
 			if(err != nil) {

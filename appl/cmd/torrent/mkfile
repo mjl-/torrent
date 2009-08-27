@@ -5,14 +5,14 @@ DISBIN=$ROOT/dis
 TARG=\
 	parse.dis\
 	trackerget.dis\
-	get.dis\
+	peer.dis\
 	verify.dis\
 	info.dis\
 	track.dis\
 	create.dis\
 
 MODULES=\
-	../../lib/bittorrent/get.m\
+	../../lib/bittorrent/peer.m\
 
 SYSMODULES=\
 	arg.m\

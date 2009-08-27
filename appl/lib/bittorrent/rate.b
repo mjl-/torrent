@@ -1,6 +1,6 @@
 implement Rate;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
 	bittorrent: Bittorrent;
 include "daytime.m";

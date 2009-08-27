@@ -9,7 +9,7 @@ include "bufio.m";
 	Iobuf: import bufio;
 include "arg.m";
 include "keyring.m";
-	keyring: Keyring;
+	kr: Keyring;
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -28,7 +28,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
-	keyring = load Keyring Keyring->PATH;
+	kr = load Keyring Keyring->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();

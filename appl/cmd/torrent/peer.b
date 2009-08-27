@@ -1,4 +1,4 @@
-implement Torrentget;
+implement Torrentpeer;
 
 include "sys.m";
 	sys: Sys;
@@ -17,7 +17,7 @@ include "rand.m";
 include "lists.m";
 	lists: Lists;
 include "keyring.m";
-	keyring: Keyring;
+	kr: Keyring;
 include "security.m";
 	random: Random;
 include "math.m";
@@ -37,7 +37,7 @@ include "bitarray.m";
 include "bittorrent.m";
 	bittorrent: Bittorrent;
 	Bee, Msg, File, Torrent: import bittorrent;
-include "../../lib/bittorrent/get.m";
+include "../../lib/bittorrent/peer.m";
 	util: Misc;
 	pools: Pools;
 	Pool: import pools;
@@ -224,7 +224,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	daytime = load Daytime Daytime->PATH;
 	str = load String String->PATH;
-	keyring = load Keyring Keyring->PATH;
+	kr = load Keyring Keyring->PATH;
 	random = load Random Random->PATH;
 	rand = load Rand Rand->PATH;
 	rand->init(random->randomint(Random->ReallyRandom));

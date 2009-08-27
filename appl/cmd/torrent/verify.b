@@ -16,7 +16,7 @@ include "bittorrent.m";
 	bittorrent: Bittorrent;
 	Bee, Msg, Torrent: import bittorrent;
 include "rand.m";
-include "../../lib/bittorrent/get.m";
+include "../../lib/bittorrent/peer.m";
 	verify: Verify;
 
 

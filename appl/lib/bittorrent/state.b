@@ -1,6 +1,6 @@
 implement State;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 

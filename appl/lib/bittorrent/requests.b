@@ -1,6 +1,6 @@
 implement Requests;
 
-include "torrentget.m";
+include "torrentpeer.m";
 	sys: Sys;
 
 init()
@@ -21,7 +21,7 @@ Req.eq(r1, r2: Req): int
 
 Req.text(r: self Req): string
 {
-	return sys->sprint("<req piece=%d block=%d begin=%d>", r.pieceindex, r.blockindex, r.blockindex*Torrentget->Blocksize);
+	return sys->sprint("<req piece=%d block=%d begin=%d>", r.pieceindex, r.blockindex, r.blockindex*Torrentpeer->Blocksize);
 }
 
 
@@ -152,9 +152,9 @@ min(a, b: int): int
 batches(p: ref Pieces->Piece): array of ref Batch
 {
 	nblocks := p.have.n;
-	nbatches := (nblocks+Torrentget->Batchsize-1)/Torrentget->Batchsize;
+	nbatches := (nblocks+Torrentpeer->Batchsize-1)/Torrentpeer->Batchsize;
 	b := array[nbatches] of ref Batch;
 	for(i := 0; i < len b; i++)
-		b[i] = Batch.new(i*Torrentget->Batchsize, min(Torrentget->Batchsize, nblocks-i*Torrentget->Batchsize), p);
+		b[i] = Batch.new(i*Torrentpeer->Batchsize, min(Torrentpeer->Batchsize, nblocks-i*Torrentpeer->Batchsize), p);
 	return b;
 }

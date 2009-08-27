@@ -13,8 +13,8 @@ TARG=\
 	schedule.dis\
 
 MODULES=\
-	get.m\
-	torrentget.m\
+	peer.m\
+	torrentpeer.m\
 
 SYSMODULES=\
 	bufio.m\
