@@ -4,7 +4,7 @@ torrent/create \- create torrent file
 .SH SYNOPSIS
 .B torrent/create
 [
-.B -v
+.B -vf
 ] [
 .B -d
 .I dir
@@ -28,6 +28,11 @@ The resulting torrent file is written to standard output.
 .TP
 .B -v
 Be verbose, this prints the total size, number of pieces and the ``info hash'' (the hash of the file contents) to standard error.
+.TP
+.B -f
+Force creation of the torrent file.  Without this option, torrent/create checks that
+.I tracker
+is a valid url.  If it is not, it stops with an error.
 .TP
 .BI -d " dir"
 This option is required when multiple

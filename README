@@ -5,9 +5,10 @@ in development.  don't expect things to work yet.
 
 # intro
 
-this package contains a bittorrent client and tools for verifying
-torrents, printing info from .torrent files, a tracker.  in the
-future, tools for creating .torrent files.
+this package contains a bittorrent peer (for downloading and uploading
+files), tools for verifying torrents & printing information about
+torrents, a bittorrent tracker for use with a http server, and a
+program for creating torrent files.
 
 
 # install
@@ -28,7 +29,6 @@ in the mk invocations to override the values in the mkconfig.
 the latest version can be found at
 
     http://www.ueber.net/code/r/torrent
-
 
 
 # licence & author

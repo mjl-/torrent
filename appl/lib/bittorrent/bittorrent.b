@@ -666,7 +666,7 @@ Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref 
 		filenames = filename(hd l, nofix)::filenames;
 
 	for(m := filenames; m != nil; m = tl m)
-		if(has(tl m, hd m))
+		if(hasstr(tl m, hd m))
 			return (nil, 0, "duplicate path: "+hd m);
 
 	# attempt to open paths as existing files
@@ -1070,7 +1070,7 @@ hex(d: array of byte): string
 	return s;
 }
 
-has[T](l: list of T, e: T): int
+hasstr(l: list of string, e: string): int
 {
 	for(; l != nil; l = tl l)
 		if(hd l == e)

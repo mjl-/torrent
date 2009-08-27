@@ -16,12 +16,16 @@ include "bitarray.m";
 include "bittorrent.m";
 	bt: Bittorrent;
 	Bee, File, Torrent: import bt;
+include "mhttp.m";
+	http: Http;
+	Url: import http;
 
 Torrentcreate: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
 dflag: int;
+fflag: int;
 vflag: int;
 name: string;
 piecelen := 2**18;
@@ -35,12 +39,15 @@ init(nil: ref Draw->Context, args: list of string)
 	lists = load Lists Lists->PATH;
 	bt = load Bittorrent Bittorrent->PATH;
 	bt->init();
+	http = load Http Http->PATH;
+	http->init(bufio);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-v] [-d dir] [-p piecelen] tracker file ...");
+	arg->setusage(arg->progname()+" [-vf] [-d dir] [-p piecelen] tracker file ...");
 	while((c := arg->opt()) != 0)
 		case c {
 		'd' =>	name = arg->arg();
+		'f' =>	fflag++;
 		'p' =>	piecelen = int bt->byteparse(arg->arg());
 			if(piecelen < 0 || nbits(piecelen) != 1)
 				fail(sprint("piecelen is not a positive power of 2"));
@@ -54,6 +61,12 @@ init(nil: ref Draw->Context, args: list of string)
 
 	announce := hd args;
 	paths := tl args;
+
+	if(!fflag) {
+		(url, err) := Url.unpack(announce);
+		if(err != nil || url.scheme != "http" && url.scheme != "https")
+			fail(sprint("bad announce url %#q: %s", announce, err));
+	}
 
 	if(len paths > 1 && name == nil)
 		fail(sprint("-d dir required when using multiple files"));
