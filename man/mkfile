@@ -1,8 +1,6 @@
 <../mkconfig
 
-MAN=
+MAN=\
+	1/torrenttrack\
 
 <mkman
-
-nuke:QV:
-	

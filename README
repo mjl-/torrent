@@ -39,9 +39,9 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
-- torrent/track: should write state to file if specified on command-line
+- torrent/track: ipv6 extension support, and use the supplied ip address (not hostname, dns resolving is a bit too much).
+- torrent/track: make search for a peer (given ip & port) less inefficient.
 - torrent/track: might be a bit smarter about which peers to send to a peer.  e.g. not itself, make randomizing cheaper, let peers that are done (left=0) not connect to each other.
-- torrent/track: think whether we should use the ip= field in the request.  it seems much better to just use the source ip.  the client should make sure to connect from the right ip.
 - torrent/get: seems verifying (or .state-file reading) doesn't work properly, we refetch the file.
 - put more in progress/peerevents, such as errors (eg from tracker, when writing to disk).
 - explain the design better

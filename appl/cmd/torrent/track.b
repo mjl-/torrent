@@ -10,6 +10,8 @@ include "bufio.m";
 include "arg.m";
 include "string.m";
 	str: String;
+include "daytime.m";
+	daytime: Daytime;
 include "rand.m";
 	rand: Rand;
 include "tables.m";
@@ -30,15 +32,20 @@ Torrenttrack: module {
 };
 
 dflag:	int;
-statefile:	string;
+statefile0,
+statefile1:	string;
+sffd0, sffd1: ref Sys->FD;
+statelast:	int;
+flushtime:	int;
 hashesfile:	string;
-interval := 600;
+interval := 1200;
 maxpeers := 30;
 
 Peer: adt {
 	peerid:	array of byte;
 	ip:	IPaddr;
 	port:	int;
+	mtime:	int;
 };
 
 Tracked: adt {
@@ -47,8 +54,8 @@ Tracked: adt {
 	peers:	array of ref Peer;
 
 	stir:	fn(t: self ref Tracked);
-	remove:	fn(t: self ref Tracked, ip: IPaddr, port: int);
-	have:	fn(t: self ref Tracked, ip: IPaddr, port: int): int;
+	remove:	fn(t: self ref Tracked, ip: IPaddr, port: int, valid: int);
+	find:	fn(t: self ref Tracked, ip: IPaddr, port: int): ref Peer;
 	add:	fn(t: self ref Tracked, p: ref Peer);
 };
 
@@ -76,6 +83,7 @@ init(nil: ref Draw->Context, args: list of string)
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
 	str = load String String->PATH;
+	daytime = load Daytime Daytime->PATH;
 	rand = load Rand Rand->PATH;
 	rand->init(sys->millisec()^sys->pctl(0, nil));
 	tables = load Tables Tables->PATH;
@@ -86,17 +94,27 @@ init(nil: ref Draw->Context, args: list of string)
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
 
+	sys->pctl(Sys->NEWPGRP, nil);
+
 	tracked = tracked.new(64, nil);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-d] [-h hashesfile] [-i interval] [-m maxpeers] [-s statefile] scgiaddr");
+	arg->setusage(arg->progname()+" [-d] [-h hashesfile] [-i interval] [-m maxpeers] [-s statefile statefile flushtime] scgiaddr");
 	while((c := arg->opt()) != 0)
 		case c {
 		'd' =>	dflag++;
 		'h' =>	hashesfile = arg->arg();
 		'i' =>	interval = int arg->arg();
 		'm' =>	maxpeers = int arg->arg();
-		's' =>	statefile = arg->arg();
+		's' =>	statefile0 = arg->arg();
+			statefile1 = arg->arg();
+			sffd0 = sys->open(statefile0, Sys->ORDWR);
+			if(sffd0 == nil)
+				fail(sprint("open %q: %r", statefile0));
+			sffd1 = sys->open(statefile1, Sys->ORDWR);
+			if(sffd1 == nil)
+				fail(sprint("open %q: %r", statefile1));
+			flushtime = int arg->arg();
 		* =>	arg->usage();
 		}
 
@@ -106,12 +124,58 @@ init(nil: ref Draw->Context, args: list of string)
 	scgiaddr := hd args;
 	if(hashesfile != nil)
 		readhashes();
-	if(statefile != nil)
+	if(statefile0 != nil)
 		readstate();
 
 	(aok, aconn) := sys->announce(scgiaddr);
 	if(aok < 0)
 		fail(sprint("announce %q: %r", scgiaddr));
+
+	spawn main(aconn);
+}
+
+main(aconn: Sys->Connection)
+{
+	spawn listener(aconn, lc := chan of ref Sys->FD);
+	flushc := chan of int;
+
+	flushpid := -1;
+	for(;;)
+	alt {
+	fd := <-lc =>
+		{
+			# note: we're doing one request at a time.
+			# if we can block at all (to httpd (to client)), we should make sure it isn't for too long.
+			serve(fd);
+			if(flushpid < 0 && statefile0 != nil) {
+				spawn flusher(flushtime, flushc);
+				flushpid = <-flushc;
+			}
+		} exception e {
+		"scgi:*" =>
+			err := e[len "scgi:":];
+			bresp := ref Bee.Dict (array[] of {Bee.makekey("failure reason", ref Bee.String (array of byte err))});
+			sys->fprint(fd, "status: 200 ok\r\n\r\n%s", string bresp.pack());
+		"http:*" =>
+			sys->fprint(fd, "status: 500 fail\r\ncontent-type: text/plain; charset=utf-8\r\n\r\n%s\n", e[len "scgi:":]);
+		}
+		fd = nil;
+		
+	<-flushc =>
+		writestate();
+		flushpid = -1;
+	}
+}
+
+flusher(secs: int, c: chan of int)
+{
+	c <-= sys->pctl(0, nil);
+	sys->sleep(secs*1000);
+	c <-= 0;
+}
+
+listener(aconn: Sys->Connection, lc: chan of ref Sys->FD)
+{
 	for(;;) {
 		(ok, conn) := sys->listen(aconn);
 		if(ok < 0) {
@@ -123,18 +187,7 @@ init(nil: ref Draw->Context, args: list of string)
 			warn(sprint("open connection data: %r"));
 			continue;
 		}
-		{
-			# note: we're doing one request at a time.
-			# if we can block at all (to httpd (to client)), we should make sure it isn't for too long.
-			serve(fd);
-		} exception e {
-		"scgi:*" =>
-			err := e[len "scgi:":];
-			bresp := ref Bee.Dict (array[] of {Bee.makekey("failure reason", ref Bee.String (array of byte err))});
-			sys->fprint(fd, "status: 200 ok\r\n\r\n%s", string bresp.pack());
-		"http:*" =>
-			sys->fprint(fd, "status: 500 fail\r\ncontent-type: text/plain; charset=utf-8\r\n\r\n%s\n", e[len "scgi:":]);
-		}
+		lc <-= fd;
 		fd = nil;
 	}
 }
@@ -292,18 +345,20 @@ say(sprint("new torrent, hash %q", tr.hashhex));
 	case tr.event {
 	"stopped" =>
 		npeers = 0;
-		t.remove(tr.ip, tr.port);
+		t.remove(tr.ip, tr.port, daytime->now()-interval);
 say(sprint("removing peer %q", tr.ip.text()));
 	* =>
 		if(npeers > len t.peers)
 			npeers = len t.peers;
-		if(!t.have(tr.ip, tr.port)) {
+		p := t.find(tr.ip, tr.port);
+		if(p == nil) {
 say(sprint("adding peer %q", tr.ip.text()));
-			t.add(ref Peer (tr.peerid, tr.ip, tr.port));
+			t.add(ref Peer (tr.peerid, tr.ip, tr.port, 0));
 		}
+		p.mtime = daytime->now();
 	}
 say(sprint("returning %d peers to %s!%d (%q)", npeers, tr.ip.text(), tr.port, tr.host));
-	return respondpeers(fd, tr, t.peers[:npeers]);
+	respondpeers(fd, tr, t.peers[:npeers]);
 }
 
 respondpeers(fd: ref Sys->FD, tr: ref Trackreq, a: array of ref Peer)
@@ -343,7 +398,13 @@ say(sprint("big, %s!%d", p.ip.text(), p.port));
 	}
 	binterval := Bee.makekey("interval", ref Bee.Integer (big interval));
 	bpeers := Bee.makekey("peers", peersdict);
-	bresp := ref Bee.Dict (array[] of {binterval, bpeers});
+	extip: array of byte;
+	if(tr.ip.isv4())
+		extip = tr.ip.v4();
+	else
+		extip = tr.ip.v6();
+	bpeerip := Bee.makekey("external ip", ref Bee.String (extip));
+	bresp := ref Bee.Dict (array[] of {binterval, bpeers, bpeerip});
 	buf := bresp.pack();
 	if(sys->fprint(fd, "status: 200 ok\r\n\r\n") < 0 || sys->write(fd, buf, len buf) != len buf)
 		httperror(sprint("write: %r"));
@@ -351,32 +412,44 @@ say(sprint("big, %s!%d", p.ip.text(), p.port));
 
 Tracked.stir(t: self ref Tracked)
 {
+	valid := daytime->now()-interval;
 	rand->init(sys->millisec()^sys->pctl(0, nil));
 	n := maxpeers;
 	if(n > len t.peers)
 		n = len t.peers;
-	for(i := 0; i < n; i++) {
+	i := 0;
+	while(i < n) {
+		if(t.peers[i].mtime < valid) {
+			t.peers[i] = t.peers[len t.peers-1];
+			t.peers = t.peers[:len t.peers-1];
+			continue;
+		}
 		j := rand->rand(len t.peers);
 		(t.peers[i], t.peers[j]) = (t.peers[j], t.peers[i]);
+		i++;
 	}
 }
 
-Tracked.remove(t: self ref Tracked, ip: IPaddr, port: int)
+Tracked.remove(t: self ref Tracked, ip: IPaddr, port: int, valid: int)
 {
-	for(i := 0; i < len t.peers; i++)
-		if(t.peers[i].port == port && t.peers[i].ip.eq(ip)) {
+	for(i := 0; i < len t.peers; i++) {
+		match := t.peers[i].port == port && t.peers[i].ip.eq(ip);
+		old := t.peers[i].mtime < valid;
+		if(match || old) {
 			t.peers[i] = t.peers[len t.peers-1];
 			t.peers = t.peers[:len t.peers-1];
-			return;
+			if(match)
+				return;
 		}
+	}
 }
 
-Tracked.have(t: self ref Tracked, ip: IPaddr, port: int): int
+Tracked.find(t: self ref Tracked, ip: IPaddr, port: int): ref Peer
 {
 	for(i := 0; i < len t.peers; i++)
 		if(t.peers[i].port == port && t.peers[i].ip.eq(ip))
-			return 1;
-	return 0;
+			return t.peers[i];
+	return nil;
 }
 
 Tracked.add(t: self ref Tracked, p: ref Peer)
@@ -407,9 +480,167 @@ readhashes()
 	}
 }
 
+
+mtime(b: ref Iobuf): int
+{
+	s := b.gets('\n');
+	if(s == nil)
+		return -1;
+	if(s[len s-1] == '\n')
+		s = s[:len s-1];
+	(i, rem) := str->toint(s, 10);
+	if(rem != nil)
+		return -1;
+	return i;
+}
+
+parseerror(s: string)
+{
+	raise "parse:"+s;
+}
+
+unhexc(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c-'0';
+	if(c >= 'a' && c <= 'f')
+		return c-'a'+10;
+	if(c >= 'A' && c <= 'F')
+		return c-'A'+10;
+	parseerror(sprint("bad hex char %c (%d)", c, c));
+	return -1;  # not reached
+}
+
+unhex(hash: string): array of byte
+{
+	if(len hash != 40)
+		parseerror(sprint("bad hex hash/peerid, expected 40 chars, saw %d", len hash));
+	d := array[20] of byte;
+	o := 0;
+	for(i := 0; i < len hash; i += 2)
+		d[o++] = byte ((unhexc(hash[i])<<4) | unhexc(hash[i+1]));
+	return d;
+}
+
+parsestate(now: int, b: ref Iobuf): int
+{
+	tracked = tracked.new(64, nil);
+
+	{
+		# format:
+		# mtime (already read)
+		# peer $hash $peerid $ip $port $mtime
+		for(;;) {
+			l := b.gets('\n');
+			if(l == nil)
+				break;
+			if(l[len l-1] == '\n')
+				l = l[:len l-1];
+			toks := str->unquoted(l);
+			if(toks == nil)
+				parseerror("bad line in statefile");
+			c := hd toks;
+			toks = tl toks;
+			case c {
+			"peer" =>
+				if(len toks != 5)
+					parseerror(sprint("bad 'peer', expected 5 tokens, saw %d", len toks));
+				hashhex := hd toks;
+				peeridhex := hd tl toks;
+				ipstr := hd tl tl toks;
+				portstr := hd tl tl tl toks;
+				mtimestr := hd tl tl tl tl toks;
+				hash := unhex(hashhex);
+				peerid := unhex(peeridhex);
+				(ipok, iprem) := IPaddr.parse(ipstr);
+				if(ipok != 0)
+					parseerror(sprint("bad ip %#q", ipstr));
+				(port, rem0) := str->toint(portstr, 10);
+				if(rem0 != nil)
+					parseerror("bad 'port'");
+				(mtime, rem1) := str->toint(mtimestr, 10);
+				if(rem1 != nil)
+					parseerror("bad 'mtime'");
+				if(mtime < now+interval)
+					continue;  # stale peer
+				t := tracked.find(hashhex);
+				if(hashes != nil && t == nil)
+					parseerror(sprint("peer for unknown torrent %#q", hashhex));
+				if(t == nil) {
+					t = ref Tracked (hash, hashhex, nil);
+					tracked.add(hashhex, t);
+				}
+				if(t.find(iprem, port) != nil)
+					parseerror(sprint("duplicate peer %s!%d", iprem.text(), port));
+				t.add(ref Peer (peerid, iprem, port, mtime));
+			* =>
+				say(sprint("bad token %#q in statefile", c));
+				return -1;
+			}
+		}
+	} exception e {
+	"parse:*" =>
+		err := e[len "parse:":];
+		say("parsing state: "+err);
+		return -1;
+	}
+	return 1;
+}
+
 readstate()
 {
-	fail("xxx not yet implemented");
+	now := daytime->now();
+	sys->seek(sffd0, big 0, Sys->SEEKSTART);
+	sys->seek(sffd1, big 0, Sys->SEEKSTART);
+
+	b0 := bufio->fopen(sffd0, Bufio->OREAD);
+	b1 := bufio->fopen(sffd1, Bufio->OREAD);
+	mtime0 := mtime(b0);
+	mtime1 := mtime(b1);
+	statelast = 0;
+	if(mtime0 < 0 && mtime1 < 0)
+		return;
+	(f, l) := (b0, b1);
+	if(mtime1 > mtime0) {
+		statelast = 1;
+		(f, l) = (b1, b0);
+		(mtime0, mtime1) = (mtime1, mtime0);
+	}
+	if(parsestate(now, f) < 0 && mtime1 >= 0) {
+		statelast = 1-statelast;
+		parsestate(now, l);
+	}
+}
+
+writestate()
+{
+	fd := sffd0;
+	if(statelast)
+		fd = sffd1;
+
+	if(sys->seek(fd, big 0, Sys->SEEKSTART) != big 0)
+		return warn(sprint("seek statefile to 0: %r"));
+	nulldir := sys->nulldir;
+	nulldir.length = big 0;
+	if(sys->fwstat(fd, nulldir) != 0)
+		return warn(sprint("truncating statefile: %r"));
+	now := daytime->now();
+	b := bufio->fopen(fd, Bufio->OWRITE);
+	b.puts(sprint("%d\n", now));
+	a := tracked.items;
+	for(i := 0; i < len a; i++)
+		for(l := a[i]; l != nil; l = tl l) {
+			(hashhex, tr) := hd l;
+			# peer $hash $peerid $ip $port $mtime
+			for(j := 0; j < len tr.peers; j++) {
+				p := tr.peers[j];
+				if(b.puts(sprint("peer %q %q %q %d %d\n", hashhex, hex(p.peerid), p.ip.text(), p.port, p.mtime)) == Bufio->ERROR)
+					return warn(sprint("writing statefile: %r"));
+			}
+		}
+	if(b.flush() == Bufio->ERROR)
+		return warn(sprint("writing statefile: %r"));
+	statelast = 1-statelast;
 }
 
 p16(d: array of byte, v: int)

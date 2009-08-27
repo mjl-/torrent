@@ -1,0 +1,82 @@
+.TH TORRENTTRACK 1
+.SH NAME
+torrent/track \- tracker for torrents
+.SH SYNOPSIS
+.B torrent/track
+[
+.B -d
+] [
+.B -h
+.I hashesfile
+] [
+.B -i
+.I interval
+] [
+.B -m
+.I maxpeers
+] [
+.B -s
+.I statefile
+.I statefile
+.I flushtime
+]
+.I scgiaddr
+.SH DESCRIPTION
+.B Torrent/track
+is a tracker for torrents.  It allows peers to find each other.  It is meant to be used with a httpd, e.g.
+.IR shttpd (1).
+.B Torrent/track
+listens on
+.I scgiaddr
+for scgi requests.
+It can either serve any torrent file, or only those explicitly specified in a file.
+It can store its state, which includes all peers with info hashes, to file and read them during start up, for fast restarting.
+
+.PP
+Compact requests (BEP 23) are supported, but not the default in absence of the compact request parameter.
+Tracker/torrent returns the external ip address of the requesting peer (BEP 24).
+
+.PP Options
+.TP
+.B -d
+Print debug information
+.TP
+.BI -h " hashesfile"
+Read a list of info hashes to serve.  Without this file, any info hash is served.
+.I Hashesfile
+must have one info hash per line, in hexadecimal.
+.TP
+.BI -i " interval"
+Set the interval to send to peers.  Peers normally wait
+.I interval
+seconds before sending another request to the tracker.
+Default is 1200 seconds.
+.TP
+.BI -m " maxpeers"
+Set maximum number of peers to return in single request.  The default is 30.
+.TP
+.BI -s " statefile statefile flushtime"
+At startup, attempt to read the state of the tracker from the
+.IR statefile's .
+During operation, write the state to the files after changes (but wait
+.I flushtime
+seconds to accumulate changes and prevent too frequent writes).
+For reading, the most recent file is looked at first.  If parsing it fails, the other is read.  For writing the state, the oldest file is truncated and rewritten.
+.SH EXAMPLE
+.EX
+torrent/track net!localhost!4000
+httpd -a net!*!80 -s /announce net!localhost!4020 GET /lib/empty
+.EE
+.SH SOURCE
+.B /appl/cmd/torrent/track.b
+.SH SEE ALSO
+.IR torrentget (1),
+.IR shttpd (1).
+.br
+``BEP 23 - Tracker Returns Compact Peer Lists'',
+.br
+``BEP 24 - Tracker Returns External IP''.
+.SH BUGS
+Does not (yet) try to be smart about the list of peers to send.  Torrent/track can return seeders to seeders, and peers to themselves.
+.br
+The peer is not verified to listen on the claimed port.
