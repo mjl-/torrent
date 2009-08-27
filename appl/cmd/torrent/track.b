@@ -31,6 +31,7 @@ Torrenttrack: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
+
 dflag:	int;
 statefile0,
 statefile1:	string;
@@ -40,12 +41,19 @@ flushtime:	int;
 hashesfile:	string;
 interval := 1200;
 maxpeers := 30;
+dialvalid := 3600;
+Dialtime: con 15*1000;
+Timeslack: con 30;
 
+# Peer.state, reachability
+Trying, Good, Bad: con iota;
 Peer: adt {
 	peerid:	array of byte;
 	ip:	IPaddr;
 	port:	int;
 	mtime:	int;
+	dialtime:	int;
+	state:	int;
 };
 
 Tracked: adt {
@@ -53,7 +61,7 @@ Tracked: adt {
 	hashhex:	string;
 	peers:	array of ref Peer;
 
-	stir:	fn(t: self ref Tracked);
+	stir:	fn(t: self ref Tracked, want: int): int;
 	remove:	fn(t: self ref Tracked, ip: IPaddr, port: int, valid: int);
 	find:	fn(t: self ref Tracked, ip: IPaddr, port: int): ref Peer;
 	add:	fn(t: self ref Tracked, p: ref Peer);
@@ -76,6 +84,7 @@ Trackreq: adt {
 
 hashes: ref Strhash[string];
 tracked: ref Strhash[ref Tracked];
+verifyc: chan of (ref Peer, int);
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -138,6 +147,7 @@ main(aconn: Sys->Connection)
 {
 	spawn listener(aconn, lc := chan of ref Sys->FD);
 	flushc := chan of int;
+	verifyc = chan of (ref Peer, int);
 
 	flushpid := -1;
 	for(;;)
@@ -164,6 +174,11 @@ main(aconn: Sys->Connection)
 	<-flushc =>
 		writestate();
 		flushpid = -1;
+
+	(p, state) := <-verifyc =>
+		p.dialtime = daytime->now();
+		p.state = state;
+		say(sprint("checked peer %s!%d, state %d", p.ip.text(), p.port, p.state));
 	}
 }
 
@@ -307,6 +322,28 @@ trackrequest(f: ref Fields, remip: IPaddr): ref Trackreq
 	return ref Trackreq (hash, peerid, hex(hash), hex(peerid), host, remip, port, up, down, left, event, compact);
 }
 
+killer(pid: int, p: ref Peer, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	sys->sleep(Dialtime);
+	kill(pid);
+	verifyc <-= (p, Bad);
+}
+
+checkpeer(p: ref Peer)
+{
+	spawn killer(sys->pctl(0, nil), p, pidc := chan of int);
+	killerpid := <-pidc;
+	addr := sprint("net!%s!%d", p.ip.text(), p.port);
+	(ok, nil) := sys->dial(addr, nil);
+	kill(killerpid);
+	state := Good;
+	if(ok < 0)
+		state = Bad;
+say(sprint("dial %q returned %d, %r", addr, ok));
+	verifyc <-= (p, state);
+}
+
 serve(fd: ref Sys->FD)
 {
 	b := bufio->fopen(fd, bufio->OREAD);
@@ -341,21 +378,26 @@ say(sprint("new torrent, hash %q", tr.hashhex));
 		tracked.add(tr.hashhex, t);
 	}
 
-	npeers := maxpeers;
+	npeers := 0;
 	case tr.event {
 	"stopped" =>
-		npeers = 0;
-		t.remove(tr.ip, tr.port, daytime->now()-interval);
+		t.remove(tr.ip, tr.port, daytime->now()-Timeslack-interval);
 say(sprint("removing peer %q", tr.ip.text()));
+
 	* =>
-		if(npeers > len t.peers)
-			npeers = len t.peers;
 		p := t.find(tr.ip, tr.port);
 		if(p == nil) {
 say(sprint("adding peer %q", tr.ip.text()));
-			t.add(ref Peer (tr.peerid, tr.ip, tr.port, 0));
+			p = ref Peer (tr.peerid, tr.ip, tr.port, 0, 0, Trying);
+			t.add(p);
 		}
-		p.mtime = daytime->now();
+		now := p.mtime = daytime->now();
+		if(p.dialtime < now-Timeslack-dialvalid) {
+say(sprint("going to check peer"));
+			p.state = Trying;
+			spawn checkpeer(p);
+		}
+		npeers = t.stir(maxpeers);
 	}
 say(sprint("returning %d peers to %s!%d (%q)", npeers, tr.ip.text(), tr.port, tr.host));
 	respondpeers(fd, tr, t.peers[:npeers]);
@@ -364,23 +406,30 @@ say(sprint("returning %d peers to %s!%d (%q)", npeers, tr.ip.text(), tr.port, tr
 respondpeers(fd: ref Sys->FD, tr: ref Trackreq, a: array of ref Peer)
 {
 	peersdict: ref Bee;
+	peers6dict: ref Bee;
 	if(tr.compact) {
 		n := maxpeers;
 		if(n > len a)
 			n = len a;
-		r := array[6*n] of byte;
-		h := 0;
+		r4 := array[6*n] of byte;
+		r6 := array[18*n] of byte;
+		h4 := 0;
+		h6 := 0;
 		for(i := 0; i < n; i++) {
 			p := a[i];
-			if(!p.ip.isv4())
-				continue;
-			r[h*6:] = p.ip.v4();
-			p16(r[h*6+4:], p.port);
-			h++;
+			if(p.ip.isv4()) {
+				r4[h4*6:] = p.ip.v4();
+				p16(r4[h4*6+4:], p.port);
+				h4++;
+			} else {
+				r6[h6*18:] = p.ip.v6();
+				p16(r6[h6*18+16:], p.port);
+				h6++;
+			}
 say(sprint("compact, %s!%d", p.ip.text(), p.port));
 		}
-		r = r[:6*h];
-		peersdict = ref Bee.String (r);
+		peersdict = ref Bee.String (r4[:h4*6]);
+		peers6dict = ref Bee.String (r6[:h6*18]);
 	} else {
 		n := maxpeers;
 		if(n > len a)
@@ -404,30 +453,49 @@ say(sprint("big, %s!%d", p.ip.text(), p.port));
 	else
 		extip = tr.ip.v6();
 	bpeerip := Bee.makekey("external ip", ref Bee.String (extip));
-	bresp := ref Bee.Dict (array[] of {binterval, bpeers, bpeerip});
+	respvals := array[] of {binterval, bpeers, bpeerip};
+	if(tr.compact && peers6dict != nil) {
+		bpeers6 := Bee.makekey("peers6", peers6dict);
+		respvals = array[] of {binterval, bpeers, bpeers6, bpeerip};
+	}
+	bresp := ref Bee.Dict (respvals);
 	buf := bresp.pack();
 	if(sys->fprint(fd, "status: 200 ok\r\n\r\n") < 0 || sys->write(fd, buf, len buf) != len buf)
 		httperror(sprint("write: %r"));
 }
 
-Tracked.stir(t: self ref Tracked)
+Tracked.stir(t: self ref Tracked, want: int): int
 {
-	valid := daytime->now()-interval;
+	valid := daytime->now()-Timeslack-interval;
+
+	have := len t.peers;
+	while(have > 0 && t.peers[have-1].state == Bad)
+		have--;
+say(sprint("stir, want %d, have %d, len peers %d", want, have, len t.peers));
+
 	rand->init(sys->millisec()^sys->pctl(0, nil));
-	n := maxpeers;
-	if(n > len t.peers)
-		n = len t.peers;
 	i := 0;
-	while(i < n) {
+	while(i < want && i < have) {
+		j := i+rand->rand(have-1-i);
+		(t.peers[i], t.peers[j]) = (t.peers[j], t.peers[i]);
+
 		if(t.peers[i].mtime < valid) {
-			t.peers[i] = t.peers[len t.peers-1];
+say(sprint("stir, peer no longer valid, removing %s!%d", t.peers[i].ip.text(), t.peers[i].port));
+			have--;
+			(t.peers[i], t.peers[have]) = (t.peers[have], t.peers[len t.peers-1]);
 			t.peers = t.peers[:len t.peers-1];
 			continue;
 		}
-		j := rand->rand(len t.peers);
-		(t.peers[i], t.peers[j]) = (t.peers[j], t.peers[i]);
+		if(t.peers[i].state == Bad) {
+say(sprint("stir, peer is bad, ignoring %s!%d", t.peers[i].ip.text(), t.peers[i].port));
+			have--;
+			(t.peers[i], t.peers[have]) = (t.peers[have], t.peers[i]);
+			continue;
+		}
+say(sprint("stir, peer is good, returning %s!%d", t.peers[i].ip.text(), t.peers[i].port));
 		i++;
 	}
+	return i;
 }
 
 Tracked.remove(t: self ref Tracked, ip: IPaddr, port: int, valid: int)
@@ -529,7 +597,7 @@ parsestate(now: int, b: ref Iobuf): int
 	{
 		# format:
 		# mtime (already read)
-		# peer $hash $peerid $ip $port $mtime
+		# peer $hash $peerid $ip $port $mtime $dialtime $state
 		for(;;) {
 			l := b.gets('\n');
 			if(l == nil)
@@ -543,13 +611,20 @@ parsestate(now: int, b: ref Iobuf): int
 			toks = tl toks;
 			case c {
 			"peer" =>
-				if(len toks != 5)
-					parseerror(sprint("bad 'peer', expected 5 tokens, saw %d", len toks));
+				if(len toks != 7)
+					parseerror(sprint("bad 'peer', expected 7 tokens, saw %d", len toks));
 				hashhex := hd toks;
 				peeridhex := hd tl toks;
 				ipstr := hd tl tl toks;
 				portstr := hd tl tl tl toks;
 				mtimestr := hd tl tl tl tl toks;
+				dialtime := int hd tl tl tl tl tl toks;
+				state := int hd tl tl tl tl tl tl toks;
+				case state {
+				Trying or Bad or Good =>	;
+				* =>	parseerror(sprint("bad state %d", state));
+				}
+
 				hash := unhex(hashhex);
 				peerid := unhex(peeridhex);
 				(ipok, iprem) := IPaddr.parse(ipstr);
@@ -561,7 +636,7 @@ parsestate(now: int, b: ref Iobuf): int
 				(mtime, rem1) := str->toint(mtimestr, 10);
 				if(rem1 != nil)
 					parseerror("bad 'mtime'");
-				if(mtime < now+interval)
+				if(mtime < now-Timeslack-interval)
 					continue;  # stale peer
 				t := tracked.find(hashhex);
 				if(hashes != nil && t == nil)
@@ -572,7 +647,7 @@ parsestate(now: int, b: ref Iobuf): int
 				}
 				if(t.find(iprem, port) != nil)
 					parseerror(sprint("duplicate peer %s!%d", iprem.text(), port));
-				t.add(ref Peer (peerid, iprem, port, mtime));
+				t.add(ref Peer (peerid, iprem, port, mtime, dialtime, state));
 			* =>
 				say(sprint("bad token %#q in statefile", c));
 				return -1;
@@ -634,7 +709,7 @@ writestate()
 			# peer $hash $peerid $ip $port $mtime
 			for(j := 0; j < len tr.peers; j++) {
 				p := tr.peers[j];
-				if(b.puts(sprint("peer %q %q %q %d %d\n", hashhex, hex(p.peerid), p.ip.text(), p.port, p.mtime)) == Bufio->ERROR)
+				if(b.puts(sprint("peer %q %q %q %d %d %d %d\n", hashhex, hex(p.peerid), p.ip.text(), p.port, p.mtime, p.dialtime, p.state)) == Bufio->ERROR)
 					return warn(sprint("writing statefile: %r"));
 			}
 		}
@@ -655,6 +730,12 @@ hex(d: array of byte): string
 	for(i := 0; i < len d; i++)
 		s += sprint("%02x", int d[i]);
 	return s;
+}
+
+kill(pid: int)
+{
+	fd := sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	sys->fprint(fd, "kill");
 }
 
 warn(s: string)

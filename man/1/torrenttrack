@@ -31,10 +31,12 @@ listens on
 for scgi requests.
 It can either serve any torrent file, or only those explicitly specified in a file.
 It can store its state, which includes all peers with info hashes, to file and read them during start up, for fast restarting.
+Peers not seen before are checked for reachability.  If they are not reachable (accepting connections), they are not returned in tracker responses.  After one hour, the peer can be checked for reachability again.
 
 .PP
 Compact requests (BEP 23) are supported, but not the default in absence of the compact request parameter.
 Tracker/torrent returns the external ip address of the requesting peer (BEP 24).
+IPv6 peers (BEP 7) are supported too.
 
 .PP Options
 .TP
@@ -76,7 +78,11 @@ httpd -a net!*!80 -s /announce net!localhost!4020 GET /lib/empty
 ``BEP 23 - Tracker Returns Compact Peer Lists'',
 .br
 ``BEP 24 - Tracker Returns External IP''.
+.br
+``BEP 7 - IPv6 Tracker Extension''.
 .SH BUGS
 Does not (yet) try to be smart about the list of peers to send.  Torrent/track can return seeders to seeders, and peers to themselves.
 .br
 The peer is not verified to listen on the claimed port.
+.br
+The request parameters ``ip'', and ``ipv4'' and ``ipv6'' (from BEP 7) are ignored, and only the ip address from the request is used.
