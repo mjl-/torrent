@@ -12,6 +12,8 @@ include "string.m";
 	str: String;
 include "daytime.m";
 	daytime: Daytime;
+include "lists.m";
+	lists: Lists;
 include "rand.m";
 	rand: Rand;
 include "tables.m";
@@ -23,6 +25,7 @@ include "ip.m";
 include "bittorrent.m";
 	bittorrent: Bittorrent;
 	Bee: import bittorrent;
+        beestr, beebytes, beelist, beeint, beebig, beekey, beedict: import bittorrent;
 include "cgi.m";
 	cgi: Cgi;
 	Fields: import cgi;
@@ -93,6 +96,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	str = load String String->PATH;
 	daytime = load Daytime Daytime->PATH;
+	lists = load Lists Lists->PATH;
 	rand = load Rand Rand->PATH;
 	rand->init(sys->millisec()^sys->pctl(0, nil));
 	tables = load Tables Tables->PATH;
@@ -164,7 +168,7 @@ main(aconn: Sys->Connection)
 		} exception e {
 		"scgi:*" =>
 			err := e[len "scgi:":];
-			bresp := ref Bee.Dict (array[] of {Bee.makekey("failure reason", ref Bee.String (array of byte err))});
+			bresp := beedict(beekey("failure reason", beestr(err))::nil);
 			sys->fprint(fd, "status: 200 ok\r\n\r\n%s", string bresp.pack());
 		"http:*" =>
 			sys->fprint(fd, "status: 500 fail\r\ncontent-type: text/plain; charset=utf-8\r\n\r\n%s\n", e[len "scgi:":]);
@@ -428,37 +432,37 @@ respondpeers(fd: ref Sys->FD, tr: ref Trackreq, a: array of ref Peer)
 			}
 say(sprint("compact, %s!%d", p.ip.text(), p.port));
 		}
-		peersdict = ref Bee.String (r4[:h4*6]);
-		peers6dict = ref Bee.String (r6[:h6*18]);
+		peersdict = beebytes(r4[:h4*6]);
+		peers6dict = beebytes(r6[:h6*18]);
 	} else {
 		n := maxpeers;
 		if(n > len a)
 			n = len a;
-		r := array[n] of ref Bee;
+		r: list of ref Bee;
 		for(i := 0; i < n; i++) {
 			p := a[i];
-			bpeerid := Bee.makekey("id", ref Bee.String (p.peerid));
-			bip := Bee.makekey("ip", ref Bee.String (array of byte p.ip.text()));
-			bport := Bee.makekey("port", ref Bee.Integer (big p.port));
-			r[i] = ref Bee.Dict (array[] of {bpeerid, bip, bport});
+			bpeerid := beekey("id", beebytes(p.peerid));
+			bip := beekey("ip", beestr(p.ip.text()));
+			bport := beekey("port", beeint(p.port));
+			r = beedict(list of {bpeerid, bip, bport})::r;
 say(sprint("big, %s!%d", p.ip.text(), p.port));
 		}
-		peersdict = ref Bee.List (r);
+		peersdict = beelist(lists->reverse(r));
 	}
-	binterval := Bee.makekey("interval", ref Bee.Integer (big interval));
-	bpeers := Bee.makekey("peers", peersdict);
+	binterval := beekey("interval", beeint(interval));
+	bpeers := beekey("peers", peersdict);
 	extip: array of byte;
 	if(tr.ip.isv4())
 		extip = tr.ip.v4();
 	else
 		extip = tr.ip.v6();
-	bpeerip := Bee.makekey("external ip", ref Bee.String (extip));
-	respvals := array[] of {binterval, bpeers, bpeerip};
+	bpeerip := beekey("external ip", beebytes(extip));
+	respvals := list of {binterval, bpeers, bpeerip};
 	if(tr.compact && peers6dict != nil) {
-		bpeers6 := Bee.makekey("peers6", peers6dict);
-		respvals = array[] of {binterval, bpeers, bpeers6, bpeerip};
+		bpeers6 := beekey("peers6", peers6dict);
+		respvals = list of {binterval, bpeers, bpeers6, bpeerip};
 	}
-	bresp := ref Bee.Dict (respvals);
+	bresp := beedict(respvals);
 	buf := bresp.pack();
 	if(sys->fprint(fd, "status: 200 ok\r\n\r\n") < 0 || sys->write(fd, buf, len buf) != len buf)
 		httperror(sprint("write: %r"));

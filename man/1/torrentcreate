@@ -1,0 +1,56 @@
+.TH TORRENTCREATE 1
+.SH NAME
+torrent/create \- create torrent file
+.SH SYNOPSIS
+.B torrent/create
+[
+.B -v
+] [
+.B -d
+.I dir
+] [
+.B -p
+.I piecelen
+]
+.I tracker
+.I file
+.I ...
+.SH DESCRIPTION
+.B Torrent/create
+creates a torrent file for publishing
+.I file's
+with peer information provided by
+.IR tracker .
+Torrent files contain the url of a tracker, which is contacted by bittorrent clients to find peers to exchange pieces with.  The torrent file contains cryptographic hashes of pieces of the files described in the torrent file.
+The resulting torrent file is written to standard output.
+
+.PP Options
+.TP
+.B -v
+Be verbose, this prints the total size, number of pieces and the ``info hash'' (the hash of the file contents) to standard error.
+.TP
+.BI -d " dir"
+This option is required when multiple
+.I file's
+are specified.
+It is the directory in which all
+.I file's
+in the torrent will appear.
+.TP
+.BI -p " piecelen"
+The length of a piece to
+.IR piecelen .
+.I Piecelen
+must be a power of two, it defaults to
+.IR 256k .
+Bittorrent regards the files to be transferred as a contiguous stream of bytes.  This stream is split into pieces.  The torrent file contains a hash (SHA-1) of each piece.  Torrents are exchanged (verified) in terms of pieces.  The piece length is a tradeoff between size of the torrent file (more pieces means more hashes) and being able to exchange small units (which helps during start up and in face of malicious peers).
+.TP
+
+.SH SOURCE
+.B /appl/cmd/torrent/create.b
+.SH SEE ALSO
+.IR torrentget (1),
+.IR torrenttrack (1).
+
+.SH BUGS
+Having to specify the directory separately is annoying.

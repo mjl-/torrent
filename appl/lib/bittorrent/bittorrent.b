@@ -9,7 +9,7 @@ include "bufio.m";
 include "string.m";
 	str: String;
 include "keyring.m";
-	keyring: Keyring;
+	kr: Keyring;
 include "security.m";
 	random: Random;
 include "lists.m";
@@ -32,17 +32,12 @@ init()
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
 	random = load Random Random->PATH;
-	keyring = load Keyring Keyring->PATH;
+	kr = load Keyring Keyring->PATH;
 	bufio = load Bufio Bufio->PATH;
 	lists = load Lists Lists->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 	bitarray = load Bitarray Bitarray->PATH;
-}
-
-Bee.makekey(s: string, v: ref Bee): (ref Bee.String, ref Bee)
-{
-	return (ref Bee.String (array of byte s), v);
 }
 
 Bee.find(bb: self ref Bee, s: string): ref Bee
@@ -286,6 +281,49 @@ Bee.getd(b: self ref Bee, l: list of string): ref Bee.Dict
 	}
 }
 
+beestr(s: string): ref Bee.String
+{
+	return ref Bee.String (array of byte s);
+}
+
+beebytes(d: array of byte): ref Bee.String
+{
+	return ref Bee.String (d);
+}
+
+beelist(l: list of ref Bee): ref Bee.List
+{
+	a := array[len l] of ref Bee;
+	i := 0;
+	for(; l != nil; l = tl l)
+		a[i++] = hd l;
+	return ref Bee.List (a);
+}
+
+beeint(i: int): ref Bee.Integer
+{
+	return ref Bee.Integer (big i);
+}
+
+beebig(i: big): ref Bee.Integer
+{
+	return ref Bee.Integer (i);
+}
+
+beekey(s: string, b: ref Bee): (ref Bee.String, ref Bee)
+{
+	return (beestr(s), b);
+}
+
+beedict(l: list of (ref Bee.String, ref Bee)): ref Bee.Dict
+{
+	a := array[len l] of (ref Bee.String, ref Bee);
+	i := 0;
+	for(; l != nil; l = tl l)
+		a[i++] = hd l;
+	return ref Bee.Dict (a);
+}
+
 
 MChoke, MUnchoke, MInterested, MNotinterested, MHave, MBitfield, MRequest, MPiece, MCancel:	con iota;
 MLast:	con MCancel;
@@ -513,8 +551,8 @@ Torrent.open(path: string): (ref Torrent, string)
 	if(binfo == nil)
 		return (nil, sprint("%s: missing info field", path));
 	bd := binfo.pack();
-	hash := array[keyring->SHA1dlen] of byte;
-	keyring->sha1(bd, len bd, hash, nil);
+	hash := array[kr->SHA1dlen] of byte;
+	kr->sha1(bd, len bd, hash, nil);
 
 	bpiecelen := binfo.geti("piece length"::nil);
 	if(bpiecelen == nil)
@@ -586,7 +624,7 @@ Torrent.open(path: string): (ref Torrent, string)
 
 	# xxx sanity checks
 	statepath := hd lists->reverse(sys->tokenize(path, "/").t1)+".state";
-	return (ref Torrent(string bannoun.a, piecelen, hash, len pieces, pieces, files, length, statepath), nil);
+	return (ref Torrent(string bannoun.a, piecelen, hash, len pieces, pieces, files, name, length, statepath), nil);
 }
 
 
@@ -690,6 +728,47 @@ Torrent.piecelength(t: self ref Torrent, index: int): int
 			piecelen = t.piecelen;
 	}
 	return piecelen;
+}
+
+Torrent.pack(t: self ref Torrent): array of byte
+{
+	if(t.files == nil)
+		raise "cannot make empty torrent";
+
+	piecelen := beekey("piece length", beeint(t.piecelen));
+
+	hashes := array[kr->SHA1dlen*len t.piecehashes] of byte;
+	for(i := 0; i < len t.piecehashes; i++)
+		hashes[i*kr->SHA1dlen:] = t.piecehashes[i];
+	pieces := beekey("pieces", beebytes(hashes));
+
+	info: ref Bee.Dict;
+	if(len t.files == 1) {
+		f := hd t.files;
+		path := str->splitstrr(f.origpath, "/").t1;
+		name := beekey("name", beestr(path));
+		length := beekey("length", beebig(f.length));
+		info = beedict(list of {name, length, piecelen, pieces});
+	} else {
+		name := beekey("name", beestr(t.name));
+		fl: list of ref Bee.Dict;
+		for(l := t.files; l != nil; l = tl l) {
+			f := hd l;
+			elems: list of ref Bee.String;
+			for(e := sys->tokenize(f.origpath, "/").t1; e != nil; e = tl e)
+				elems = beestr(hd e)::elems;
+			elems = lists->reverse(elems);
+			path := beekey("path", beelist(elems));
+			length := beekey("length", beebig(f.length));
+			fd := beedict(list of {length, path});
+			fl = fd::fl;
+		}
+		fl = lists->reverse(fl);
+		files := beekey("files", beelist(fl));
+		info = beedict(list of {name, files, piecelen, pieces});
+	}
+	b := beedict(list of {beekey("announce", beestr(t.announce)), beekey("info", info)});
+	return b.pack();
 }
 
 

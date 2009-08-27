@@ -73,6 +73,7 @@ httpd -a net!*!80 -s /announce net!localhost!4020 GET /lib/empty
 .B /appl/cmd/torrent/track.b
 .SH SEE ALSO
 .IR torrentget (1),
+.IR torrentcreate (1),
 .IR shttpd (1).
 .br
 ``BEP 23 - Tracker Returns Compact Peer Lists'',

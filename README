@@ -40,7 +40,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 # todo
 
 - torrent/track: make search for a peer (given ip & port) less inefficient.
-- torrent/track: might be a bit smarter about which peers to send to a peer.  e.g. not itself, make randomizing cheaper, let peers that are done (left=0) not connect to each other.
 
 - torrent/get: seems verifying (or .state-file reading) doesn't work properly, we refetch the file.
 - put more in progress/peerevents, such as errors (eg from tracker, when writing to disk).
@@ -54,5 +53,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 - implement rarest first and random
 - keep track of which peer has which piece
 - handle choke/unchoke correctly, send interested only when peer has data
-- think of file system interface, for torrent/get
+- torrent/track: might add scraping.
+- torrent/track: might be a bit smarter about which peers to send to a peer.  e.g. not itself, make randomizing cheaper, let peers that are done (left=0) not connect to each other.
 - write manual page

@@ -17,7 +17,6 @@ Bittorrent: module
 			a:	cyclic array of (ref Bee.String, ref Bee);
 		}
 
-		makekey:	fn(s: string, v: ref Bee): (ref Bee.String, ref Bee);
 		pack:		fn(b: self ref Bee): array of byte;
 		packedsize:	fn(b: self ref Bee): int;
 		unpack:		fn(d: array of byte): (ref Bee, string);
@@ -27,7 +26,15 @@ Bittorrent: module
 		geti:		fn(b: self ref Bee, l: list of string): ref Bee.Integer;
 		getl:		fn(b: self ref Bee, l: list of string): ref Bee.List;
 		getd:		fn(b: self ref Bee, l: list of string): ref Bee.Dict;
+
 	};
+	beestr:	fn(s: string): ref Bee.String;
+	beebytes:	fn(d: array of byte): ref Bee.String;
+	beelist:	fn(l: list of ref Bee): ref Bee.List;
+	beeint:	fn(i: int): ref Bee.Integer;
+	beebig:	fn(i: big): ref Bee.Integer;
+	beekey:	fn(s: string, b: ref Bee): (ref Bee.String, ref Bee);
+	beedict:	fn(l: list of (ref Bee.String, ref Bee)): ref Bee.Dict;
 
 	Msg: adt {
 		pick {
@@ -75,12 +82,14 @@ Bittorrent: module
 		piececount:	int;
 		piecehashes:	array of array of byte;
 		files:		list of ref File;
+		name:		string;
 		length:		big;
 		statepath:	string;
 
 		open:		fn(path: string): (ref Torrent, string);
 		openfiles:	fn(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string);
 		piecelength:	fn(t: self ref Torrent, index: int): int;
+		pack:		fn(t: self ref Torrent): array of byte;
 	};
 
 	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string);

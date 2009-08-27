@@ -318,7 +318,7 @@ init(nil: ref Draw->Context, args: list of string)
 		} else {
 			# otherwise, read through all data
 			say("starting to check all pieces in files...");
-
+			state->piecehave = Bits.new(torrent.piececount);
 			verify->torrenthash(dstfds, torrent, state->piecehave);
 		}
 	}

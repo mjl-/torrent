@@ -2,5 +2,6 @@
 
 MAN=\
 	1/torrenttrack\
+	1/torrentcreate\
 
 <mkman
