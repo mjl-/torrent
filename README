@@ -6,13 +6,13 @@ in development.  don't expect things to work yet.
 # intro
 
 this package contains a bittorrent client and tools for verifying
-torrents, printing info from .torrent files.  in the future, tools
-for creating .torrent files and being a tracker.
+torrents, printing info from .torrent files, a tracker.  in the
+future, tools for creating .torrent files.
 
 
 # install
 
-this package depends on "http".
+this package depends on "http" and "web".
 
 to install, bind/symlink/include a mkconfig (e.g. from your inferno
 install), and:
@@ -39,12 +39,14 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
+- torrent/track: should write state to file if specified on command-line
+- torrent/track: might be a bit smarter about which peers to send to a peer.  e.g. not itself, make randomizing cheaper, let peers that are done (left=0) not connect to each other.
+- torrent/track: think whether we should use the ip= field in the request.  it seems much better to just use the source ip.  the client should make sure to connect from the right ip.
 - torrent/get: seems verifying (or .state-file reading) doesn't work properly, we refetch the file.
 - put more in progress/peerevents, such as errors (eg from tracker, when writing to disk).
 - explain the design better
 - some tk ui to show activity & progress
 - perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
-- implement tracker
 - torrent/get: allow starting after being stopped.  implement start ctl.
 - torrent/get: move styx code to separate file?
 - collapse some code from appl/lib/bittorrent/*?

@@ -8,6 +8,7 @@ TARG=\
 	get.dis\
 	verify.dis\
 	info.dis\
+	track.dis\
 
 MODULES=\
 	../../lib/bittorrent/get.m\

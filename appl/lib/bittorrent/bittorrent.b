@@ -40,6 +40,11 @@ init()
 	bitarray = load Bitarray Bitarray->PATH;
 }
 
+Bee.makekey(s: string, v: ref Bee): (ref Bee.String, ref Bee)
+{
+	return (ref Bee.String (array of byte s), v);
+}
+
 Bee.find(bb: self ref Bee, s: string): ref Bee
 {
 	a := array of byte s;

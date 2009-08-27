@@ -17,6 +17,7 @@ Bittorrent: module
 			a:	cyclic array of (ref Bee.String, ref Bee);
 		}
 
+		makekey:	fn(s: string, v: ref Bee): (ref Bee.String, ref Bee);
 		pack:		fn(b: self ref Bee): array of byte;
 		packedsize:	fn(b: self ref Bee): int;
 		unpack:		fn(d: array of byte): (ref Bee, string);
