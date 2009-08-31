@@ -14,8 +14,6 @@ include "string.m";
 	str: String;
 include "rand.m";
 	rand: Rand;
-include "lists.m";
-	lists: Lists;
 include "keyring.m";
 	kr: Keyring;
 include "security.m";
@@ -32,7 +30,7 @@ include "tables.m";
 	Table: import tables;
 include "util0.m";
 	util: Util0;
-	pid, kill, killgrp, min, warn, l2a, g32i, readfile, readfd, inssort, sizefmt, sizeparse: import util;
+	pid, kill, killgrp, min, warn, rev, l2a, g32i, readfile, readfd, inssort, sizefmt, sizeparse: import util;
 
 include "bitarray.m";
 	bitarray: Bitarray;
@@ -236,7 +234,6 @@ init(nil: ref Draw->Context, args: list of string)
 	random = load Random Random->PATH;
 	rand = load Rand Rand->PATH;
 	rand->init(random->randomint(Random->ReallyRandom));
-	lists = load Lists Lists->PATH;
 	styx = load Styx Styx->PATH;
 	styx->init();
 	styxservers = load Styxservers Styxservers->PATH;
@@ -272,6 +269,8 @@ init(nil: ref Draw->Context, args: list of string)
 	peerfids = peerfids.new(4, nil);
 	peereventhead = ref Peerevent.Nil (nil);
 
+	sys->pctl(Sys->NEWPGRP, nil);
+
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-DPLn] [-m ratio] [-d maxdownload] [-u maxupload] torrentfile");
 	while((c := arg->opt()) != 0)
@@ -296,8 +295,6 @@ init(nil: ref Draw->Context, args: list of string)
 	args = arg->argv();
 	if(len args != 1)
 		arg->usage();
-
-	sys->pctl(Sys->NEWPGRP, nil);
 
 	err: string;
 	torrentpath = hd args;
@@ -738,9 +735,9 @@ Progressfid.read(pf: self ref Progressfid): ref Rmsg.Read
 	if(pf.r == nil || pf.last.next == nil)
 		return nil;
 
-	pf.r = lists->reverse(pf.r);
+	pf.r = rev(pf.r);
 	m := hd pf.r;
-	pf.r = lists->reverse(tl pf.r);
+	pf.r = rev(tl pf.r);
 
 	# note: the following knows that progress.text() always returns ascii
 	s := "";
@@ -768,7 +765,7 @@ Progressfid.flushtag(pf: self ref Progressfid, tag: int): int
 			r = (hd l)::r;
 	if(len r == len pf.r)
 		return 0;
-	pf.r = lists->reverse(r);
+	pf.r = rev(r);
 	return 1;
 }
 
@@ -787,9 +784,9 @@ Peerfid.read(pf: self ref Peerfid): ref Rmsg.Read
 	if(pf.r == nil || pf.last.next == nil)
 		return nil;
 
-	pf.r = lists->reverse(pf.r);
+	pf.r = rev(pf.r);
 	m := hd pf.r;
-	pf.r = lists->reverse(tl pf.r);
+	pf.r = rev(tl pf.r);
 
 	s := "";
 	while(pf.last.next != nil) {
@@ -816,7 +813,7 @@ Peerfid.flushtag(pf: self ref Peerfid, tag: int): int
 			r = hd l::r;
 	if(len r == len pf.r)
 		return 0;
-	pf.r = lists->reverse(r);
+	pf.r = rev(r);
 	return 1;
 }
 
@@ -1055,9 +1052,9 @@ peersend0(p: ref Peer, msg: ref Msg)
 {
 	pick m := msg {
 	Piece =>
-		p.datamsgs = lists->reverse(m::lists->reverse(p.datamsgs));
+		p.datamsgs = rev(m::rev(p.datamsgs));
 	* =>
-		p.metamsgs = lists->reverse(m::lists->reverse(p.metamsgs));
+		p.metamsgs = rev(m::rev(p.metamsgs));
 	}
 }
 
@@ -1167,7 +1164,7 @@ request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
 		msgs = ref Msg.Request(req.pieceindex, req.blockindex*Blocksize, blocksize(req))::msgs;
 	}
 	if(msgs != nil)
-		peersendmany(peer, lists->reverse(msgs));
+		peersendmany(peer, rev(msgs));
 }
 
 schedule(p: ref Peer)
@@ -1275,7 +1272,7 @@ peerbufflush(b: ref Buf): ref (int, int, array of byte)
 mainbufflush(b: ref Buf)
 {
 	say(sprint("buf: writing chunk to disk, pieceoff %d, len data %d", b.pieceoff, len b.data));
-	mainwrites = lists->reverse(ref (b.piece, b.pieceoff, b.data)::lists->reverse(mainwrites));
+	mainwrites = rev(ref (b.piece, b.pieceoff, b.data)::rev(mainwrites));
 	say("letting mains diskwriter handle write");
 	b.clear();
 }
@@ -1572,7 +1569,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritechan: chan of list of ref (i
 
 		if(needwrites != nil) {
 			say(sprint("sending %d needwrites to peernetreader", len needwrites));
-			needwritechan <-= lists->reverse(needwrites);
+			needwritechan <-= rev(needwrites);
 		}
 
 		# progress with piece
@@ -1612,7 +1609,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritechan: chan of list of ref (i
 		if(len peer.wants >= Blockqueuemax)
 			return peerdrop(peer, 0, sprint("peer scheduled one too many blocks, already has %d scheduled, disconnecting", len peer.wants));
 
-		peer.wants = lists->reverse(b::lists->reverse(peer.wants));
+		peer.wants = rev(b::rev(peer.wants));
 		if(!peer.localchoking() && peer.remoteinterested() && len peer.wants > 0)
 			readblock(peer);
 
@@ -1803,7 +1800,7 @@ main()
 
 		say("last parts of piece have been written, verifying...");
 
-		wanthash := util->hex(torrent.piecehashes[piece.index]);
+		wanthash := util->hex(torrent.hashes[piece.index]);
 		(piecehash, herr) := verify->piecehash(dstfds, torrent.piecelen, piece);
 		if(herr != nil)
 			fail("verifying hash: "+herr);
@@ -1859,7 +1856,7 @@ main()
 						choke(p);
 				}
 			}
-			peers->peers = lists->reverse(npeers);
+			peers->peers = rev(npeers);
 			sys->print("DONE!\n");
 			putprogress(ref Progress.Done (nil));
 		}
@@ -2225,7 +2222,7 @@ filesdone(pindex: int): list of ref File
 		if((pindex < 0 || f.pfirst >= pindex && pindex <= f.plast) && filedone(f))
 			l = f::l;
 	}
-	return lists->reverse(l);
+	return rev(l);
 }
 
 ratio(): real

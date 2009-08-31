@@ -735,9 +735,9 @@ Torrent.pack(t: self ref Torrent): array of byte
 
 	piecelen := beekey("piece length", beeint(t.piecelen));
 
-	hashes := array[kr->SHA1dlen*len t.piecehashes] of byte;
-	for(i := 0; i < len t.piecehashes; i++)
-		hashes[i*kr->SHA1dlen:] = t.piecehashes[i];
+	hashes := array[kr->SHA1dlen*len t.hashes] of byte;
+	for(i := 0; i < len t.hashes; i++)
+		hashes[i*kr->SHA1dlen:] = t.hashes[i];
 	pieces := beekey("pieces", beebytes(hashes));
 
 	info: ref Bee.Dict;

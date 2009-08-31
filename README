@@ -39,6 +39,8 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
+- remove the premature optimisations
+
 ## wm/torrent: 
 
 - figure out how to fill the panel with the bars (and thus bars themselves) in x direction
@@ -53,7 +55,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- seems verifying (or .state-file reading) doesn't work properly, we refetch the file.
 - put more in progress/peerevents, such as errors (eg from tracker, when writing to disk).
 - explain the design better
 - perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.

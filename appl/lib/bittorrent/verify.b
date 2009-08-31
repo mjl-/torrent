@@ -9,7 +9,7 @@ include "torrentpeer.m";
 	bittorrent: Bittorrent;
 	Torrent: import bittorrent;
 	util: Util0;
-	min, hex: import util;
+	preadn, min, hex: import util;
 
 init()
 {
@@ -70,31 +70,46 @@ piecehash(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Pieces->Pie
 	return (hash, nil);
 }
 
+reader(t: ref Torrent, fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string))
+{
+	have := 0;
+	buf := array[t.piecelen] of byte;
+
+	for(; fds != nil; fds = tl fds) {
+		(fd, size) := *hd fds;
+		o := big 0;
+		while(o < size) {
+			want := t.piecelen-have;
+			if(size-o < big want)
+				want = int (size-o);
+			nn := preadn(fd, buf[have:], want, o);
+			if(nn <= 0) {
+				c <-= (nil, sprint("reading: %r"));
+				return;
+			}
+			have += nn;
+			o += big nn;
+			if(have == t.piecelen) {
+				c <-= (buf, nil);
+				buf = array[t.piecelen] of byte;
+				have = 0;
+			}
+		}
+	}
+	if(have != 0)
+		c <-= (buf[:have], nil);
+}
+
 torrenthash(fds: list of ref (ref Sys->FD, big), t: ref Torrent, haves: ref Bits): string
 {
-	reqch := chan[t.piececount+1] of ref (int, big, chan of (array of byte, string));
-	spawn chunkreader(fds, reqch);
-
-	chunkch := chan[1] of (array of byte, string);
-	for(i := 0; i < t.piececount; i++)
-		reqch <-= ref (t.piecelength(i), big i*big t.piecelen, chunkch);
-	reqch <-= nil;
-
-	for(i = 0; i < t.piececount; i++) {
-		state: ref kr->DigestState;
-		for(;;) {
-			(buf, cerr) := <-chunkch;
-			if(cerr != nil)
-				return sprint("reading piece %d for verification: %s", i, cerr);
-			if(buf == nil)
-				break;
-			state = kr->sha1(buf, len buf, nil, state);
-		}
-
-		hash := array[Keyring->SHA1dlen] of byte;
-		kr->sha1(nil, 0, hash, state);
-
-		if(hex(hash) == hex(t.piecehashes[i]))
+	spawn reader(t, fds, c := chan[2] of (array of byte, string));
+	digest := array[kr->SHA1dlen] of byte;
+	for(i := 0; i < len t.hashes; i++) {
+		(buf, err) := <-c;
+		if(err != nil)
+			return err;
+		kr->sha1(buf, len buf, digest, nil);
+		if(hex(digest) == hex(t.hashes[i]))
 			haves.set(i);
 	}
 	return nil;

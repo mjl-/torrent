@@ -283,9 +283,10 @@ Verify: module
 
 	init:	fn();
 
-	chunkreader:	fn(fds: list of ref (ref Sys->FD, big), reqch: chan of ref (int, big, chan of (array of byte, string)));
 	piecehash:	fn(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Pieces->Piece): (array of byte, string);
 	torrenthash:	fn(fds: list of ref (ref Sys->FD, big), t: ref Bittorrent->Torrent, haves: ref Bitarray->Bits): string;
+	reader:		fn(t: ref Bittorrent->Torrent, fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string));
+
 };
 
 State: module

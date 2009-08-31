@@ -80,7 +80,7 @@ Bittorrent: module
 		piecelen:	int;
 		hash:		array of byte;
 		piececount:	int;
-		piecehashes:	array of array of byte;
+		hashes:		array of array of byte;
 		files:		list of ref File;
 		name:		string;
 		length:		big;
