@@ -12,8 +12,8 @@ include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
-	bittorrent: Bittorrent;
-	Bee: import bittorrent;
+	bt: Bittorrent;
+	Bee: import bt;
 include "util0.m";
 	util: Util0;
 	fail, warn, readfile: import util;
@@ -31,8 +31,8 @@ init(nil: ref Draw->Context, args: list of string)
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
-	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init();
+	bt = load Bittorrent Bittorrent->PATH;
+	bt->init();
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" torrentfile");

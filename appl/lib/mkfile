@@ -1,17 +1,27 @@
 <../../mkconfig
 
-DIRS=\
-	bittorrent\
-
 TARG=\
 	bitarray.dis\
+	bittorrent.dis\
+	bittorrentpeer.dis\
 
 MODULES=\
+	bittorrentpeer.m\
 
 SYSMODULES=\
+	bufio.m\
+	daytime.m\
+	filter.m\
+	ip.m\
+	keyring.m\
+	security.m\
+	string.m\
+	sys.m\
 	bitarray.m\
+	bittorrent.m\
+	mhttp.m\
+	util0.m\
 
 DISBIN=$ROOT/dis/lib
 
 <$ROOT/mkfiles/mkdis
-<$ROOT/mkfiles/mksubdirs

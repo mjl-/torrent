@@ -1,6 +1,6 @@
 Bittorrent: module
 {
-	PATH:	con "/dis/lib/bittorrent/bittorrent.dis";
+	PATH:	con "/dis/lib/bittorrent.dis";
 
 	dflag:	int;
 	init:	fn();

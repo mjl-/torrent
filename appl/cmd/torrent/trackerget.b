@@ -9,8 +9,8 @@ include "bufio.m";
 	Iobuf: import bufio;
 include "arg.m";
 include "bittorrent.m";
-	bittorrent: Bittorrent;
-	Bee, Torrent: import bittorrent;
+	bt: Bittorrent;
+	Bee, Torrent: import bt;
 include "util0.m";
 	util: Util0;
 	fail, warn: import util;
@@ -27,8 +27,8 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
-	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init();
+	bt = load Bittorrent Bittorrent->PATH;
+	bt->init();
 	util = load Util0 Util0->PATH;
 	util->init();
 
@@ -36,7 +36,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->setusage(arg->progname()+" [-d] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
-		'd' =>	dflag++;
+		'd' =>	bt->dflag = dflag++;
 		* =>	arg->usage();
 		}
 
@@ -48,9 +48,9 @@ init(nil: ref Draw->Context, args: list of string)
 	if(err != nil)
 		fail(sprint("%s: %s", hd args, err));
 
-	localpeerid := bittorrent->genpeerid();
+	localpeerid := bt->genpeerid();
 
-	(interval, peers, nil, terr) := bittorrent->trackerget(t, localpeerid, big 0, big 0, big 0, 0, nil);
+	(interval, peers, nil, terr) := bt->trackerget(t, localpeerid, big 0, big 0, big 0, 0, nil);
 	if(terr != nil)
 		fail("trackerget: "+terr);
 	say("trackget okay");

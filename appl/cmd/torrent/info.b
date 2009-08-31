@@ -14,8 +14,8 @@ include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
-	bittorrent: Bittorrent;
-	Bee, Msg, Torrent: import bittorrent;
+	bt: Bittorrent;
+	Bee, Msg, Torrent: import bt;
 include "util0.m";
 	util: Util0;
 	fail, warn, sizefmt: import util;
@@ -33,8 +33,8 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	kr = load Keyring Keyring->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
-	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init();
+	bt = load Bittorrent Bittorrent->PATH;
+	bt->init();
 	util = load Util0 Util0->PATH;
 	util->init();
 

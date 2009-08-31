@@ -39,7 +39,10 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
+- move some state from btp to torrent/peer.b?  perhaps put the state in an adt.
+- separate peer-implementation out of adt Torrent?
 - remove the premature optimisations
+
 
 ## wm/torrent: 
 
@@ -60,7 +63,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 - perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
 - allow starting after being stopped.  implement start ctl.
 - move styx code to separate file?
-- collapse some code from appl/lib/bittorrent/*?
 - use multiple peers
 - implement rarest first and random
 - keep track of which peer has which piece

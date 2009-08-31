@@ -14,11 +14,11 @@ include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
-	bittorrent: Bittorrent;
-	Bee, Msg, Torrent: import bittorrent;
+	bt: Bittorrent;
+	Bee, Msg, Torrent: import bt;
 include "rand.m";
-include "../../lib/bittorrent/peer.m";
-	verify: Verify;
+include "../../lib/bittorrentpeer.m";
+	btp: Bittorrentpeer;
 include "util0.m";
 	util: Util0;
 	killgrp, pid, warn, hex: import util;
@@ -38,10 +38,10 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	kr = load Keyring Keyring->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
-	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init();
-	verify = load Verify Verify->PATH;
-	verify->init();
+	bt = load Bittorrent Bittorrent->PATH;
+	bt->init();
+	btp = load Bittorrentpeer Bittorrentpeer->PATH;
+	btp->init();
 	util = load Util0 Util0->PATH;
 	util->init();
 
@@ -51,7 +51,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->setusage(arg->progname()+" [-dn] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
-		'd' =>	dflag++;
+		'd' =>	bt->dflag = btp->dflag = dflag++;
 		'n' =>	nofix = 1;
 		* =>	arg->usage();
 		}
@@ -69,7 +69,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(oerr != nil)
 		fail(oerr);
 
-	spawn verify->reader(t, fds, rc := chan[2] of (array of byte, string));
+	spawn btp->reader(t, fds, rc := chan[2] of (array of byte, string));
 	digest := array[kr->SHA1dlen] of byte;
 	n := 0;
 	for(i := 0; i < t.piececount; i++) {

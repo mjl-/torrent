@@ -21,9 +21,9 @@ include "ip.m";
 	ip: IP;
 	IPaddr: import ip;
 include "bittorrent.m";
-	bittorrent: Bittorrent;
-	Bee: import bittorrent;
-        beestr, beebytes, beelist, beeint, beebig, beekey, beedict: import bittorrent;
+	bt: Bittorrent;
+	Bee: import bt;
+        beestr, beebytes, beelist, beeint, beebig, beekey, beedict: import bt;
 include "cgi.m";
 	cgi: Cgi;
 	Fields: import cgi;
@@ -104,8 +104,8 @@ init(nil: ref Draw->Context, args: list of string)
 	ip->init();
 	cgi = load Cgi Cgi->PATH;
 	cgi->init();
-	bittorrent = load Bittorrent Bittorrent->PATH;
-	bittorrent->init();
+	bt = load Bittorrent Bittorrent->PATH;
+	bt->init();
 	util = load Util0 Util0->PATH;
 	util->init();
 
@@ -117,7 +117,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->setusage(arg->progname()+" [-d] [-h hashesfile] [-i interval] [-m maxpeers] [-s statefile statefile flushtime] scgiaddr");
 	while((c := arg->opt()) != 0)
 		case c {
-		'd' =>	dflag++;
+		'd' =>	bt->dflag = dflag++;
 		'h' =>	hashesfile = arg->arg();
 		'i' =>	interval = int arg->arg();
 		'm' =>	maxpeers = int arg->arg();

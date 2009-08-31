@@ -10,7 +10,7 @@ TARG=\
 	create.dis\
 
 MODULES=\
-	../../lib/bittorrent/peer.m\
+	../../lib/bittorrentpeer.m\
 
 SYSMODULES=\
 	arg.m\

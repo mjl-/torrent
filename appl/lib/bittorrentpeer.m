@@ -1,58 +1,34 @@
-Torrentpeer: module
+Bittorrentpeer: module
 {
-	init:	fn(nil: ref Draw->Context, args: list of string);
+	PATH:	con "/dis/lib/bittorrentpeer.dis";
 
-	Dialersmax:	con 5;  # max number of dialer procs
-	Dialtimeout:	con 20;  # timeout for connecting to peer
-	Peersmax:	con 80;
-	Peersdialedmax:	con 40;
-	Piecesrandom:	con 4;  # count of first pieces in a download to pick at random instead of rarest-first
-	Blocksize:	con 16*1024;  # block size of blocks we request
+	dflag:	int;
+	init:	fn();
+
+	Peeridlen:	con 20;
+
+	Piecesrandom:	con 4;
+	Blocksize:	con 16*1024;
 	Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
 	Blockqueuesize:	con 30;  # number of pending blocks to request to peer
 	Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
 	Batchsize:	con Diskchunksize/Blocksize;
-	Netiounit:	con 1500-20-20;  # typical network data io unit, ethernet-ip-tcp
 
-	Peeridlen:	con 20;
 
-	Listenhost:	con "*";
-	Listenport:	con 6881;
-	Listenportrange:	con 100;
+	pieces:		list of ref Piece;  # only active pieces
+	trackerpeers:   list of Newpeer;  # peers we are not connected to
+	peers:		list of ref Peer;  # peers we are connected to
+	luckypeer:	ref Peer;
+	piecehave:	ref Bitarray->Bits;
+	piecebusy:	ref Bitarray->Bits;
+	piececounts:	array of int;  # for each piece, count of peers that have it
 
-	Intervalmin:	con 30;
-	Intervalmax:	con 24*3600;
-	Intervalneed:	con 10;  # when we need more peers during startup period
-	Intervaldefault:	con 1800;
-	Intervalstartupperiod:	con 120;
-
-	Blocksizemax:	con 32*1024;  # max block size allowed for incoming blocks
-	Unchokedmax:	con 4;
-	Seedunchokedmax:	con 4;
-	Ignorefaultyperiod:	con 300;
-
-	ip4maskstr:	con "255.255.255.0";
-	ip6maskstr:	con "/48";
-};
-
-Misc: module
-{
-	PATH:	con "/dis/lib/bittorrent/misc.dis";
-
-	init:	fn();
 
 	randomize:	fn[T](a: array of T);
-	maskip:	fn(ipstr: string): string;
-};
+	maskip:		fn(ipstr: string): string;
 
-Pools: module
-{
-	PATH:	con "/dis/lib/bittorrent/pools.dis";
 
-	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # pool mode
-
-	init:	fn();
-
+	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # Pool.mode
 	Pool: adt[T] {
 		active:	array of T;
 		pool:	array of T;
@@ -68,16 +44,9 @@ Pools: module
 		pooldel:	fn(p: self ref Pool, e: T);
 		text:	fn(p: self ref Pool): string;
 	};
-};
 
-Rate: module
-{
-	PATH:	con "/dis/lib/bittorrent/rate.dis";
 
 	TrafficHistorysize:	con 10;
-
-	init:	fn();
-
 	Traffic: adt {
 		last:	int;  # last element in `d' that may have been used
 		d:	array of (int, int);  # time, bytes
@@ -93,15 +62,7 @@ Rate: module
 		total:	fn(t: self ref Traffic): big;
 		text:	fn(t: self ref Traffic): string;
 	};
-};
 
-
-Pieces: module
-{
-	PATH:	con "/dis/lib/bittorrent/pieces.dis";
-
-	init:	fn();
-	prepare:	fn(t: ref Bittorrent->Torrent);
 
 	Piece: adt {
 		hashstate:	ref Keyring->DigestState;
@@ -131,22 +92,13 @@ Pieces: module
 	};
 
 
-	pieces:	list of ref Piece;  # only active pieces
-
-	piecenew:	fn(index: int): ref Piece;
+	piecenew:	fn(t: ref Torrent, index: int): ref Piece;
 	piecedel:	fn(p: ref Piece);
 	piecefind:	fn(index: int): ref Piece;
 
 	blockhave:	fn(l: list of ref Block, b: ref Block): int;
 	blockdel:	fn(l: list of ref Block, b: ref Block): list of ref Block;
-};
 
-
-Peers: module
-{
-	PATH:	con "/dis/lib/bittorrent/peers.dis";
-
-	init:	fn();
 
 	Newpeer: adt {
 		addr:   string;
@@ -170,15 +122,15 @@ Peers: module
 		getmsgch:	chan of list of ref Bittorrent->Msg;
 		metamsgs,
 		datamsgs: 	list of ref Bittorrent->Msg;
-		reqs:		ref Requests->Reqs;  # we want from remote
+		reqs:		ref Reqs;  # we want from remote
 		piecehave:	ref Bitarray->Bits;
 		state:		int;  # interested/choked
 		msgseq:		int;
 		up,
 		down,
 		metaup,
-		metadown: 	ref Rate->Traffic;
-		wants:		list of ref Pieces->Block;  # remote wants from us
+		metadown: 	ref Traffic;
+		wants:		list of ref Block;  # remote wants from us
 		lastunchoke:	int;
 		dialed:		int;  # whether we initiated connection
 		buf:		ref Buf;  # unwritten part of piece
@@ -203,22 +155,17 @@ Peers: module
 		piecelength:	int;
 
 		new:		fn(): ref Buf;
-		tryadd:		fn(b: self ref Buf, piece: ref Pieces->Piece, begin: int, buf: array of byte): int;
+		tryadd:		fn(b: self ref Buf, piece: ref Piece, begin: int, buf: array of byte): int;
 		isfull:		fn(b: self ref Buf): int;
 		clear:		fn(b: self ref Buf);
 		overlaps:	fn(b: self ref Buf, piece, begin, end: int): int;
 	};
 
 
-	trackerpeers:   list of Newpeer;  # peers we are not connected to
-
 	trackerpeerdel:	fn(np: Newpeer);
 	trackerpeeradd:	fn(np: Newpeer);
 	trackerpeertake:	fn(): Newpeer;
 
-
-	peers:	list of ref Peer;  # peers we are connected to
-	luckypeer:	ref Peer;
 
 	peerconnected:	fn(addr: string): int;
 	peerdel:	fn(peer: ref Peer);
@@ -229,13 +176,7 @@ Peers: module
 	peerfind:	fn(id: int): ref Peer;
 	peersunchoked:	fn(): list of ref Peer;
 	peersactive:	fn(): list of ref Peer;
-};
 
-Requests: module
-{
-	PATH:	con "/dis/lib/bittorrent/requests.dis";
-
-	init:	fn();
 
 	Req: adt {
 		pieceindex, blockindex, cancelled: int;
@@ -266,47 +207,21 @@ Requests: module
 
 	Batch: adt {
 		blocks:	array of int;
-		piece:	ref Pieces->Piece;
+		piece:	ref Piece;
 
-		new:	fn(first, n: int, piece: ref Pieces->Piece): ref Batch;
+		new:	fn(first, n: int, piece: ref Piece): ref Batch;
 		unused:	fn(b: self ref Batch): list of Req;
-		usedpartial:	fn(b: self ref Batch, peer: ref Peers->Peer): list of Req;
+		usedpartial:	fn(b: self ref Batch, peer: ref Peer): list of Req;
 		text:	fn(b: self ref Batch): string;
 	};
 
-	batches:	fn(p: ref Pieces->Piece): array of ref Batch;
-};
+	batches:	fn(p: ref Piece): array of ref Batch;
 
-Verify: module
-{
-	PATH:	con "/dis/lib/bittorrent/verify.dis";
-
-	init:	fn();
-
-	piecehash:	fn(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Pieces->Piece): (array of byte, string);
+	piecehash:	fn(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Piece): (array of byte, string);
 	torrenthash:	fn(fds: list of ref (ref Sys->FD, big), t: ref Bittorrent->Torrent, haves: ref Bitarray->Bits): string;
 	reader:		fn(t: ref Bittorrent->Torrent, fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string));
 
-};
 
-State: module
-{
-	PATH:	con "/dis/lib/bittorrent/state.dis";
-
-	init:	fn();
-	prepare:	fn(npieces: int);
-
-	piecehave:	ref Bitarray->Bits;
-	piecebusy:	ref Bitarray->Bits;
-	piececounts:	array of int;  # for each piece, count of peers that have it
-};
-
-Schedule: module
-{
-	PATH:	con "/dis/lib/bittorrent/schedule.dis";
-
-	init:	fn(state: State, peersmod: Peers, piecesmod: Pieces);
-
-	needblocks:	fn(p: ref Peers->Peer): int;
-	schedule:	fn(reqch: chan of ref (ref Pieces->Piece, list of Requests->Req, chan of int), p: ref Peers->Peer);
+	needblocks:	fn(p: ref Peer): int;
+	schedule:	fn(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of int), p: ref Peer);
 };
