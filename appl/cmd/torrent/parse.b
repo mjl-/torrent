@@ -14,6 +14,9 @@ include "bitarray.m";
 include "bittorrent.m";
 	bittorrent: Bittorrent;
 	Bee: import bittorrent;
+include "util0.m";
+	util: Util0;
+	fail, warn, readfile: import util;
 
 Torrentparse: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -48,11 +51,9 @@ init(nil: ref Draw->Context, args: list of string)
 		fail(sprint("bufio open stdout: %r"));
 
 	f := hd args;
-	fd := sys->open(f, Sys->OREAD);
-	if(fd == nil)
-		fail(sprint("open %s: %r", f));
-
-	d := readfile(fd);
+	d := readfile(f, -1);
+	if(d == nil)
+		fail(sprint("%r"));
 	say("have file");
 	say(sprint("file length=%d byte0=%c", len d, int d[0]));
 
@@ -113,31 +114,8 @@ stringfmt(a: array of byte): string
 	return "\""+string a+"\"";
 }
 
-readfile(fd: ref Sys->FD): array of byte
-{
-	d := array[0] of byte;
-	for(;;) {
-		n := sys->read(fd, buf := array[Sys->ATOMICIO] of byte, len buf);
-		if(n == 0)
-			break;
-		if(n < 0)
-			fail(sprint("reading: %r"));
-		nd := array[len d+n] of byte;
-		nd[:] = d;
-		nd[len d:] = buf[:n];
-		d = nd;
-	}
-	return d;
-}
-
-fail(s: string)
-{
-	sys->fprint(sys->fildes(2), "%s\n", s);
-	raise "fail:"+s;
-}
-
 say(s: string)
 {
 	if(Dflag)
-		sys->fprint(sys->fildes(2), "%s\n", s);
+		warn(s);
 }

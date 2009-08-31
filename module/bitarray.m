@@ -12,6 +12,7 @@ Bitarray: module
 		clone:		fn(b: self ref Bits): ref Bits;
 		get:		fn(b: self ref Bits, i: int): int;
 		set:		fn(b: self ref Bits, i: int);
+		setall:		fn(b: self ref Bits);
 		clear:		fn(b: self ref Bits, i: int);
 		clearall:	fn(b: self ref Bits);
 		invert:		fn(b: self ref Bits);

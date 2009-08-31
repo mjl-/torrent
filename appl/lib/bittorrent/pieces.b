@@ -7,8 +7,8 @@ include "torrentpeer.m";
 	Bits: import bitarray;
 	bittorrent: Bittorrent;
 	Torrent: import bittorrent;
-include "lists.m";
-	lists: Lists;
+	util: Util0;
+	rev: import util;
 
 torrent: ref Torrent;
 
@@ -16,10 +16,11 @@ init()
 {
 	sys = load Sys Sys->PATH;
 	kr = load Keyring Keyring->PATH;
-	lists = load Lists Lists->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 }
 
 prepare(t: ref Torrent)
@@ -120,5 +121,5 @@ blockdel(l: list of ref Block, b: ref Block): list of ref Block
 	for(; l != nil; l = tl l)
 		if(!Block.eq(hd l, b))
 			r = hd l::r;
-	return lists->reverse(r);
+	return rev(r);
 }

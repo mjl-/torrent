@@ -2,12 +2,14 @@ implement Verify;
 
 include "torrentpeer.m";
 	sys: Sys;
+	sprint: import sys;
 	kr: Keyring;
 	bitarray: Bitarray;
 	Bits: import bitarray;
 	bittorrent: Bittorrent;
 	Torrent: import bittorrent;
-	misc: Misc;
+	util: Util0;
+	min, hex: import util;
 
 init()
 {
@@ -16,15 +18,8 @@ init()
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
-	misc = load Misc Misc->PATH;
-	misc->init();
-}
-
-min(a, b: int): int
-{
-	if(a < b)
-		return a;
-	return b;
+	util = load Util0 Util0->PATH;
+	util->init();
 }
 
 chunkreader(fds: list of ref (ref Sys->FD, big), reqch: chan of ref (int, big, chan of (array of byte, string)))
@@ -64,7 +59,7 @@ piecehash(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Pieces->Pie
 	for(;;) {
 		(buf, err) := <-chunkch;
 		if(err != nil)
-			return (nil, sys->sprint("reading piece %d: %s", p.index, err));
+			return (nil, sprint("reading piece %d: %s", p.index, err));
 		if(buf == nil)
 			break;
 		state = kr->sha1(buf, len buf, nil, state);
@@ -90,7 +85,7 @@ torrenthash(fds: list of ref (ref Sys->FD, big), t: ref Torrent, haves: ref Bits
 		for(;;) {
 			(buf, cerr) := <-chunkch;
 			if(cerr != nil)
-				return sys->sprint("reading piece %d for verification: %s", i, cerr);
+				return sprint("reading piece %d for verification: %s", i, cerr);
 			if(buf == nil)
 				break;
 			state = kr->sha1(buf, len buf, nil, state);
@@ -99,7 +94,7 @@ torrenthash(fds: list of ref (ref Sys->FD, big), t: ref Torrent, haves: ref Bits
 		hash := array[Keyring->SHA1dlen] of byte;
 		kr->sha1(nil, 0, hash, state);
 
-		if(misc->hex(hash) == misc->hex(t.piecehashes[i]))
+		if(hex(hash) == hex(t.piecehashes[i]))
 			haves.set(i);
 	}
 	return nil;

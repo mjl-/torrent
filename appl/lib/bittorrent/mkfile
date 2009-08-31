@@ -22,13 +22,13 @@ SYSMODULES=\
 	filter.m\
 	ip.m\
 	keyring.m\
-	lists.m\
 	security.m\
 	string.m\
 	sys.m\
 	bitarray.m\
 	bittorrent.m\
 	mhttp.m\
+	util0.m\
 
 DISBIN=$ROOT/dis/lib/bittorrent
 

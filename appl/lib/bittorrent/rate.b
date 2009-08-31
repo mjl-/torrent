@@ -2,7 +2,10 @@ implement Rate;
 
 include "torrentpeer.m";
 	sys: Sys;
+	sprint: import sys;
 	bittorrent: Bittorrent;
+	util: Util0;
+	sizefmt: import util;
 include "daytime.m";
 	daytime: Daytime;
 
@@ -12,6 +15,8 @@ init()
 	daytime = load Daytime Daytime->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 }
 
 Traffic.new(): ref Traffic
@@ -68,5 +73,5 @@ Traffic.total(t: self ref Traffic): big
 
 Traffic.text(t: self ref Traffic): string
 {
-	return sys->sprint("<rate %s/s total %s>", bittorrent->bytefmt(big t.rate()), bittorrent->bytefmt(t.total()));
+	return sprint("<rate %s/s total %s>", sizefmt(big t.rate()), sizefmt(t.total()));
 }

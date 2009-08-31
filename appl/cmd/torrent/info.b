@@ -16,6 +16,9 @@ include "bitarray.m";
 include "bittorrent.m";
 	bittorrent: Bittorrent;
 	Bee, Msg, Torrent: import bittorrent;
+include "util0.m";
+	util: Util0;
+	fail, warn, sizefmt: import util;
 
 Torrentinfo: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -32,6 +35,8 @@ init(nil: ref Draw->Context, args: list of string)
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-D] torrentfile");
@@ -50,24 +55,18 @@ init(nil: ref Draw->Context, args: list of string)
 		fail(sprint("%s: %s", hd args, err));
 
 	sys->print("announce url:   %s\n", t.announce);
-	sys->print("piece length:   %s (%d bytes)\n", bittorrent->bytefmt(big t.piecelen), t.piecelen);
+	sys->print("piece length:   %s (%d bytes)\n", sizefmt(big t.piecelen), t.piecelen);
 	sys->print("pieces:         %d\n", t.piececount);
-	sys->print("total length:   %s (%bd bytes)\n", bittorrent->bytefmt(t.length), t.length);
+	sys->print("total length:   %s (%bd bytes)\n", sizefmt(t.length), t.length);
 	sys->print("files:\n");
 	for(l := t.files; l != nil; l = tl l) {
 		f := hd l;
-		sys->print("%10s  %s\n", bittorrent->bytefmt(f.length), f.path);
+		sys->print("%10s  %s\n", sizefmt(f.length), f.path);
 	}
-}
-
-fail(s: string)
-{
-	sys->fprint(sys->fildes(2), "%s\n", s);
-	raise "fail:"+s;
 }
 
 say(s: string)
 {
 	if(Dflag)
-		sys->fprint(sys->fildes(2), "%s\n", s);
+		warn(s);
 }

@@ -14,6 +14,8 @@ include "torrentpeer.m";
 	requests: Requests;
 	Req, Reqs, Batch: import requests;
 	state: State;
+	util: Util0;
+	warn, l2a, inssort: import util;
 
 init(statemod: State, peersmod: Peers, piecesmod: Pieces)
 {
@@ -23,6 +25,8 @@ init(statemod: State, peersmod: Peers, piecesmod: Pieces)
 	bitarray = load Bitarray Bitarray->PATH;
 	misc = load Misc Misc->PATH;
 	misc->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 	state = statemod;
 	peers = peersmod;
 	pieces = piecesmod;
@@ -128,8 +132,8 @@ piecesrareorphan(orphan: int): array of ref Piece
 			r = p::r;
 	}
 
-	a := misc->l2a(r);
-	misc->sort(a, rarepiececmp);
+	a := l2a(r);
+	inssort(a, rarepiececmp);
 	return a;
 }
 
@@ -194,8 +198,8 @@ schedule0(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pe
 		say("schedule: doing random");
 
 		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-		a := misc->l2a(pieces->pieces);
-		misc->sort(a, progresscmp);
+		a := l2a(pieces->pieces);
+		inssort(a, progresscmp);
 		for(i := 0; i < len a; i++) {
 			piece := a[i];
 			say(sprint("schedule: looking at piece %d", piece.index));
@@ -236,5 +240,5 @@ schedule0(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pe
 say(s: string)
 {
 	if(1)
-		sys->fprint(sys->fildes(2), "%s\n", s);
+		warn(s);
 }

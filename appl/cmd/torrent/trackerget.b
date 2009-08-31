@@ -11,13 +11,16 @@ include "arg.m";
 include "bittorrent.m";
 	bittorrent: Bittorrent;
 	Bee, Torrent: import bittorrent;
-
+include "util0.m";
+	util: Util0;
+	fail, warn: import util;
 
 Torrenttrackget: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
-Dflag: int;
+
+dflag: int;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -26,12 +29,14 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" torrentfile");
+	arg->setusage(arg->progname()+" [-d] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
-		'D' =>	Dflag++;
+		'd' =>	dflag++;
 		* =>	arg->usage();
 		}
 
@@ -59,14 +64,8 @@ init(nil: ref Draw->Context, args: list of string)
 	say("done");
 }
 
-fail(s: string)
-{
-	sys->fprint(sys->fildes(2), "%s\n", s);
-	raise "fail:"+s;
-}
-
 say(s: string)
 {
-	if(Dflag)
-		sys->fprint(sys->fildes(2), "%s\n", s);
+	if(dflag)
+		warn(s);
 }

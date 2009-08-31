@@ -1,7 +1,5 @@
 <../../../mkconfig
 
-DISBIN=$ROOT/dis
-
 TARG=\
 	parse.dis\
 	trackerget.dis\
@@ -17,17 +15,23 @@ MODULES=\
 SYSMODULES=\
 	arg.m\
 	bufio.m\
-	bundle.m\
 	daytime.m\
 	draw.m\
+	ip.m\
 	keyring.m\
 	math.m\
-	lists.m\
+	rand.m\
+	security.m\
 	string.m\
+	styx.m\
+	styxservers.m\
 	sys.m\
 	tables.m\
 	bitarray.m\
 	bittorrent.m\
+	cgi.m\
+	mhttp.m\
+	util0.m\
 
 DISBIN=$ROOT/dis/torrent
 

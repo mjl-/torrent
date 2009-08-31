@@ -2,6 +2,7 @@ implement Pools;
 
 include "torrentpeer.m";
 	sys: Sys;
+	sprint: import sys;
 	rand: Rand;
 	misc: Misc;
 
@@ -39,7 +40,7 @@ Pool[T].fill(p: self ref Pool)
 		if(p.mode == Pools->PoolRotateRandom)
 			misc->randomize(p.active[len p.active-n:]);
 	* =>
-		raise sys->sprint("bad mode for pool: %d", p.mode);
+		raise sprint("bad mode for pool: %d", p.mode);
 	}
 }
 
@@ -56,7 +57,7 @@ Pool[T].take(p: self ref Pool): T
 		p.active = p.active[1:];
 		return e;
 	* =>
-		raise sys->sprint("bad mode for pool: %d", p.mode);
+		raise sprint("bad mode for pool: %d", p.mode);
 	}
 }
 
@@ -101,6 +102,5 @@ poolmodes := array[] of {
 
 Pool[T].text(p: self ref Pool): string
 {
-	return sys->sprint("<rotation len active=%d len pool=%d poolnext=%d mode=%s>", len p.active, len p.pool, p.poolnext, poolmodes[p.mode]);
+	return sprint("<rotation len active=%d len pool=%d poolnext=%d mode=%s>", len p.active, len p.pool, p.poolnext, poolmodes[p.mode]);
 }
-

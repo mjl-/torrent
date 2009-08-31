@@ -30,6 +30,9 @@ include "styxservers.m";
 include "tables.m";
 	tables: Tables;
 	Table: import tables;
+include "util0.m";
+	util: Util0;
+	pid, kill, killgrp, min, warn, l2a, g32i, readfile, readfd, inssort, sizefmt, sizeparse: import util;
 
 include "bitarray.m";
 	bitarray: Bitarray;
@@ -38,7 +41,7 @@ include "bittorrent.m";
 	bittorrent: Bittorrent;
 	Bee, Msg, File, Torrent: import bittorrent;
 include "../../lib/bittorrent/peer.m";
-	util: Misc;
+	misc: Misc;
 	pools: Pools;
 	Pool: import pools;
 	rate: Rate;
@@ -59,6 +62,7 @@ Pflag: int;
 Lflag: int;
 nofix: int;
 
+torrentpath:	string;
 torrent:	ref Torrent;
 dstfds:		list of ref (ref Sys->FD, big);  # fd, size
 statefd:	ref Sys->FD;
@@ -131,6 +135,10 @@ Progress: adt {
 		index:	int;
 		path,
 		origpath:	string;
+	Tracker =>
+		interval:	int;
+		npeers:	int;
+		err:	string;
 	}
 
 	text:	fn(p: self ref Progress): string;
@@ -234,12 +242,14 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers = load Styxservers Styxservers->PATH;
 	styxservers->init(styx);
 	tables = load Tables Tables->PATH;
+	util = load Util0 Util0->PATH;
+	util->init();
 	bitarray = load Bitarray Bitarray->PATH;
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
 
-	util = load Misc Misc->PATH;
-	util->init();
+	misc = load Misc Misc->PATH;
+	misc->init();
 	pools = load Pools Pools->PATH;
 	pools->init();
 	rate = load Rate Rate->PATH;
@@ -273,10 +283,10 @@ init(nil: ref Draw->Context, args: list of string)
 		'm' =>	maxratio = real arg->earg();
 			if(maxratio <= 1.1)
 				fail("invalid maximum ratio");
-		'd' =>	maxdownload = bittorrent->byteparse(arg->earg());
+		'd' =>	maxdownload = sizeparse(arg->earg());
 			if(maxdownload < big 0)
 				fail("invalid maximum download rate");
-		'u' =>	maxupload = bittorrent->byteparse(arg->earg());
+		'u' =>	maxupload = sizeparse(arg->earg());
 			if(maxupload < big (10*1024))
 				fail("invalid maximum upload rate");
 		* =>
@@ -290,9 +300,10 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP, nil);
 
 	err: string;
-	(torrent, err) = Torrent.open(hd args);
+	torrentpath = hd args;
+	(torrent, err) = Torrent.open(torrentpath);
 	if(err != nil)
-		fail(sprint("%s: %s", hd args, err));
+		fail(sprint("%s: %s", torrentpath, err));
 
 	created: int;
 	(dstfds, created, err) = torrent.openfiles(nofix, 0);
@@ -309,9 +320,9 @@ init(nil: ref Draw->Context, args: list of string)
 		statefd = sys->open(torrent.statepath, Sys->ORDWR);
 		if(statefd != nil) {
 			say("using .state file");
-			(d, rerr) := util->readfd(statefd);
-			if(rerr != nil)
-				fail(sprint("%s: %s", torrent.statepath, rerr));
+			d := util->readfd(statefd, 64*1024);
+			if(d == nil)
+				fail(sprint("%r"));
 			(state->piecehave, err) = Bits.mk(torrent.piececount, d);
 			if(err != nil)
 				fail(sprint("%s: invalid state", torrent.statepath));
@@ -423,7 +434,6 @@ dostyx(mm: ref Tmsg)
 			peerfids.add(m.fid, pf);
 			putpeerstate(pf.last);
 		}
-		srv.default(m);
 
 	Read =>
 		fid := srv.getfid(m.fid);
@@ -437,12 +447,13 @@ dostyx(mm: ref Tmsg)
 		Qinfo =>
 			t := torrent;
 			s := "";
+			s += sprint("fs 0\n");
+			s += sprint("torrentpath %q\n", torrentpath);
 			s += sprint("infohash %s\n", util->hex(t.hash));
 			s += sprint("announce %q\n", t.announce);
 			s += sprint("piecelen %d\n", t.piecelen);
 			s += sprint("piececount %d\n", t.piececount);
 			s += sprint("length %bd\n", t.length);
-			s += sprint("fs 0\n");
 			srv.reply(styxservers->readstr(m, s));
 		Qstate =>
 			s := "";
@@ -510,6 +521,7 @@ dostyx(mm: ref Tmsg)
 		* =>
 			raise "missing case";
 		}
+		return;
 
 	Write =>
 		(fid, err) := srv.canwrite(m);
@@ -531,9 +543,11 @@ dostyx(mm: ref Tmsg)
 			l = tl l;
 			case cmd {
 			"stop" =>
+				return replyerror(m, "xxx implement");
 				if(!stopped)
 					stop();
 			"start" =>
+				return replyerror(m, "xxx implement");
 				if(stopped)
 					return replyerror(m, "xxx implement");
 			"disconnect" =>
@@ -555,7 +569,6 @@ dostyx(mm: ref Tmsg)
 		for(ll := listpeerfids(); ll != nil; ll = tl ll)
 			if((hd ll).flushtag(m.tag))
 				return;
-		srv.default(mm);
 
 	Clunk or
 	Remove =>
@@ -571,11 +584,8 @@ dostyx(mm: ref Tmsg)
 					raise "missing peerfid";
 			}
 		}
-		srv.default(m);
-
-	* =>
-		srv.default(mm);
 	}
+	srv.default(mm);
 }
 
 
@@ -649,6 +659,7 @@ intereststr(i: int): string
 	return "uninterested";
 }
 
+# addr hex id direction localchoking localinterested remotechoking remoteinterested lastunchoke npiecehave "up" total rate "down" total rate "metaup" total rate "metadown" total rate
 peerline(p: ref Peer): string
 {
 	direction := "listened";
@@ -688,7 +699,7 @@ putprogress(p: ref Progress)
 }
 
 progresstags := array[] of {
-"", "done", "started", "stopped", "piece", "block", "pieces", "blocks", "filedone",
+"", "done", "started", "stopped", "piece", "block", "pieces", "blocks", "filedone", "tracker",
 };
 Progress.text(pp: self ref Progress): string
 {
@@ -706,6 +717,7 @@ Progress.text(pp: self ref Progress): string
 			for(l := p.l; l != nil; l = tl l)
 				s += " "+string hd l;
 	Filedone =>	s += sprint(" %d %q %q", p.index, p.path, p.origpath);
+	Tracker =>	s += sprint(" %d %d %q", p.interval, p.npeers, p.err);
 	* =>	raise "missing case";
 	}
 	return s;
@@ -824,7 +836,7 @@ Peerevent.text(pp: self ref Peerevent): string
 	New or 
 	Gone =>		s += sprint(" %q %d %s %d", p.addr, p.id, p.peeridhex, p.dialed);
 	Bad =>		s += sprint(" %q %d", p.addr, p.mtime);
-	State =>	s += sprint(" %d %s%s", p.id, eventstatestr0[p.s>>2], eventstatestr1[p.s&3]);
+	State =>	s += sprint(" %d %s %s", p.id, eventstatestr0[p.s>>2], eventstatestr1[p.s&3]);
 	Piece => 	s += sprint(" %d %d", p.id, p.piece);
 	Pieces =>	s += sprint(" %d", p.id);
 			for(l := p.pieces; l != nil; l = tl l)
@@ -1299,7 +1311,7 @@ nextoptimisticunchoke(): ref Peer
 		peer: ref Peer;
 		for(l := peers->peers; l != nil; l = tl l) {
 			p := hd l;
-			if(util->maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
+			if(misc->maskip(p.np.ip) == ipmasked && (peer == nil || p.lastunchoke < peer.lastunchoke))
 				peer = p;
 		}
 		if(peer != nil)
@@ -1341,8 +1353,8 @@ chokingupload(gen: int)
 		nunchoked--;
 	}
 
-	othersa := util->l2a(others);
-	util->randomize(othersa);
+	othersa := l2a(others);
+	misc->randomize(othersa);
 	for(i := 0; i < len othersa && nunchoked+i < Seedunchokedmax; i++)
 		unchoke(othersa[i]);
 }
@@ -1362,7 +1374,7 @@ chokingdownload(gen: int)
 			luckyindex = i;
 		allpeers[i++] = ref (hd l, (hd l).down.rate());
 	}
-	util->sort(allpeers, peerratecmp);
+	inssort(allpeers, peerratecmp);
 
 	# determine N interested peers with highest upload rate
 	nintr := 0;
@@ -1690,8 +1702,10 @@ main()
 	(interval, newpeers, trackerr) := <-trackchan =>
 		if(trackerr != nil) {
 			warn(sprint("tracker error: %s", trackerr));
+			putprogress(ref Progress.Tracker (nil, interval, 0, trackerr));
 		} else {
 			say("main, new peers");
+			putprogress(ref Progress.Tracker (nil, interval, len newpeers, nil));
 			for(i := 0; i < len newpeers; i++) {
 				(ip, port, peerid) := newpeers[i];
 				if(util->hex(peerid) == localpeeridhex)
@@ -1743,7 +1757,7 @@ main()
 			say("new peer "+peer.fulltext());
 			putevent(ref Peerevent.New (nil, peer.np.addr, peer.id, peer.peeridhex, peer.dialed));
 
-			rotateips.pooladdunique(util->maskip(np.ip));
+			rotateips.pooladdunique(misc->maskip(np.ip));
 
 			if((state->piecehave).have == 0) {
 				peersend(peer, ref Msg.Keepalive());
@@ -1919,13 +1933,12 @@ listener(aconn: Sys->Connection)
 			continue;
 		}
 
-		remote := conn.dir+"/remote";
-		(remaddr, rerr) := util->readfile(remote);
-		if(rerr != nil) {
-			warn(sprint("reading %s: %s", remote, rerr));
+		rembuf := readfile(conn.dir+"/remote", 128);
+		if(rembuf == nil) {
+			warn(sprint("%r"));
 			continue;
 		}
-		remaddr = str->splitstrl(remaddr, "\n").t0;
+		remaddr := str->splitstrl(string rembuf, "\n").t0;
 
 		f := conn.dir+"/data";
 		fd := sys->open(f, Sys->ORDWR);
@@ -1944,13 +1957,6 @@ listener(aconn: Sys->Connection)
 	}
 }
 
-
-min(a, b: int): int
-{
-	if(a < b)
-		return a;
-	return b;
-}
 
 # we are allowed to pass `max' bytes per second.
 limiter(ch: chan of (int, chan of int), max: int)
@@ -2093,7 +2099,7 @@ msgread(fd: ref Sys->FD): (ref Msg, string)
 		return (nil, sprint("reading: %r"));
 	if(n < len buf)
 		return (nil, sprint("short read"));
-	(size, nil) := bittorrent->g32(buf, 0);
+	(size, nil) := g32i(buf, 0);
 	buf = array[size] of byte;
 
 	n = netread(fd, buf, len buf);
@@ -2253,39 +2259,15 @@ eta(): int
 	return int (totalleft / big r);
 }
 
-progctl(pid: int, s: string)
+say(s: string)
 {
-	sys->fprint(sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE), "%s", s);
-}
-
-killgrp(pid: int)
-{
-	progctl(pid, "killgrp");
-}
-
-kill(pid: int)
-{
-	progctl(pid, "kill");
-}
-
-pid(): int
-{
-	return sys->pctl(0, nil);
+	if(Dflag)
+		warn(s);
 }
 
 fail(s: string)
 {
 	warn(s);
+	killgrp(pid());
 	raise "fail:"+s;
-}
-
-warn(s: string)
-{
-	sys->fprint(sys->fildes(2), "%s\n", s);
-}
-
-say(s: string)
-{
-	if(Dflag)
-		sys->fprint(sys->fildes(2), "%s\n", s);
 }

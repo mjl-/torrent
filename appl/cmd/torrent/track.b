@@ -12,8 +12,6 @@ include "string.m";
 	str: String;
 include "daytime.m";
 	daytime: Daytime;
-include "lists.m";
-	lists: Lists;
 include "rand.m";
 	rand: Rand;
 include "tables.m";
@@ -29,6 +27,9 @@ include "bittorrent.m";
 include "cgi.m";
 	cgi: Cgi;
 	Fields: import cgi;
+include "util0.m";
+	util: Util0;
+	fail, warn, kill, rev, hex, unhex, p16: import util;
 
 Torrenttrack: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -96,7 +97,6 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	str = load String String->PATH;
 	daytime = load Daytime Daytime->PATH;
-	lists = load Lists Lists->PATH;
 	rand = load Rand Rand->PATH;
 	rand->init(sys->millisec()^sys->pctl(0, nil));
 	tables = load Tables Tables->PATH;
@@ -106,6 +106,8 @@ init(nil: ref Draw->Context, args: list of string)
 	cgi->init();
 	bittorrent = load Bittorrent Bittorrent->PATH;
 	bittorrent->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 
 	sys->pctl(Sys->NEWPGRP, nil);
 
@@ -423,11 +425,11 @@ respondpeers(fd: ref Sys->FD, tr: ref Trackreq, a: array of ref Peer)
 			p := a[i];
 			if(p.ip.isv4()) {
 				r4[h4*6:] = p.ip.v4();
-				p16(r4[h4*6+4:], p.port);
+				p16(r4, h4*6+4, p.port);
 				h4++;
 			} else {
 				r6[h6*18:] = p.ip.v6();
-				p16(r6[h6*18+16:], p.port);
+				p16(r6, h6*18+16, p.port);
 				h6++;
 			}
 say(sprint("compact, %s!%d", p.ip.text(), p.port));
@@ -447,7 +449,7 @@ say(sprint("compact, %s!%d", p.ip.text(), p.port));
 			r = beedict(list of {bpeerid, bip, bport})::r;
 say(sprint("big, %s!%d", p.ip.text(), p.port));
 		}
-		peersdict = beelist(lists->reverse(r));
+		peersdict = beelist(rev(r));
 	}
 	binterval := beekey("interval", beeint(interval));
 	bpeers := beekey("peers", peersdict);
@@ -571,26 +573,13 @@ parseerror(s: string)
 	raise "parse:"+s;
 }
 
-unhexc(c: int): int
+eunhex(s: string): array of byte
 {
-	if(c >= '0' && c <= '9')
-		return c-'0';
-	if(c >= 'a' && c <= 'f')
-		return c-'a'+10;
-	if(c >= 'A' && c <= 'F')
-		return c-'A'+10;
-	parseerror(sprint("bad hex char %c (%d)", c, c));
-	return -1;  # not reached
-}
-
-unhex(hash: string): array of byte
-{
-	if(len hash != 40)
-		parseerror(sprint("bad hex hash/peerid, expected 40 chars, saw %d", len hash));
-	d := array[20] of byte;
-	o := 0;
-	for(i := 0; i < len hash; i += 2)
-		d[o++] = byte ((unhexc(hash[i])<<4) | unhexc(hash[i+1]));
+	d := unhex(s);
+	if(d == nil)
+		parseerror(sprint("%r"));
+	if(len d != 20)
+		parseerror("hash/peerid not 20 bytes long");
 	return d;
 }
 
@@ -629,8 +618,8 @@ parsestate(now: int, b: ref Iobuf): int
 				* =>	parseerror(sprint("bad state %d", state));
 				}
 
-				hash := unhex(hashhex);
-				peerid := unhex(peeridhex);
+				hash := eunhex(hashhex);
+				peerid := eunhex(peeridhex);
 				(ipok, iprem) := IPaddr.parse(ipstr);
 				if(ipok != 0)
 					parseerror(sprint("bad ip %#q", ipstr));
@@ -722,39 +711,8 @@ writestate()
 	statelast = 1-statelast;
 }
 
-p16(d: array of byte, v: int)
-{
-	d[0] = byte (v>>8);
-	d[1] = byte (v>>0);
-}
-
-hex(d: array of byte): string
-{
-	s := "";	
-	for(i := 0; i < len d; i++)
-		s += sprint("%02x", int d[i]);
-	return s;
-}
-
-kill(pid: int)
-{
-	fd := sys->open(sprint("/prog/%d/ctl", pid), Sys->OWRITE);
-	sys->fprint(fd, "kill");
-}
-
-warn(s: string)
-{
-	sys->fprint(sys->fildes(2), "%s\n", s);
-}
-
 say(s: string)
 {
 	if(dflag)
 		warn(s);
-}
-
-fail(s: string)
-{
-	warn(s);
-	raise "fail:"+s;
 }

@@ -12,8 +12,6 @@ include "keyring.m";
 	kr: Keyring;
 include "security.m";
 	random: Random;
-include "lists.m";
-	lists: Lists;
 include "filter.m";
 include "mhttp.m";
 	http: Http;
@@ -22,6 +20,9 @@ include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
 include "bittorrent.m";
+include "util0.m";
+	util: Util0;
+	warn, rev, l2a, hex, readfile, preadn, g32i, p32i, g16, suffix, prefix, join, hasstr: import util;
 
 dflag = 0;
 version: con 0;
@@ -34,10 +35,11 @@ init()
 	random = load Random Random->PATH;
 	kr = load Keyring Keyring->PATH;
 	bufio = load Bufio Bufio->PATH;
-	lists = load Lists Lists->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 	bitarray = load Bitarray Bitarray->PATH;
+	util = load Util0 Util0->PATH;
+	util->init();
 }
 
 Bee.find(bb: self ref Bee, s: string): ref Bee
@@ -329,40 +331,40 @@ MChoke, MUnchoke, MInterested, MNotinterested, MHave, MBitfield, MRequest, MPiec
 MLast:	con MCancel;
 
 tag2type := array[] of {
-	tagof Msg.Choke =>	MChoke,
-	tagof Msg.Unchoke =>	MUnchoke,
-	tagof Msg.Interested =>	MInterested,
-	tagof Msg.Notinterested =>	MNotinterested,
-	tagof Msg.Have =>	MHave,
-	tagof Msg.Bitfield =>	MBitfield,
-	tagof Msg.Request =>	MRequest,
-	tagof Msg.Piece =>	MPiece,
-	tagof Msg.Cancel =>	MCancel,
+tagof Msg.Choke =>	MChoke,
+tagof Msg.Unchoke =>	MUnchoke,
+tagof Msg.Interested =>	MInterested,
+tagof Msg.Notinterested =>	MNotinterested,
+tagof Msg.Have =>	MHave,
+tagof Msg.Bitfield =>	MBitfield,
+tagof Msg.Request =>	MRequest,
+tagof Msg.Piece =>	MPiece,
+tagof Msg.Cancel =>	MCancel,
 };
 
 tag2string := array[] of {
-	tagof Msg.Keepalive =>	"keepalive",
-	tagof Msg.Choke =>	"choke",
-	tagof Msg.Unchoke =>	"unchoke",
-	tagof Msg.Interested =>	"interested",
-	tagof Msg.Notinterested =>	"notinterested",
-	tagof Msg.Have =>	"have",
-	tagof Msg.Bitfield =>	"bitfield",
-	tagof Msg.Request =>	"request",
-	tagof Msg.Piece =>	"piece",
-	tagof Msg.Cancel =>	"cancel",
+tagof Msg.Keepalive =>	"keepalive",
+tagof Msg.Choke =>	"choke",
+tagof Msg.Unchoke =>	"unchoke",
+tagof Msg.Interested =>	"interested",
+tagof Msg.Notinterested =>	"notinterested",
+tagof Msg.Have =>	"have",
+tagof Msg.Bitfield =>	"bitfield",
+tagof Msg.Request =>	"request",
+tagof Msg.Piece =>	"piece",
+tagof Msg.Cancel =>	"cancel",
 };
 
 msizes := array[] of {
-	MChoke =>	1,
-	MUnchoke =>	1,
-	MInterested =>	1,
-	MNotinterested =>	1,
-	MHave =>	1+4,
-	MBitfield =>	1,	# +payload
-	MRequest =>	1+3*4,
-	MPiece =>	1+2*4,	# +payload
-	MCancel =>	1+3*4,
+MChoke =>	1,
+MUnchoke =>	1,
+MInterested =>	1,
+MNotinterested =>	1,
+MHave =>	1+4,
+MBitfield =>	1,	# +payload
+MRequest =>	1+3*4,
+MPiece =>	1+2*4,	# +payload
+MCancel =>	1+3*4,
 };
 
 Msg.packedsize(mm: self ref Msg): int
@@ -381,7 +383,7 @@ Msg.pack(mm: self ref Msg): array of byte
 {
 	msize := mm.packedsize();
 	d := array[msize] of byte;
-	i := p32(d, 0, msize-4);
+	i := p32i(d, 0, msize-4);
 
 	if(tagof mm == tagof Msg.Keepalive)
 		return d;
@@ -392,19 +394,19 @@ Msg.pack(mm: self ref Msg): array of byte
 	pick m := mm {
 	Choke or Unchoke or Interested or Notinterested =>
 	Have =>
-		i = p32(d, i, m.index);
+		i = p32i(d, i, m.index);
 	Bitfield =>
 		d[i:] = m.d;
 		i += len m.d;
 	Piece =>
-		i = p32(d, i, m.index);
-		i = p32(d, i, m.begin);
+		i = p32i(d, i, m.index);
+		i = p32i(d, i, m.begin);
 		d[i:] = m.d;
 		i += len m.d;
 	Request or Cancel =>
-		i = p32(d, i, m.index);
-		i = p32(d, i, m.begin);
-		i = p32(d, i, m.length);
+		i = p32i(d, i, m.index);
+		i = p32i(d, i, m.begin);
+		i = p32i(d, i, m.length);
 	* =>	raise "fail:bad message type";
 	};
 	if(i != len d)
@@ -432,7 +434,7 @@ Msg.unpack(d: array of byte): (ref Msg, string)
 	MNotinterested =>	m = ref Msg.Notinterested();
 	MHave =>
 		index: int;
-		(index, i) = g32(d, i);
+		(index, i) = g32i(d, i);
 		m = ref Msg.Have(index);
 	MBitfield =>
 		nd := array[len d-i] of byte;
@@ -442,8 +444,8 @@ Msg.unpack(d: array of byte): (ref Msg, string)
 		# xxx verify that bitfield has correct length?
 	MPiece =>
 		index, begin: int;
-		(index, i) = g32(d, i);
-		(begin, i) = g32(d, i);
+		(index, i) = g32i(d, i);
+		(begin, i) = g32i(d, i);
 		nd := array[len d-i] of byte;
 		nd[:] = d[i:];
 		i += len nd;
@@ -451,9 +453,9 @@ Msg.unpack(d: array of byte): (ref Msg, string)
 		# xxx verify that piece has right size?
 	MRequest or MCancel =>
 		index, begin, length: int;
-		(index, i) = g32(d, i);
-		(begin, i) = g32(d, i);
-		(length, i) = g32(d, i);
+		(index, i) = g32i(d, i);
+		(begin, i) = g32i(d, i);
+		(length, i) = g32i(d, i);
 		if(int d[0] == MRequest)
 			m = ref Msg.Request(index, begin, length);
 		else
@@ -472,7 +474,7 @@ Msg.read(fd: ref Sys->FD): (ref Msg, string)
 		return (nil, sprint("reading: %r"));
 	if(n < len buf)
 		return (nil, sprint("short read"));
-	(size, nil) := g32(buf, 0);
+	(size, nil) := g32i(buf, 0);
 	buf = array[size] of byte;
 
 	n = sys->readn(fd, buf, len buf);
@@ -507,9 +509,9 @@ encode(a: array of byte): string
 
 sanitizepath(s: string): string
 {
-	if(str->prefix("/", s) || suffix("/", s))
+	if(prefix("/", s) || suffix("/", s))
 		s = s[1:];
-	if(str->prefix("../", s) || suffix("/..", s) || s == "..")
+	if(prefix("../", s) || suffix("/..", s) || s == "..")
 		return nil;
 	if(str->splitstrl(s, "/../").t1 != nil)
 		return nil;
@@ -531,13 +533,9 @@ foldpath(l: list of string): string
 
 Torrent.open(path: string): (ref Torrent, string)
 {
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return (nil, sprint("open %s: %r", path));
-
-	d := readfile(fd);
+	d := readfile(path, 512*1024);
 	if(d == nil)
-		return (nil, sprint("reading %s: %r", path));
+		return (nil, sprint("%r"));
 
 	(b, err) := Bee.unpack(d);
 	if(err != nil)
@@ -620,10 +618,10 @@ Torrent.open(path: string): (ref Torrent, string)
 			length += filelength;
 		}
 	}
-	files = lists->reverse(files);
+	files = rev(files);
 
 	# xxx sanity checks
-	statepath := hd lists->reverse(sys->tokenize(path, "/").t1)+".state";
+	statepath := hd rev(sys->tokenize(path, "/").t1)+".state";
 	return (ref Torrent(string bannoun.a, piecelen, hash, len pieces, pieces, files, name, length, statepath), nil);
 }
 
@@ -686,7 +684,7 @@ Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref 
 			say(sprint("opened %q", path));
 		}
 	}
-	fds = lists->reverse(fds);
+	fds = rev(fds);
 	if(len opens == len t.files)
 		return (fds, 0, nil);
 
@@ -702,7 +700,7 @@ Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref 
 		f := hd l;
 		path := filename(f, nofix);
 		(nil, elems) := sys->tokenize(path, "/");
-		err := mkdirs(lists->reverse(tl lists->reverse(elems)));
+		err := mkdirs(rev(tl rev(elems)));
 		if(err != nil)
 			return (nil, 0, err);
 		fd := sys->create("./"+path, Sys->ORDWR, 8r666);
@@ -715,7 +713,7 @@ Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref 
 		fds = ref (fd, f.length)::fds;
 		say(sprint("created %q", path));
 	}
-	fds = lists->reverse(fds);
+	fds = rev(fds);
 	return (fds, 1, nil);
 }
 
@@ -757,36 +755,18 @@ Torrent.pack(t: self ref Torrent): array of byte
 			elems: list of ref Bee.String;
 			for(e := sys->tokenize(f.origpath, "/").t1; e != nil; e = tl e)
 				elems = beestr(hd e)::elems;
-			elems = lists->reverse(elems);
+			elems = rev(elems);
 			path := beekey("path", beelist(elems));
 			length := beekey("length", beebig(f.length));
 			fd := beedict(list of {length, path});
 			fl = fd::fl;
 		}
-		fl = lists->reverse(fl);
+		fl = rev(fl);
 		files := beekey("files", beelist(fl));
 		info = beedict(list of {name, files, piecelen, pieces});
 	}
 	b := beedict(list of {beekey("announce", beestr(t.announce)), beekey("info", info)});
 	return b.pack();
-}
-
-
-readfile(fd: ref Sys->FD): array of byte
-{
-	d := array[0] of byte;
-	for(;;) {
-		n := sys->readn(fd, buf := array[32*1024] of byte, len buf);
-		if(n == 0)
-			break;
-		if(n < 0)
-			return nil;
-		nd := array[len d+n] of byte;
-		nd[:] = d;
-		nd[len d:] = buf[:n];
-		d = nd;
-	}
-	return d;
 }
 
 
@@ -868,52 +848,10 @@ genpeerid(): array of byte
 	return array of byte peerid;
 }
 
-bytefmt(bytes: big): string
-{
-	suffix := array[] of {"b", "k", "m", "g", "t", "p"};
-	i := 0;
-	while(bytes >= big 10000 && i < len suffix) {
-		bytes /= big 1024;
-		i++;
-	}
-	return sprint("%bd%s", bytes, suffix[i]);
-}
-
-byteparse(s: string): big
-{
-	suffix := array[] of {"b", "k", "m", "g", "t", "p"};
-
-	(n, rem) := str->tobig(s, 10);
-	if(rem == nil)
-		return n;
-
-	for(i := 0; i < len suffix; i++) {
-		if(rem == suffix[i])
-			return n;
-		n *= big 1024;
-	}
-	return big -1;
-}
-
 piecewrite(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string
 {
 	return torrentpwritex(dstfds, buf, len buf, big index*big t.piecelen);
 }
-
-preadn(fd: ref Sys->FD, d: array of byte, n: int, off: big): int
-{
-	have := 0;
-	while(have < n) {
-		nn := sys->pread(fd, d[have:], n-have, off+big have);
-		if(nn < 0)
-			return nn;
-		if(nn == 0)
-			break;
-		have += n;
-	}
-	return have;
-}
-
 
 torrentpreadx(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string
 {
@@ -1017,69 +955,8 @@ simplepath(s: string): string
 	return path[1:];
 }
 
-
-p32(d: array of byte, i, v: int): int
-{
-	d[i++] = byte (v>>24);
-	d[i++] = byte (v>>16);
-	d[i++] = byte (v>>8);
-	d[i++] = byte (v>>0);
-	return i;
-}
-
-
-g32(d: array of byte, i: int): (int, int)
-{
-	v := 0;
-	v = (v<<8)|int d[i++];
-	v = (v<<8)|int d[i++];
-	v = (v<<8)|int d[i++];
-	v = (v<<8)|int d[i++];
-	return (v, i);
-}
-
-g16(d: array of byte, i: int): (int, int)
-{
-	v := 0;
-	v = (v<<8)|int d[i++];
-	v = (v<<8)|int d[i++];
-	return (v, i);
-}
-
-join(l: list of string, s: string): string
-{
-	if(l == nil)
-		return nil;
-	r := hd l;
-	l = tl l;
-	for(; l != nil; l = tl l)
-		r += s+hd l;
-	return r;
-}
-
-suffix(suf, s: string): int
-{
-	return len s >= len suf && suf == s[len s-len suf:];
-}
-
-hex(d: array of byte): string
-{
-	s := "";
-	for(i := 0; i < len d; i++)
-		s += sprint("%02x", int d[i]);
-	return s;
-}
-
-hasstr(l: list of string, e: string): int
-{
-	for(; l != nil; l = tl l)
-		if(hd l == e)
-			return 1;
-	return 0;
-}
-
 say(s: string)
 {
 	if(dflag)
-		sys->fprint(sys->fildes(2), "%s\n", s);
+		warn(s);
 }

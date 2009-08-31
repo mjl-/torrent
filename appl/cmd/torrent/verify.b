@@ -18,13 +18,16 @@ include "bittorrent.m";
 include "rand.m";
 include "../../lib/bittorrent/peer.m";
 	verify: Verify;
-
+include "util0.m";
+	util: Util0;
+	fail, warn, hex: import util;
 
 Torrentverify: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
-Dflag: int;
+
+dflag: int;
 nofix: int;
 
 init(nil: ref Draw->Context, args: list of string)
@@ -37,12 +40,14 @@ init(nil: ref Draw->Context, args: list of string)
 	bittorrent->init();
 	verify = load Verify Verify->PATH;
 	verify->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-Dn] torrentfile");
+	arg->setusage(arg->progname()+" [-dn] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
-		'D' =>	Dflag++;
+		'd' =>	dflag++;
 		'n' =>	nofix = 1;
 		* =>	arg->usage();
 		}
@@ -75,22 +80,8 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("\n");
 }
 
-hex(d: array of byte): string
-{
-	s := "";
-	for(i := 0; i < len d; i++)
-		s += sprint("%02x", int d[i]);
-	return s;
-}
-
-fail(s: string)
-{
-	sys->fprint(sys->fildes(2), "%s\n", s);
-	raise "fail:"+s;
-}
-
 say(s: string)
 {
-	if(Dflag)
-		sys->fprint(sys->fildes(2), "%s\n", s);
+	if(dflag)
+		warn(s);
 }

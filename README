@@ -13,7 +13,7 @@ program for creating torrent files.
 
 # install
 
-this package depends on "http" and "web".
+this package depends on "http", "web" and "util".
 
 to install, bind/symlink/include a mkconfig (e.g. from your inferno
 install), and:
@@ -39,20 +39,35 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
-- torrent/track: make search for a peer (given ip & port) less inefficient.
+## wm/torrent: 
 
-- torrent/get: seems verifying (or .state-file reading) doesn't work properly, we refetch the file.
+- figure out how to fill the panel with the bars (and thus bars themselves) in x direction
+- catch resizes and recreate the bars with new width.
+- merge the state & info grids, so they have same widths?
+- update grids without redrawing completely?
+- make torrent/peer send events on removal of bad peers?  and remove them from our list.  or at least reserve the peerevent message for it.
+- clear stale entries from badpeers list.
+- limit the history in torrentlog & peerlog.
+- could add buttons to peers grid, to disconnect peers.
+- availbar seems to pieces with overlap, on the edges of the piece
+
+## torrent/peer
+
+- seems verifying (or .state-file reading) doesn't work properly, we refetch the file.
 - put more in progress/peerevents, such as errors (eg from tracker, when writing to disk).
 - explain the design better
-- some tk ui to show activity & progress
 - perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
-- torrent/get: allow starting after being stopped.  implement start ctl.
-- torrent/get: move styx code to separate file?
+- allow starting after being stopped.  implement start ctl.
+- move styx code to separate file?
 - collapse some code from appl/lib/bittorrent/*?
 - use multiple peers
 - implement rarest first and random
 - keep track of which peer has which piece
 - handle choke/unchoke correctly, send interested only when peer has data
+- write manual page
+
+## torrent/track
+
+- make search for a peer (given ip & port) less inefficient.
 - torrent/track: might add scraping.
 - torrent/track: might be a bit smarter about which peers to send to a peer.  e.g. not itself, make randomizing cheaper, let peers that are done (left=0) not connect to each other.
-- write manual page

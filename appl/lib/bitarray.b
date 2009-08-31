@@ -54,6 +54,12 @@ Bits.set(b: self ref Bits, i: int)
 	}
 }
 
+Bits.setall(b: self ref Bits)
+{
+	b.d = array[len b.d] of {* => byte ~0};
+	b.have = b.n;
+}
+
 Bits.clear(b: self ref Bits, i: int)
 {
 	if(b.get(i)) {

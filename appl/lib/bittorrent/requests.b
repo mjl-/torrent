@@ -2,6 +2,7 @@ implement Requests;
 
 include "torrentpeer.m";
 	sys: Sys;
+	sprint: import sys;
 
 init()
 {
@@ -21,7 +22,7 @@ Req.eq(r1, r2: Req): int
 
 Req.text(r: self Req): string
 {
-	return sys->sprint("<req piece=%d block=%d begin=%d>", r.pieceindex, r.blockindex, r.blockindex*Torrentpeer->Blocksize);
+	return sprint("<req piece=%d block=%d begin=%d>", r.pieceindex, r.blockindex, r.blockindex*Torrentpeer->Blocksize);
 }
 
 
@@ -103,7 +104,7 @@ Reqs.size(r: self ref Reqs): int
 
 Reqs.text(r: self ref Reqs): string
 {
-	return sys->sprint("<reqs first=%d next=%d size=%d>", r.first, r.next, len r.a);
+	return sprint("<reqs first=%d next=%d size=%d>", r.first, r.next, len r.a);
 }
 
 

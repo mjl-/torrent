@@ -1,0 +1,23 @@
+<../../mkconfig
+
+TARG=\
+	torrent.dis\
+
+SYSMODULES=\
+	arg.m\
+	bufio.m\
+	daytime.m\
+	draw.m\
+	keyring.m\
+	math.m\
+	lists.m\
+	string.m\
+	sys.m\
+	tables.m\
+	util0.m\
+	bitarray.m\
+	bittorrent.m\
+
+DISBIN=$ROOT/dis/wm
+
+<$ROOT/mkfiles/mkdis

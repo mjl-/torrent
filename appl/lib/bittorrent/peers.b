@@ -2,13 +2,15 @@ implement Peers;
 
 include "torrentpeer.m";
 	sys: Sys;
+	sprint: import sys;
 	bitarray: Bitarray;
 	Bits: import bitarray;
-	misc: Misc;
 	rate: Rate;
 	Traffic: import rate;
 	requests: Requests;
 	Reqs: import requests;
+	util: Util0;
+	hex: import util;
 include "string.m";
 	str: String;
 
@@ -19,12 +21,12 @@ init()
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
-	misc = load Misc Misc->PATH;
-	misc->init();
 	rate = load Rate Rate->PATH;	
 	rate->init();
 	requests = load Requests Requests->PATH;
 	requests->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 }
 
 
@@ -40,7 +42,7 @@ peeridfmt(d: array of byte): string
 {
 	if(isascii(d))
 		return string d;
-	return misc->hex(d);
+	return hex(d);
 }
 
 
@@ -49,7 +51,7 @@ Newpeer.text(np: self Newpeer): string
 	peerid := "nil";
 	if(np.peerid != nil)
 		peerid = peeridfmt(np.peerid);
-	return sys->sprint("(newpeer %s peerid %s)", np.addr, peerid);
+	return sprint("(newpeer %s peerid %s)", np.addr, peerid);
 }
 
 peerstatestrs := array[] of {
@@ -79,7 +81,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 	readch := chan of ref (int, int, int);
 	return ref Peer(
 		peergen++,
-		np, fd, extensions, peerid, misc->hex(peerid),
+		np, fd, extensions, peerid, hex(peerid),
 		0, getmsgch, nil, nil,
 		Reqs.new(Torrentpeer->Blockqueuesize),
 		Bits.new(npieces),
@@ -116,12 +118,12 @@ Peer.isdone(p: self ref Peer): int
 
 Peer.text(p: self ref Peer): string
 {
-	return sys->sprint("<peer %s id %d>", p.np.addr, p.id);
+	return sprint("<peer %s id %d>", p.np.addr, p.id);
 }
 
 Peer.fulltext(p: self ref Peer): string
 {
-	return sys->sprint("<peer %s, id %d, wantblocks %d peerid %s>", p.np.text(), p.id, len p.wants, peeridfmt(p.peerid));
+	return sprint("<peer %s, id %d, wantblocks %d peerid %s>", p.np.text(), p.id, len p.wants, peeridfmt(p.peerid));
 }
 
 

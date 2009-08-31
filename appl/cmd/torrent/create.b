@@ -10,8 +10,6 @@ include "bufio.m";
 include "arg.m";
 include "keyring.m";
 	kr: Keyring;
-include "lists.m";
-	lists: Lists;
 include "bitarray.m";
 include "bittorrent.m";
 	bt: Bittorrent;
@@ -19,6 +17,9 @@ include "bittorrent.m";
 include "mhttp.m";
 	http: Http;
 	Url: import http;
+include "util0.m";
+	util: Util0;
+	fail, warn, l2a, hex, rev, sizeparse, sizefmt: import util;
 
 Torrentcreate: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -36,11 +37,12 @@ init(nil: ref Draw->Context, args: list of string)
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
 	kr = load Keyring Keyring->PATH;
-	lists = load Lists Lists->PATH;
 	bt = load Bittorrent Bittorrent->PATH;
 	bt->init();
 	http = load Http Http->PATH;
 	http->init(bufio);
+	util = load Util0 Util0->PATH;
+	util->init();
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-vf] [-d dir] [-p piecelen] tracker file ...");
@@ -48,7 +50,7 @@ init(nil: ref Draw->Context, args: list of string)
 		case c {
 		'd' =>	name = arg->arg();
 		'f' =>	fflag++;
-		'p' =>	piecelen = int bt->byteparse(arg->arg());
+		'p' =>	piecelen = int sizeparse(arg->arg());
 			if(piecelen < 0 || nbits(piecelen) != 1)
 				fail(sprint("piecelen is not a positive power of 2"));
 		'v' =>	vflag++;
@@ -106,8 +108,8 @@ file:
 			}
 		}
 	}
-	files = lists->reverse(files);
-	hashes := l2a(lists->reverse(lhash));
+	files = rev(files);
+	hashes := l2a(rev(lhash));
 
 	t := ref Torrent (announce, piecelen, nil, len hashes, hashes, files, name, total, nil);
 	d := t.pack();
@@ -117,7 +119,7 @@ file:
 	if(vflag) {
 		hash := array[kr->SHA1dlen] of byte;
 		kr->sha1(d, len d, hash, nil);
-		warn(sprint("total %s (%bd bytes), in %d pieces", bt->bytefmt(total), total, len hashes));
+		warn(sprint("total %s (%bd bytes), in %d pieces", sizefmt(total), total, len hashes));
 		warn(hex(hash));
 	}
 }
@@ -131,36 +133,8 @@ nbits(i: int): int
 	return n;
 }
 
-hex(d: array of byte): string
-{
-	s := "";
-	for(i := 0; i < len d; i++)
-		s += sprint("%02x", int d[i]);
-	return s;
-}
-
-l2a[T](l: list of T): array of T
-{
-	a := array[len l] of T;
-	i := 0;
-	for(; l != nil; l = tl l)
-		a[i++] = hd l;
-	return a;
-}
-
-warn(s: string)
-{
-	sys->fprint(sys->fildes(2), "%s\n", s);
-}
-
 say(s: string)
 {
 	if(dflag)
 		warn(s);
-}
-
-fail(s: string)
-{
-	warn(s);
-	raise "fail:"+s;
 }
