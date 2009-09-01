@@ -201,8 +201,13 @@ Bittorrentpeer: module
 		text:	fn(b: self ref Batch): string;
 	};
 
+
+	List: adt[T] {
+		next:	cyclic ref List[T];
+		e:	T;
+	};
+
 	Progress: adt {
-		next:	cyclic ref Progress;
 		pick {
 		Nil or
 		Done or
@@ -235,32 +240,9 @@ Bittorrentpeer: module
 		text:	fn(p: self ref Progress): string;
 	};
 
-	Progressfid: adt {
-		fid:	int;
-		r:	list of ref Styx->Tmsg.Read;
-		last:	ref Progress;
-
-		new:		fn(fid: int): ref Progressfid;
-		putread:	fn(pf: self ref Progressfid, r: ref Styx->Tmsg.Read);
-		read:		fn(pf: self ref Progressfid): ref Styx->Rmsg.Read;
-		flushtag:	fn(pf: self ref Progressfid, tag: int): int;
-	};
-
-	Peerfid: adt {
-		fid:	int;
-		r:	list of ref Styx->Tmsg.Read;
-		last:	ref Peerevent;
-
-		new:		fn(fid: int): ref Peerfid;
-		putread:	fn(pf: self ref Peerfid, r: ref Styx->Tmsg.Read);
-		read:		fn(pf: self ref Peerfid): ref Styx->Rmsg.Read;
-		flushtag:	fn(pf: self ref Peerfid, tag: int): int;
-	};
-
 	Schoking, Sunchoking, Sinterested, Suninterested: con iota;
 	Slocal, Sremote: con iota<<2;
 	Peerevent: adt {
-		next:	cyclic ref Peerevent;
 		pick {
 		Nil =>	
 		Endofstate =>
@@ -291,5 +273,22 @@ Bittorrentpeer: module
 		}
 
 		text:	fn(pp: self ref Peerevent): string;
+	};
+
+	Eventfid: adt[T]
+		for {
+		T =>
+			text:	fn(nil: self T): string;
+		}
+	{
+	
+		fid:	int;
+		r:	list of ref Styx->Tmsg.Read;
+		last:	ref List[T];
+
+		new:		fn(fid: int): ref Eventfid[T];
+		putread:	fn(ef: self ref Eventfid, r: ref Styx->Tmsg.Read);
+		read:		fn(ef: self ref Eventfid): ref Styx->Rmsg.Read;
+		flushtag:	fn(ef: self ref Eventfid, tag: int): int;
 	};
 };

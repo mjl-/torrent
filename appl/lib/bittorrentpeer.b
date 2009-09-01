@@ -812,103 +812,6 @@ Progress.text(pp: self ref Progress): string
 	return s;
 }
 
-Progressfid.new(fid: int): ref Progressfid
-{
-	return ref Progressfid (fid, nil, ref Progress.Nil (nil));
-}
-
-Progressfid.putread(pf: self ref Progressfid, r: ref Tmsg.Read)
-{
-	pf.r = r::pf.r;
-}
-
-Progressfid.read(pf: self ref Progressfid): ref Rmsg.Read
-{
-	if(pf.r == nil || pf.last.next == nil)
-		return nil;
-
-	pf.r = rev(pf.r);
-	m := hd pf.r;
-	pf.r = rev(tl pf.r);
-
-	# note: the following knows that progress.text() always returns ascii
-	s := "";
-	while(pf.last.next != nil) {
-		p := pf.last.next;
-		ns := p.text();
-		if(s != nil && len s+len ns+1 > m.count)
-			break;
-		if(ns != nil)
-			ns[len ns] = '\n';
-		s += ns;
-		pf.last = p;
-	}
-	if(m.count < len s)
-		s = s[:m.count];
-	data := array of byte s;
-	return ref Rmsg.Read (m.tag, data);
-}
-
-Progressfid.flushtag(pf: self ref Progressfid, tag: int): int
-{
-	r: list of ref Tmsg.Read;
-	for(l := pf.r; l != nil; l = tl l)
-		if((hd l).tag != tag)
-			r = (hd l)::r;
-	if(len r == len pf.r)
-		return 0;
-	pf.r = rev(r);
-	return 1;
-}
-
-Peerfid.new(fid: int): ref Peerfid
-{
-	return ref Peerfid (fid, nil, ref Peerevent.Nil (nil));
-}
-
-Peerfid.putread(pf: self ref Peerfid, r: ref Tmsg.Read)
-{
-	pf.r = r::pf.r;
-}
-
-Peerfid.read(pf: self ref Peerfid): ref Rmsg.Read
-{
-	if(pf.r == nil || pf.last.next == nil)
-		return nil;
-
-	pf.r = rev(pf.r);
-	m := hd pf.r;
-	pf.r = rev(tl pf.r);
-
-	s := "";
-	while(pf.last.next != nil) {
-		p := pf.last.next;
-		ns := p.text();
-		# note: the following depends on all data being ascii!
-		if(s != nil && len s+len ns+1 > m.count)
-			break;
-		if(ns != nil)
-			ns[len ns] = '\n';
-		s += ns;
-		pf.last = p;
-	}
-	if(len s > m.count)
-		s = s[:m.count];
-	return ref Rmsg.Read (m.tag, array of byte s);
-}
-
-Peerfid.flushtag(pf: self ref Peerfid, tag: int): int
-{
-	r: list of ref Tmsg.Read;
-	for(l := pf.r; l != nil; l = tl l)
-		if((hd l).tag != tag)
-			r = hd l::r;
-	if(len r == len pf.r)
-		return 0;
-	pf.r = rev(r);
-	return 1;
-}
-
 peereventtags := array[] of {
 "", "endofstate", "dialing", "tracker", "new", "gone", "bad", "state", "piece", "pieces", "done",
 };
@@ -933,6 +836,56 @@ Peerevent.text(pp: self ref Peerevent): string
 	Done =>		s += sprint(" %d", p.id);
 	}
 	return s;
+}
+
+Eventfid[T].new(fid: int): ref Eventfid[T]
+{
+	l := ref List[T];
+	l.next = ref List[T];
+	return ref Eventfid[T](fid, nil, l);
+}
+
+Eventfid[T].putread(ef: self ref Eventfid, r: ref Tmsg.Read)
+{
+	ef.r = r::ef.r;
+}
+
+Eventfid[T].read(ef: self ref Eventfid): ref Rmsg.Read
+{
+	if(ef.r == nil || ef.last.next.e == nil)
+		return nil;
+
+	ef.r = rev(ef.r);
+	m := hd ef.r;
+	ef.r = rev(tl ef.r);
+
+	s := "";
+	while(ef.last.next.e != nil) {
+		p := ef.last.next.e;
+		ns := p.text();
+		# note: the following depends on all data being ascii!
+		if(s != nil && len s+len ns+1 > m.count)
+			break;
+		if(ns != nil)
+			ns[len ns] = '\n';
+		s += ns;
+		ef.last = ef.last.next;
+	}
+	if(len s > m.count)
+		s = s[:m.count];
+	return ref Rmsg.Read (m.tag, array of byte s);
+}
+
+Eventfid[T].flushtag(ef: self ref Eventfid, tag: int): int
+{
+	r: list of ref Tmsg.Read;
+	for(l := ef.r; l != nil; l = tl l)
+		if((hd l).tag != tag)
+			r = hd l::r;
+	if(len r == len ef.r)
+		return 0;
+	ef.r = rev(r);
+	return 1;
 }
 
 tablist[T](t: ref Table[T]): list of T

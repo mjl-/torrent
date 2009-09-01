@@ -38,7 +38,7 @@ include "bittorrent.m";
 	Bee, Msg, File, Torrent, Filex, Torrentx: import bt;
 include "../../lib/bittorrentpeer.m";
 	btp: Bittorrentpeer;
-	State, Pool, Traffic, Piece, Block, Peer, Newpeer, Newpeers, Buf, Req, Reqs, Batch, Progress, Progressfid, Peerevent, Peerfid: import btp;
+	State, Pool, Traffic, Piece, Block, Peer, Newpeer, Newpeers, Buf, Req, Reqs, Batch, List, Progress, Peerevent, Eventfid: import btp;
 	Slocal, Sremote, Schoking, Sunchoking, Sinterested, Suninterested: import Bittorrentpeer;
 
 Torrentpeer: module {
@@ -133,10 +133,10 @@ Seedunchokedmax:	con 4;
 Ignorefaultyperiod:	con 300;
 
 
-progresshead:	ref Progress;
-progressfids:	ref Table[ref Progressfid];
-peereventhead:	ref Peerevent;
-peerfids:	ref Table[ref Peerfid];
+progresslast:	ref List[ref Progress];
+progressfids:	ref Table[ref Eventfid[ref Progress]];
+peereventlast:	ref List[ref Peerevent];
+peerfids:	ref Table[ref Eventfid[ref Peerevent]];
 
 
 Qroot, Qctl, Qinfo, Qstate, Qfiles, Qprogress, Qpeerevents, Qpeers, Qpeerstracker, Qpeersbad: con iota;
@@ -189,10 +189,13 @@ init(nil: ref Draw->Context, args: list of string)
 	if(ok != 0)
 		fail("bad ip6 mask");
 
+	# note that noone has any business with *last.e
 	progressfids = progressfids.new(4, nil);
-	progresshead = ref Progress.Nil (nil);
+	progresslast = ref List[ref Progress];
+	progresslast.next = ref List[ref Progress];
 	peerfids = peerfids.new(4, nil);
-	peereventhead = ref Peerevent.Nil (nil);
+	peereventlast = ref List[ref Peerevent];
+	peereventlast.next = ref List[ref Peerevent];
 
 	sys->pctl(Sys->NEWPGRP, nil);
 
@@ -274,7 +277,7 @@ init(nil: ref Draw->Context, args: list of string)
 			writestate();
 	}
 
-	totalleft = state.t.length;
+	totalleft = state.t.length-big state.piecehave.have*big state.t.piecelen;
 	localpeerid = bt->genpeerid();
 	localpeeridhex = hex(localpeerid);
 
@@ -350,14 +353,14 @@ dostyx(mm: ref Tmsg)
 		q := int fid.path&16rff;
 		case q {
 		Qprogress =>
-			pf := Progressfid.new(m.fid);
-			progressfids.add(pf.fid, pf);
-			putprogressstate(pf.last);
+			ef := Eventfid[ref Progress].new(m.fid);
+			progressfids.add(ef.fid, ef);
+			putprogressstate(ef.last);
 
 		Qpeerevents =>
-			pf := Peerfid.new(m.fid);
-			peerfids.add(m.fid, pf);
-			putpeerstate(pf.last);
+			ef := Eventfid[ref Peerevent].new(m.fid);
+			peerfids.add(m.fid, ef);
+			putpeerstate(ef.last);
 		}
 
 	Read =>
@@ -370,31 +373,37 @@ dostyx(mm: ref Tmsg)
 		Qctl =>
 			raise "bad mode";
 		Qinfo =>
-			t := state.t;
-			s := "";
-			s += sprint("fs 0\n");
-			s += sprint("torrentpath %q\n", torrentpath);
-			s += sprint("infohash %s\n", hex(t.infohash));
-			s += sprint("announce %q\n", t.announce);
-			s += sprint("piecelen %d\n", t.piecelen);
-			s += sprint("piececount %d\n", t.piececount);
-			s += sprint("length %bd\n", t.length);
-			srv.reply(styxservers->readstr(m, s));
+			if(m.offset == big 0) {
+				t := state.t;
+				s := "";
+				s += sprint("fs 0\n");
+				s += sprint("torrentpath %q\n", torrentpath);
+				s += sprint("infohash %s\n", hex(t.infohash));
+				s += sprint("announce %q\n", t.announce);
+				s += sprint("piecelen %d\n", t.piecelen);
+				s += sprint("piececount %d\n", t.piececount);
+				s += sprint("length %bd\n", t.length);
+				fid.data = array of byte s;
+			}
+			srv.reply(styxservers->readbytes(m, fid.data));
 		Qstate =>
-			s := "";
-			s += sprint("stopped %d\n", stopped);
-			s += sprint("listenport %d\n", listenport);
-			s += sprint("localpeerid %s\n", localpeeridhex);
-			s += sprint("maxratio %.2f\n", maxratio);
-			s += sprint("maxupload %bd\n", maxupload);
-			s += sprint("maxdownload %bd\n", maxdownload);
-			s += sprint("totalleft %bd\n", totalleft);
-			s += sprint("totalup %bd\n", trafficup.total());
-			s += sprint("totaldown %bd\n", trafficdown.total());
-			s += sprint("rateup %d\n", trafficup.rate());
-			s += sprint("ratedown %d\n", trafficdown.rate());
-			s += sprint("eta %d\n", eta());
-			srv.reply(styxservers->readstr(m, s));
+			if(m.offset == big 0) {
+				s := "";
+				s += sprint("stopped %d\n", stopped);
+				s += sprint("listenport %d\n", listenport);
+				s += sprint("localpeerid %s\n", localpeeridhex);
+				s += sprint("maxratio %.2f\n", maxratio);
+				s += sprint("maxupload %bd\n", maxupload);
+				s += sprint("maxdownload %bd\n", maxdownload);
+				s += sprint("totalleft %bd\n", totalleft);
+				s += sprint("totalup %bd\n", trafficup.total());
+				s += sprint("totaldown %bd\n", trafficdown.total());
+				s += sprint("rateup %d\n", trafficup.rate());
+				s += sprint("ratedown %d\n", trafficdown.rate());
+				s += sprint("eta %d\n", eta());
+				fid.data = array of byte s;
+			}
+			srv.reply(styxservers->readbytes(m, fid.data));
 
 		Qfiles =>
 			s := "";
@@ -483,18 +492,22 @@ dostyx(mm: ref Tmsg)
 				if(p == nil)
 					return replyerror(m, "no such peer");
 				peerdrop(p, 0, nil);
+			"track" =>
+				spawn trackkick(0);
 			* =>
 				return replyerror(m, sprint("bad command %#q", cmd));
 			}
+			srv.reply(ref Rmsg.Write (m.tag, len m.data));
+			return;
 		}
 
 	Flush =>
 		for(l := tablist(progressfids); l != nil; l = tl l)
 			if((hd l).flushtag(m.tag))
-				return;
+				return srv.default(mm);
 		for(ll := tablist(peerfids); ll != nil; ll = tl ll)
 			if((hd ll).flushtag(m.tag))
-				return;
+				return srv.default(mm);
 
 	Clunk or
 	Remove =>
@@ -514,61 +527,102 @@ dostyx(mm: ref Tmsg)
 	srv.default(mm);
 }
 
-
-next0(l, n: ref Progress): ref Progress
+putlist[T](fids: ref Table[ref Eventfid[T]], last: ref List[T], e: T): ref List[T]
+for {
+T =>	text:	fn(t: self T): string;
+}
 {
-	l.next = n;
-	return n;
+	l := last.next;
+	l.e = e;
+	l.next = ref List[T];
+	for(t := tablist(fids); t != nil; t = tl t)
+		while((rm := (hd t).read()) != nil)
+			srv.reply(rm);
+	return l;
 }
 
-putprogressstate(l: ref Progress)
+putprogress(p: ref Progress)
+{
+	progresslast = putlist(progressfids, progresslast, p);
+}
+
+putevent(p: ref Peerevent)
+{
+	peereventlast = putlist(peerfids, peereventlast, p);
+}
+
+next[T](l: ref List[T], e: T): ref List[T]
+{
+	l.next.e = e;
+	l.next.next = ref List[T];
+	return l.next;
+}
+
+putprogressstate(l: ref List[ref Progress])
 {
 	if(stopped)
-		l = next0(l, ref Progress.Stopped);
+		l = next(l, ref Progress.Stopped);
 	else
-		l = next0(l, ref Progress.Started);
+		l = next(l, ref Progress.Started);
 	if(isdone())
-		l = next0(l, ref Progress.Done);
+		l = next(l, ref Progress.Done);
 	else {
 		lp := state.piecehave.all();
-		if(lp != nil)
-			l = next0(l, ref Progress.Pieces (nil, lp));
+		while(lp != nil) {
+			r: list of int;
+			for(i := 0; i < 20 && lp != nil; i++) {
+				r = hd lp::r;
+				lp = tl lp;
+			}
+			l = next(l, ref Progress.Pieces (r));
+		}
 		for(pl := tablist(state.pieces); pl != nil; pl = tl pl) {
 			p := hd pl;
 			lb := p.have.all();
 			if(lb != nil)
-				l = next0(l, ref Progress.Blocks (nil, p.index, lb));
+				l = next(l, ref Progress.Blocks (p.index, lb));
 		}
 		for(fl := filesdone(-1); fl != nil; fl = tl fl) {
 			f := hd fl;
-			l = next0(l, ref Progress.Filedone (nil, f.index, f.path, f.f.path));
+			l = next(l, ref Progress.Filedone (f.index, f.path, f.f.path));
 		}
 	}
-	l.next = progresshead;
+	l.next = progresslast.next;
 }
 
-
-next1(l, n: ref Peerevent): ref Peerevent
-{
-	l.next = n;
-	return n;
-}
-
-putpeerstate(l: ref Peerevent)
+putpeerstate(l: ref List[ref Peerevent])
 {
 	for(f := faulty; f != nil; f = tl f)
-		l = next1(l, ref Peerevent.Bad (nil, (hd f).t0, (hd f).t1));
+		l = next(l, ref Peerevent.Bad ((hd f).t0, (hd f).t1));
 	for(t := newpeers.all(); t != nil; t = tl t)
-		l = next1(l, ref Peerevent.Tracker (nil, (hd t).addr));
+		l = next(l, ref Peerevent.Tracker ((hd t).addr));
 	for(pl := peers; pl != nil; pl = tl pl) {
 		p := hd pl;
-		l = next1(l, ref Peerevent.New (nil, p.np.addr, p.id, p.peeridhex, p.dialed));
+		l = next(l, ref Peerevent.New (p.np.addr, p.id, p.peeridhex, p.dialed));
 		if(p.isdone())
-			l = next1(l, ref Peerevent.Done (nil, p.id));
-		else if(p.piecehave.have != 0)
-			l = next1(l, ref Peerevent.Pieces (nil, p.id, p.piecehave.all()));
+			l = next(l, ref Peerevent.Done (p.id));
+		else if(p.piecehave.have != 0) {
+			lp := p.piecehave.all();
+			while(lp != nil) {
+				r: list of int;
+				for(i := 0; i < 20 && lp != nil; i++) {
+					r = hd lp::r;
+					lp = tl lp;
+				}
+				l = next(l, ref Peerevent.Pieces (p.id, r));
+			}
+		}
+		if(p.localchoking())
+			l = next(l, ref Peerevent.State (p.id, Slocal|Schoking));
+		if(p.localinterested())
+			l = next(l, ref Peerevent.State (p.id, Slocal|Sinterested));
+		if(p.remotechoking())
+			l = next(l, ref Peerevent.State (p.id, Sremote|Schoking));
+		if(p.remoteinterested())
+			l = next(l, ref Peerevent.State (p.id, Sremote|Sinterested));
 	}
-	l.next = ref Peerevent.Endofstate (peereventhead);
+	l = next(l, ref Peerevent.Endofstate);
+	l.next = peereventlast.next;
 }
 
 chokestr(choked: int): string
@@ -603,24 +657,6 @@ peerline(p: ref Peer): string
 	s += sprint(" metadown %bd %d", p.up.total(), p.up.rate());
 	s += "\n";
 	return s;
-}
-
-putprogress(p: ref Progress)
-{
-	progresshead.next = p;
-	progresshead = p;
-	for(l := tablist(progressfids); l != nil; l = tl l)
-		while((rm := (hd l).read()) != nil)
-			srv.reply(rm);
-}
-
-putevent(p: ref Peerevent)
-{
-	peereventhead.next = p;
-	peereventhead = p;
-	for(l := tablist(peerfids); l != nil; l = tl l)
-		while((rm := (hd l).read()) != nil)
-			srv.reply(rm);
 }
 
 
@@ -706,7 +742,7 @@ stop()
 {
 	# xxx probably more to do here.  we also want a pause() and a start()
 	stopped = 1;
-	putprogress(ref Progress.Stopped (nil));
+	putprogress(ref Progress.Stopped);
 
 	# disconnect from all peers and don't do further tracker requests
 	luckypeer = nil;
@@ -761,8 +797,6 @@ peerdrop(peer: ref Peer, faulty: int, err: string)
 
 	spawn stopreadc(peer.readc);
 	spawn stopwritec(peer.writec);
-	peer.readc = nil;
-	peer.writec = nil;
 }
 
 peerdel(p: ref Peer)
@@ -813,7 +847,7 @@ dialpeers()
 			continue;
 
 		say("spawning dialproc for "+np.text());
-		putevent(ref Peerevent.Dialing (nil, np.addr));
+		putevent(ref Peerevent.Dialing (np.addr));
 		spawn dialer(np);
 		ndialers++;
 	}
@@ -850,18 +884,18 @@ peersend(p: ref Peer, msg: ref Msg)
 	peergive(p);
 }
 
-account(p: ref Peer, msgs: list of ref Msg)
+account(p: ref Peer, l: list of ref Msg)
 {
-	for(l := msgs; l != nil; l = tl l) {
-		msg := hd l;
-		say(sprint("sending message: %s", msg.text()));
-		msize := msg.packedsize();
-		pick m := msg {
+	for(; l != nil; l = tl l) {
+		mm := hd l;
+		say(sprint("sending message: %s", mm.text()));
+		msize := mm.packedsize();
+		pick m := mm {
 		Piece =>
 			dsize := len m.d;
 			p.up.add(dsize, 1);
-			trafficup.add(dsize, 1);
 			p.metaup.add(msize-dsize, 0);
+			trafficup.add(dsize, 1);
 			trafficmetaup.add(msize-dsize, 0);
 		* =>
 			p.metaup.add(msize, 1);
@@ -969,14 +1003,14 @@ choke(p: ref Peer)
 {
 	peersend(p, ref Msg.Choke());
 	p.state |= btp->LocalChoking;
-	putevent(ref Peerevent.State (nil, p.id, Slocal|Schoking));
+	putevent(ref Peerevent.State (p.id, Slocal|Schoking));
 }
 
 unchoke(p: ref Peer)
 {
 	peersend(p, ref Msg.Unchoke());
 	p.state &= ~btp->LocalChoking;
-	putevent(ref Peerevent.State (nil, p.id, Slocal|Sunchoking));
+	putevent(ref Peerevent.State (p.id, Slocal|Sunchoking));
 	p.lastunchoke = daytime->now();
 }
 
@@ -997,14 +1031,14 @@ interesting(p: ref Peer)
 		if(p.reqs.isempty() && wantpeerpieces(p).isempty()) {
 			say("we are no longer interested in "+p.text());
 			p.state &= ~btp->LocalInterested;
-			putevent(ref Peerevent.State (nil, p.id, Slocal|Suninterested));
+			putevent(ref Peerevent.State (p.id, Slocal|Suninterested));
 			peersend(p, ref Msg.Notinterested());
 		}
 	} else {
 		if(!wantpeerpieces(p).isempty()) {
 			say("we are now interested in "+p.text());
 			p.state |= btp->LocalInterested;
-			putevent(ref Peerevent.State (nil, p.id, Slocal|Sinterested));
+			putevent(ref Peerevent.State (p.id, Slocal|Sinterested));
 			peersend(p, ref Msg.Interested());
 		}
 	}
@@ -1025,7 +1059,7 @@ setfaulty(ip: string)
 	clearfaulty(nil);
 	now := daytime->now();
 	faulty = (ip, now)::faulty;
-	putevent(ref Peerevent.Bad (nil, ip, now));
+	putevent(ref Peerevent.Bad (ip, now));
 }
 
 clearfaulty(ip: string)
@@ -1213,7 +1247,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 
 		say(sprint("%s choked us...", peer.text()));
 		peer.state |= btp->RemoteChoking;
-		putevent(ref Peerevent.State (nil, peer.id, Sremote|Schoking));
+		putevent(ref Peerevent.State (peer.id, Sremote|Schoking));
 
 	Unchoke =>
 		if(!peer.remotechoking())
@@ -1221,7 +1255,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 
 		say(sprint("%s unchoked us", peer.text()));
 		peer.state &= ~btp->RemoteChoking;
-		putevent(ref Peerevent.State (nil, peer.id, Sremote|Sunchoking));
+		putevent(ref Peerevent.State (peer.id, Sremote|Sunchoking));
 
 		schedule(peer);
 
@@ -1231,7 +1265,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 
 		say(sprint("%s is interested", peer.text()));
 		peer.state |= btp->RemoteInterested;
-		putevent(ref Peerevent.State (nil, peer.id, Sremote|Sinterested));
+		putevent(ref Peerevent.State (peer.id, Sremote|Sinterested));
 
 		if(!peer.localchoking() && peersactive() >= Unchokedmax && !isdone()) {
 			# xxx choke slowest peer that is not the optimistic unchoke
@@ -1243,7 +1277,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 
 		say(sprint("%s is no longer interested", peer.text()));
 		peer.state &= ~btp->RemoteInterested;
-		putevent(ref Peerevent.State (nil, peer.id, Sremote|Suninterested));
+		putevent(ref Peerevent.State (peer.id, Sremote|Suninterested));
 		peer.wants = nil;
 
 		# if peer was unchoked, we'll unchoke another during next round
@@ -1256,7 +1290,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 			say(sprint("%s already had piece %d", peer.text(), m.index)); # xxx disconnect?
 		} else {
 			state.piececounts[m.index]++;
-			putevent(ref Peerevent.Piece (nil, peer.id, m.index));
+			putevent(ref Peerevent.Piece (peer.id, m.index));
 		}
 
 		say(sprint("remote now has piece %d", m.index));
@@ -1351,7 +1385,7 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 		piece.have.set(blockindex);
 		piece.done[blockindex] = peer.id;
 		totalleft -= big len m.d;
-		putprogress(ref Progress.Block (nil, piece.index, blockindex, piece.have.have, piece.have.n));
+		putprogress(ref Progress.Block (piece.index, blockindex, piece.have.have, piece.have.n));
 
 		if(piece.isdone()) {
 			# flush all bufs about this piece, also from other peers, to disk.  to make hash-checking read right data.
@@ -1464,12 +1498,12 @@ main0()
 	(interval, nps, trackerr) := <-trackc =>
 		if(trackerr != nil) {
 			warn(sprint("tracker error: %s", trackerr));
-			putprogress(ref Progress.Tracker (nil, interval, 0, trackerr));
+			putprogress(ref Progress.Tracker (interval, 0, trackerr));
 			return;
 		}
 
 		say("main, new peers");
-		putprogress(ref Progress.Tracker (nil, interval, len nps, nil));
+		putprogress(ref Progress.Tracker (interval, len nps, nil));
 		for(i := 0; i < len nps; i++) {
 			(ip, port, peerid) := nps[i];
 			if(hex(peerid) == localpeeridhex)
@@ -1479,7 +1513,7 @@ main0()
 			newpeers.del(np);
 			if(peeraddrmap.find(np.addr) == nil) {
 				newpeers.add(np);
-				putevent(ref Peerevent.Tracker (nil, np.addr));
+				putevent(ref Peerevent.Tracker (np.addr));
 			} else
 				say("already connected to "+np.text());
 		}
@@ -1525,7 +1559,7 @@ main0()
 			peersdialed++;
 
 		say("new peer "+peer.fulltext());
-		putevent(ref Peerevent.New (nil, peer.np.addr, peer.id, peer.peeridhex, peer.dialed));
+		putevent(ref Peerevent.New (peer.np.addr, peer.id, peer.peeridhex, peer.dialed));
 
 		rotateips.pooladdunique(maskip(np.ip));
 
@@ -1597,10 +1631,10 @@ main0()
 
 		state.piecehave.set(piece.index);
 		state.pieces.del(piece.index);
-		putprogress(ref Progress.Piece (nil, piece.index, state.piecehave.have, state.piecehave.n));
+		putprogress(ref Progress.Piece (piece.index, state.piecehave.have, state.piecehave.n));
 		for(fl := filesdone(piece.index); fl != nil; fl = tl fl) {
 			f := hd fl;
-			putprogress(ref Progress.Filedone (nil, f.index, f.path, f.f.path));
+			putprogress(ref Progress.Filedone (f.index, f.path, f.f.path));
 		}
 
 		# this could have been the last piece this peer had, making us no longer interested
@@ -1632,7 +1666,7 @@ main0()
 			}
 			peers = rev(npeers);
 			sys->print("DONE!\n");
-			putprogress(ref Progress.Done (nil));
+			putprogress(ref Progress.Done);
 		}
 
 	curwritec <-= curmainwrite =>
@@ -2026,18 +2060,24 @@ ratio(): real
 	return real up/real down;
 }
 
-etastr(secs: int): string
+etastr(n: int): string
 {
-	if(secs < 0)
-		return "stalled";
-	else if(secs < 60*60)
-		return sprint("%3dm %3ds", secs / 60, secs % 60);
-	else if(secs < 24*60*60)
-		return sprint("%3dh %3dm", secs / (60*60), secs % (60*60) / 60);
-	else if(secs < 366*24*60*60)
-		return sprint("%3dd %3dh", secs / (24*60*60), secs % (24*60*60) / (60*60));
+	Min: con 60;
+	Hour: con 60*Min;
+	Day: con 24*Hour;
+	Year: con 366*Day;
+	s := "";
+	if(n < 0)
+		s = "∞";
+	else if(n < Hour)
+		s = sprint("%3dm %3ds", n/Min, n%Min);
+	else if(n < Day)
+		s = sprint("%3dh %3dm", n/Hour, n%Hour/Min);
+	else if(n < Year)
+		s = sprint("%3dd %3dh", n/Day, n%Day/Hour);
 	else
-		return "  > year";
+		s = " >= year";
+	return s;
 }
 
 eta(): int
@@ -2045,7 +2085,7 @@ eta(): int
 	r := trafficdown.rate();
 	if(r <= 0)
 		return -1;
-	return int (totalleft / big r);
+	return int (totalleft/big r);
 }
 
 tablist[T](t: ref Table[T]): list of T

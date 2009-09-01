@@ -26,7 +26,7 @@ include "tables.m";
 	Table: import tables;
 include "util0.m";
 	util: Util0;
-	warn, pid, kill, killgrp, writefile, rev, l2a, sizefmt: import util;
+	warn, pid, kill, killgrp, unhex, writefile, rev, l2a, sizefmt: import util;
 
 WmTorrent: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -54,7 +54,8 @@ Info: adt {
 State: adt {
 	stopped:	int;
 	listenport:	int;
-	localpeerid:	string;
+	localpeerid,
+	localpeeridhex:	string;
 	maxratio:	real;
 	maxup,
 	maxdown:	big;
@@ -83,7 +84,8 @@ Local:	con 2;
 Peer: adt {
 	addr:	string;
 	id:	int;
-	peerid:	string;
+	peerid,
+	peeridhex:	string;
 	dialed:	int;
 	done:	int;
 	pieces:	ref Bits;
@@ -176,8 +178,9 @@ tkcmds0 := array[] of {
 "frame .v.m.c.m.s.ctl",
 "button .v.m.c.m.s.ctl.start -text start -command {send cmd start}",
 "button .v.m.c.m.s.ctl.stop -text stop -command {send cmd stop}",
+"button .v.m.c.m.s.ctl.track -text track -command {send cmd track}",
 "label .v.m.c.m.s.ctl.error",
-"pack .v.m.c.m.s.ctl.start .v.m.c.m.s.ctl.stop .v.m.c.m.s.ctl.error -side left -anchor w",
+"pack .v.m.c.m.s.ctl.start .v.m.c.m.s.ctl.stop .v.m.c.m.s.ctl.track .v.m.c.m.s.ctl.error -side left -anchor w",
 "frame .v.m.c.m.s.g",
 "pack .v.m.c.m.s.ctl .v.m.c.m.s.g -anchor w",
 "frame .v.m.c.m.i -borderwidth 5",	# info
@@ -285,8 +288,8 @@ init(ctxt: ref Draw->Context, args: list of string)
 	infogrid := list of {
 	l2("infohash",	info.infohash),
 	l2("tracker",	info.tracker),
-	l2("pieces",	sprint("%d, %d bytes each", info.npieces, info.piecelen)),
-	l2("length",	string info.length),
+	l2("pieces",	sprint("%d, %s each", info.npieces, sizefmt(big info.piecelen))),
+	l2("length",	sprint("%s (%bd bytes)", sizefmt(info.length), info.length)),
 	};
 	tkgrid(".v.m.c.m.i", infogrid);
 
@@ -396,18 +399,25 @@ setmain()
 	l2("listen port",	string s.listenport),
 	l2("local peerid",	s.localpeerid),
 	l2("max ratio",		sprint("%.2f", s.maxratio)),
-	l2("max up",		sizefmt(s.maxup)),
-	l2("max down",		sizefmt(s.maxdown)),
+	l2("max up",		infsizefmt(s.maxup)),
+	l2("max down",		infsizefmt(s.maxdown)),
 	l2("up",		sizefmt(s.up)),
 	l2("down",		sizefmt(s.down)),
 	l2("left",		sizefmt(s.left)),
-	l2("up rate",		sizefmt(big s.upr)),
-	l2("down rate",		sizefmt(big s.downr)),
-	l2("eta",		string s.eta),
+	l2("up rate",		sizefmt(big s.upr)+"/s"),
+	l2("down rate",		sizefmt(big s.downr)+"/s"),
+	l2("eta",		etastr(s.eta)),
 	l2("peers",		sprint("%d peers, of which %d seeds", npeers, nseeds)),
 	l2("last tracker",	trackerstr()),
 	};
 	tkgrid(".v.m.c.m.s.g", stategrid);
+}
+
+infsizefmt(v: big): string
+{
+	if(v < big 0)
+		return "∞";
+	return sizefmt(v);
 }
 
 trackerstr(): string
@@ -444,15 +454,22 @@ progresswords := array[] of {
 ("stopped",	0),
 ("piece",	3),
 ("block",	4),
-("pieces",	-3),
-("blocks",	-4),
+("pieces",	-1),
+("blocks",	-2),
 ("filedone",	3),
 ("tracker",	3),
 };
 progressword(t: array of string): int
 {
 	case t[0] {
-	"done" =>	prog.done = 1;
+	"done" =>
+		prog.done = 1;
+		prog.pieces.setall();
+		for(i := 0; i < len info.files; i++)
+			info.files[i].pieces.setall();
+		barfill(havebar);
+		barflush(havebar);
+		return 1;
 	"started" =>	prog.started = 1;
 	"stopped" =>	prog.started = 0;
 	"piece" =>
@@ -518,7 +535,9 @@ peerword(t: array of string): int
 	"tracker" =>
 		; # not keeping track of peers from tracker
 	"new" =>
-		p := ref Peer (t[1], getint(t[2]), t[3], getint(t[4]), 0, Bits.new(info.npieces), 0, (big 0, big 0, 0, 0));
+		peeridhex := t[3];
+		peerid := peeridfmt(peeridhex);
+		p := ref Peer (t[1], getint(t[2]), peerid, peeridhex, getint(t[4]), 0, Bits.new(info.npieces), 0, (big 0, big 0, 0, 0));
 		peers.add(p.id, p);
 		npeers++;
 		return 1;
@@ -559,9 +578,10 @@ peerword(t: array of string): int
 		}
 		return 1;
 	"piece" =>
-		p := getint(t[2]);
-		getpeer(getint(t[1])).pieces.set(p);
-		barhave(availbar, p);
+		i := getint(t[2]);
+		p := getpeer(getint(t[1]));
+		p.pieces.set(i);
+		barhave(availbar, i);
 		barflush(availbar);
 		return 1;
 	"pieces" =>
@@ -577,6 +597,7 @@ peerword(t: array of string): int
 		p := getpeer(getint(t[1]));
 		p.done = 1;
 		p.pieces.setall();
+		nseeds++;
 		# note: we should've seen all pieces already, so no need to update availbar
 		return 1;
 	* =>	raise "missing case";
@@ -625,8 +646,8 @@ checkwords(s, l: string, t: array of string, w: array of (string, int))
 			n := w[i].t1;
 			if(n >= 0 && len t-1 != n)
 				fail(sprint("bad %s line, needs %d args, has %d: %s", s, n, len t-1, l));
-			else if(n < 0 && len t-1 < -n+1)  # note: minus values are off by one, to be able to denote 0 or more
-				fail(sprint("bad %s line, needs minimum %d args, has %d: %s", s, -n+1, len t-1, l));
+			else if(n < 0 && len t-1 < -n-1)  # note: minus values are off by one, to be able to denote 0 or more
+				fail(sprint("bad %s line, needs minimum %d args, has %d: %s", s, -n-1, len t-1, l));
 			return;
 		}
 	fail(sprint("bad %s line, unknown op %#q: %s", s, t[0], l));
@@ -658,7 +679,8 @@ cmd(s: string)
 		setscrollregion(".v.m.c", ".v.m.c.m");
 
 	"start" or
-	"stop" =>
+	"stop" or
+	"track" =>
 		err := writefile(mtpt+"/ctl", 0, array of byte op);
 		tkcmd(".v.m.c.m.s.ctl.error configure -text '"+err);
 		tkcmd("update");
@@ -761,7 +783,9 @@ readstate(): ref State
 		case t[0] {
 		"stopped" =>	s.stopped = getint(v);
 		"listenport" =>	s.listenport = getint(v);
-		"localpeerid" =>	s.localpeerid = v;
+		"localpeerid" =>
+			s.localpeerid = peeridfmt(v);
+			s.localpeeridhex = v;
 		"maxratio" =>	s.maxratio = getreal(v);
 		"maxupload" =>	s.maxup = getbig(v);
 		"maxdownload" =>	s.maxdown = getbig(v);
@@ -846,7 +870,7 @@ setpeers()
 	if(view != Vpeers)
 		return;
 
-	peergrid := l8("id", "addr", "dir", "up/down rate", "up/down total", "pieces", "remote", "local")::nil;
+	peergrid := l9("id", "addr", "dir", "rate", "total", "pieces", "remote", "local", "peerid")::nil;
 	for(l := peerall(); l != nil; l = tl l) {
 		p := hd l;
 		dir := "in";
@@ -858,7 +882,7 @@ setpeers()
 		c := p.counts;
 		rate := sprint("%s/%s", sizefmt(big c.upr), sizefmt(big c.downr));
 		total := sprint("%s/%s", sizefmt(c.up), sizefmt(c.down));
-		peergrid = l8(string p.id, p.addr, dir, rate, total, pr, rem, loc)::peergrid;
+		peergrid = l9(string p.id, p.addr, dir, rate, total, pr, rem, loc, peeridfmt(p.peerid))::peergrid;
 	}
 	tkgrid(".v.p.c.g", rev(peergrid));
 	setscrollregion(".v.p.c", ".v.p.c.g");
@@ -896,6 +920,45 @@ setbadpeers()
 	}
 	tkgrid(".v.b.c.g", rev(badpeergrid));
 	setscrollregion(".v.b.c", ".v.b.c.g");
+}
+
+etastr(n: int): string
+{
+	Min: con 60;
+	Hour: con 60*Min;
+	Day: con 24*Hour;
+	Year: con 366*Day;
+	s := "";
+	if(n < 0)
+		s = "∞";
+	else if(n < Hour)
+		s = sprint("%dm %ds", n/Min, n%Min);
+	else if(n < Day)
+		s = sprint("%dh %dm", n/Hour, n%Hour/Min);
+	else if(n < Year)
+		s = sprint("%dd %dh", n/Day, n%Day/Hour);
+	else
+		s = ">= year";
+	return s;
+}
+
+peeridfmt(s: string): string
+{
+	d := unhex(s);
+	if(d == nil)
+		return s;
+	s = "";
+	for(i := 0; i < len d; i++)
+		case c := int d[i] {
+		'-' or
+		'a' to 'z' or
+		'A' to 'Z' or
+		'0' to '9' =>
+			s[len s] = c;
+		* =>
+			s += sprint("%02x", c);
+		}
+	return s;
 }
 
 barinit(b: ref Bar)
@@ -959,19 +1022,25 @@ barhave(b: ref Bar, i: int)
 	b.pixels[si] += real (si+1)-s;
 	b.pixels[ei] += e-real ei;
 
-	# it's quite useless to set the intermediate pixels, we aren't using these values to draw.
 	for(j := si+1; j < ei; j++)
 		b.pixels[j] += 1.0;
 
 #say(sprint("drawing: start %d (%.2f) end %d (%.2f), fill %d-%d", si, b.pixels[si], ei, b.pixels[ei], si+1, ei-1));
-	b.i.draw(Rect((si,1), (si+1,y-1)), color(b.fill, b.pixels[si], b.div), nil, ZP);
-	b.i.draw(Rect((ei,1), (ei+1,y-1)), color(b.fill, b.pixels[ei], b.div), nil, ZP);
+	b.i.draw(Rect((si+1,1), (si+2,y-1)), color(b.fill, b.pixels[si], b.div), nil, ZP);
+	b.i.draw(Rect((ei+1,1), (ei+2,y-1)), color(b.fill, b.pixels[ei], b.div), nil, ZP);
 	if(b.div == 1)
-		b.i.draw(Rect((si+1,1), (ei,y-1)), b.filli, nil, ZP);
+		b.i.draw(Rect((si+2,1), (ei+1,y-1)), b.filli, nil, ZP);
 	else
 		for(j = si+1; j < ei; j++)
-			b.i.draw(Rect((j,1), (j+1,y-1)), color(b.fill, b.pixels[j], b.div), nil, ZP);
+			b.i.draw(Rect((j+1,1), (j+2,y-1)), color(b.fill, b.pixels[j], b.div), nil, ZP);
 			
+}
+
+barfill(b: ref Bar)
+{
+	r := b.i.r;
+	r = Rect(r.min.add(Point(1,1)), r.max.sub(Point(1,1)));
+	b.i.draw(r, b.filli, nil, ZP);
 }
 
 color(c: int, r: real, div: int): ref Image
@@ -1021,6 +1090,11 @@ l6(a, b, c, d, e, f: string): list of string
 l8(a, b, c, d, e, f, g, h: string): list of string
 {
 	return list of {a, b, c, d, e, f, g, h};
+}
+
+l9(a, b, c, d, e, f, g, h, i: string): list of string
+{
+	return list of {a, b, c, d, e, f, g, h, i};
 }
 
 
