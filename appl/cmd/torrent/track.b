@@ -20,6 +20,7 @@ include "tables.m";
 include "ip.m";
 	ip: IP;
 	IPaddr: import ip;
+include "bitarray.m";
 include "bittorrent.m";
 	bt: Bittorrent;
 	Bee: import bt;

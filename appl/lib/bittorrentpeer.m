@@ -18,17 +18,17 @@ Bittorrentpeer: module
 	State: adt {
 		t:		ref Bittorrent->Torrent;
 		tx:		ref Bittorrent->Torrentx;
-		pieces:		list of ref Piece;  # only active pieces
-		trackerpeers:   list of Newpeer;  # peers we are not connected to
-		peers:		list of ref Peer;  # peers we are connected to
-		luckypeer:	ref Peer;
+		pieces:		ref Tables->Table[ref Piece];  # only active pieces
 		piecehave:	ref Bitarray->Bits;
 		piecebusy:	ref Bitarray->Bits;
 		piececounts:	array of int;  # for each piece, count of peers that have it
 	};
 
 	randomize:	fn[T](a: array of T);
-	maskip:		fn(ipstr: string): string;
+
+	batches:	fn(p: ref Piece): array of ref Batch;
+	needblocks:	fn(p: ref Peer): int;
+	schedule:	fn(reqc: chan of ref (ref Piece, list of Req, chan of int), p: ref Peer);
 
 
 	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # Pool.mode
@@ -59,8 +59,7 @@ Bittorrentpeer: module
 		time0:	int;
 
 		new:	fn(): ref Traffic;
-		add:	fn(t: self ref Traffic, bytes: int);
-		packet:	fn(t: self ref Traffic);
+		add:	fn(t: self ref Traffic, nbytes, npkts: int);
 		rate:	fn(t: self ref Traffic): int;
 		total:	fn(t: self ref Traffic): big;
 		text:	fn(t: self ref Traffic): string;
@@ -92,20 +91,22 @@ Bittorrentpeer: module
 	};
 
 
-	piecenew:	fn(index: int): ref Piece;
-	piecedel:	fn(p: ref Piece);
-	piecefind:	fn(index: int): ref Piece;
-
-	blockhave:	fn(l: list of ref Block, b: ref Block): int;
-	blockdel:	fn(l: list of ref Block, b: ref Block): list of ref Block;
-
-
 	Newpeer: adt {
 		addr:   string;
 		ip:     string;
 		peerid: array of byte;  # may be nil, for incoming connections or compact track responses
 
 		text:   fn(np: self Newpeer): string;
+	};
+
+	Newpeers: adt {
+		l:	list of Newpeer;
+
+		del:	fn(n: self ref Newpeers, np: Newpeer);
+		add:	fn(n: self ref Newpeers, np: Newpeer);
+		take:	fn(n: self ref Newpeers): Newpeer;
+		all:	fn(n: self ref Newpeers): list of Newpeer;
+		empty:	fn(n: self ref Newpeers): int;
 	};
 
 	# Peer.state
@@ -162,22 +163,6 @@ Bittorrentpeer: module
 	};
 
 
-	trackerpeerdel:	fn(np: Newpeer);
-	trackerpeeradd:	fn(np: Newpeer);
-	trackerpeertake:	fn(): Newpeer;
-
-
-	peerconnected:	fn(addr: string): int;
-	peerdel:	fn(peer: ref Peer);
-	peeradd:	fn(p: ref Peer);
-	peerknownip:	fn(ip: string): int;
-	peerhas:	fn(p: ref Peer): int;
-	peersdialed:	fn(): int;
-	peerfind:	fn(id: int): ref Peer;
-	peersunchoked:	fn(): list of ref Peer;
-	peersactive:	fn(): list of ref Peer;
-
-
 	Req: adt {
 		pieceindex, blockindex, cancelled: int;
 
@@ -215,14 +200,6 @@ Bittorrentpeer: module
 		usedpartial:	fn(b: self ref Batch, peer: ref Peer): list of Req;
 		text:	fn(b: self ref Batch): string;
 	};
-
-	batches:	fn(p: ref Piece): array of ref Batch;
-
-	torrenthash:	fn(tx: ref Torrentx, haves: ref Bitarray->Bits): string;
-
-	needblocks:	fn(p: ref Peer): int;
-	schedule:	fn(reqc: chan of ref (ref Piece, list of Req, chan of int), p: ref Peer);
-
 
 	Progress: adt {
 		next:	cyclic ref Progress;

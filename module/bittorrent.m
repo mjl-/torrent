@@ -26,14 +26,13 @@ Bittorrent: module
 		geti:		fn(b: self ref Bee, l: list of string): ref Bee.Integer;
 		getl:		fn(b: self ref Bee, l: list of string): ref Bee.List;
 		getd:		fn(b: self ref Bee, l: list of string): ref Bee.Dict;
-
 	};
-	beestr:	fn(s: string): ref Bee.String;
+	beestr:		fn(s: string): ref Bee.String;
 	beebytes:	fn(d: array of byte): ref Bee.String;
 	beelist:	fn(l: list of ref Bee): ref Bee.List;
-	beeint:	fn(i: int): ref Bee.Integer;
-	beebig:	fn(i: big): ref Bee.Integer;
-	beekey:	fn(s: string, b: ref Bee): (ref Bee.String, ref Bee);
+	beeint:		fn(i: int): ref Bee.Integer;
+	beebig:		fn(i: big): ref Bee.Integer;
+	beekey:		fn(s: string, b: ref Bee): (ref Bee.String, ref Bee);
 	beedict:	fn(l: list of (ref Bee.String, ref Bee)): ref Bee.Dict;
 
 	Msg: adt {
@@ -110,6 +109,7 @@ Bittorrent: module
 		preadx:		fn(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string;
 	};
         reader:		fn(tx: ref Torrentx, c: chan of (array of byte, string));
+	torrenthash:	fn(tx: ref Torrentx, haves: ref Bitarray->Bits): string;
 
 	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string);
 	genpeerid:	fn(): array of byte;

@@ -11,11 +11,11 @@ include "keyring.m";
 	kr: Keyring;
 include "rand.m";
 	rand: Rand;
-include "ip.m";
-	ipmod: IP;
-	IPaddr: import ipmod;
 include "styx.m";
 	Rmsg, Tmsg: import Styx;
+include "tables.m";
+	tables: Tables;
+	Table: import tables;
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -27,19 +27,8 @@ include "util0.m";
 	hex, sizefmt, preadn, min, warn, rev, l2a, inssort: import util;
 include "bittorrentpeer.m";
 
+state: ref State;
 peergen: int;
-ip4mask := IPaddr(array[] of {
-	byte 0, byte 0, byte 0, byte 0,
-	byte 0, byte 0, byte 0, byte 0,
-	byte 0, byte 0, byte 16rff, byte 16rff,
-	byte 255, byte 255, byte 255, byte 0});
-ip6mask := IPaddr(array[] of {
-	byte 16rff, byte 16rff, byte 16rff, byte 16rff,
-	byte 16rff, byte 16rff, byte 16rff, byte 16rff,
-	byte 0, byte 0, byte 0, byte 0,
-	byte 0, byte 0, byte 0, byte 0});
-
-state:	ref State;
 
 init(st: ref State)
 {
@@ -49,8 +38,7 @@ init(st: ref State)
 	kr = load Keyring Keyring->PATH;
 	rand = load Rand Rand->PATH;
 	rand->init(sys->pctl(0, nil)^sys->millisec());
-	ipmod = load IP IP->PATH;
-	ipmod->init();
+	tables = load Tables Tables->PATH;
 	bitarray = load Bitarray Bitarray->PATH;
 	bt = load Bittorrent Bittorrent->PATH;
 	util = load Util0 Util0->PATH;
@@ -66,18 +54,6 @@ randomize[T](a: array of T)
 		(a[i], a[j]) = (a[j], a[i]);
 	}
 }
-
-maskip(ipstr: string): string
-{
-        (ok, ip) := IPaddr.parse(ipstr);
-        if(ok != 0)
-                return ipstr;
-	mask := ip4mask;
-	if(!ip.isv4())
-		mask = ip6mask;
-        return ip.mask(mask).text();
-}
-
 
 Piece.new(index, length: int): ref Piece
 {
@@ -120,49 +96,6 @@ Block.eq(b1, b2: ref Block): int
 Block.text(b: self ref Block): string
 {
 	return sys->sprint("<block piece %d, begin %d, length %d>", b.piece, b.begin, b.length);
-}
-
-
-piecenew(index: int): ref Piece
-{
-	p := Piece.new(index, state.t.piecelength(index));
-	state.pieces = p::state.pieces;
-	return p;
-}
-
-piecedel(p: ref Piece)
-{
-	new: list of ref Piece;
-	for(l := state.pieces; l != nil; l = tl l)
-		if(hd l != p)
-			new = hd l::new;
-	state.pieces = new;
-}
-
-piecefind(index: int): ref Piece
-{
-	for(l := state.pieces; l != nil; l = tl l)
-		if((hd l).index == index)
-			return hd l;
-	return nil;
-}
-
-
-blockhave(l: list of ref Block, b: ref Block): int
-{
-	for(; l != nil; l = tl l)
-		if(Block.eq(hd l, b))
-			return 1;
-	return 0;
-}
-
-blockdel(l: list of ref Block, b: ref Block): list of ref Block
-{
-	r: list of ref Block;
-	for(; l != nil; l = tl l)
-		if(!Block.eq(hd l, b))
-			r = hd l::r;
-	return rev(r);
 }
 
 
@@ -327,113 +260,35 @@ Buf.overlaps(b: self ref Buf, piece, begin, end: int): int
 }
 
 
-# trackerpeers
-
-trackerpeerdel(np: Newpeer)
+Newpeers.del(n: self ref Newpeers, np: Newpeer)
 {
-	n := state.trackerpeers;
-	n = nil;
-	for(; state.trackerpeers != nil; state.trackerpeers = tl state.trackerpeers) {
-		e := hd state.trackerpeers;
-		if(e.addr != np.addr)
-			n = e::n;
-	}
-	state.trackerpeers = n;
+	l: list of Newpeer;
+	for(; n.l != nil; n.l = tl n.l)
+		if((hd n.l).addr != np.addr)
+			l = (hd n.l)::l;
+	n.l = l;
 }
 
-trackerpeeradd(np: Newpeer)
+Newpeers.add(n: self ref Newpeers, np: Newpeer)
 {
-	state.trackerpeers = np::state.trackerpeers;
+	n.l = np::n.l;
 }
 
-trackerpeertake(): Newpeer
+Newpeers.take(n: self ref Newpeers): Newpeer
 {
-	np := hd state.trackerpeers;
-	state.trackerpeers = tl state.trackerpeers;
+	np := hd n.l;
+	n.l = tl n.l;
 	return np;
 }
 
-
-# peers
-
-peerconnected(addr: string): int
+Newpeers.all(n: self ref Newpeers): list of Newpeer
 {
-	for(l := state.peers; l != nil; l = tl l) {
-		e := hd l;
-		if(e.np.addr == addr)
-			return 1;
-	}
-	return 0;
+	return n.l;
 }
 
-
-peerdel(peer: ref Peer)
+Newpeers.empty(n: self ref Newpeers): int
 {
-	npeers: list of ref Peer;
-	for(; state.peers != nil; state.peers = tl state.peers)
-		if(hd state.peers != peer)
-			npeers = hd state.peers::npeers;
-	state.peers = npeers;
-
-	if(state.luckypeer == peer)
-		state.luckypeer = nil;
-}
-
-peeradd(p: ref Peer)
-{
-	peerdel(p);
-	state.peers = p::state.peers;
-}
-
-peerknownip(ip: string): int
-{
-	for(l := state.peers; l != nil; l = tl l)
-		if((hd l).np.ip == ip)
-			return 1;
-	return 0;
-}
-
-peerhas(p: ref Peer): int
-{
-	for(l := state.peers; l != nil; l = tl l)
-		if(p == hd l)
-			return 1;
-	return 0;
-}
-
-peersdialed(): int
-{
-	i := 0;
-	for(l := state.peers; l != nil; l = tl l)
-		if((hd l).dialed)
-			i++;
-	return i;
-}
-
-peerfind(id: int): ref Peer
-{
-	for(l := state.peers; l != nil; l = tl l)
-		if((hd l).id == id)
-			return hd l;
-	return nil;
-}
-
-peersunchoked(): list of ref Peer
-{
-	r: list of ref Peer;
-	for(l := state.peers; l != nil; l = tl l)
-		if(!(hd l).localchoking())
-			r = hd l::r;
-	return r;
-}
-
-peersactive(): list of ref Peer
-{
-	r: list of ref Peer;
-	for(l := state.peers; l != nil; l = tl l)
-		if(!(hd l).localchoking() && (hd l).remoteinterested())
-			r = hd l::r;
-	return r;
+	return n.l == nil;
 }
 
 
@@ -466,7 +321,8 @@ getrandompiece(): ref Piece
 	for(;;) {
 		i := rand->rand(state.piecebusy.n);
 		if(!state.piecebusy.get(i)) {
-			p := piecenew(i);
+			p := Piece.new(i, state.t.piecelength(i));
+			state.pieces.add(i, p);
 			state.piecebusy.set(i);
 			return p;
 		}
@@ -528,7 +384,7 @@ rarepiececmp(p1, p2: ref Piece): int
 piecesrareorphan(orphan: int): array of ref Piece
 {
 	r: list of ref Piece;
-	for(l := state.pieces; l != nil; l = tl l) {
+	for(l := tablist(state.pieces); l != nil; l = tl l) {
 		p := hd l;
 		if(p.orphan() && orphan)
 			r = p::r;
@@ -566,7 +422,7 @@ schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pee
 		say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
 		req := peer.reqs.last();
 		if(req != nil) {
-			piece := piecefind(req.pieceindex);
+			piece := state.pieces.find(req.pieceindex);
 			if(piece != nil)
 				schedpieces(reqc, peer, array[] of {piece});
 		}
@@ -584,7 +440,8 @@ schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pee
 		for(i := 0; i < len rare; i++) {
 			v := rare[i].t0;  # it's a ref tuple to allow using polymorphic functions
 			say(sprint("using new rare piece %d", v));
-			p := piecenew(v);
+			p := Piece.new(v, state.t.piecelength(v));
+			state.pieces.add(v, p);
 			state.piecebusy.set(v);
 			schedpieces(reqc, peer, array[] of {p});
 			if(!needblocks(peer))
@@ -602,7 +459,7 @@ schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pee
 		say("schedule: doing random");
 
 		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-		a := l2a(state.pieces);
+		a := l2a(tablist(state.pieces));
 		inssort(a, progresscmp);
 		for(i := 0; i < len a; i++) {
 			piece := a[i];
@@ -639,19 +496,6 @@ schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pee
 			schedbatches(reqc, peer, b);
 		}
 	}
-}
-
-torrenthash(tx: ref Torrentx, haves: ref Bits): string
-{
-	spawn bt->reader(tx, c := chan[2] of (array of byte, string));
-	for(i := 0; i < len state.t.hashes; i++) {
-		(buf, err) := <-c;
-		if(err != nil)
-			return err;
-		if(hex(sha1(buf)) == hex(state.t.hashes[i]))
-			haves.set(i);
-	}
-	return nil;
 }
 
 
@@ -804,19 +648,22 @@ Traffic.new(): ref Traffic
 	return ref Traffic(0, array[TrafficHistorysize] of {* => (0, 0)}, 0, big 0, 0, daytime->now());
 }
 
-Traffic.add(t: self ref Traffic, bytes: int)
+Traffic.add(t: self ref Traffic, nbytes, npkts: int)
 {
-	time := daytime->now();
+	t.npackets += npkts;
+	if(nbytes == 0)
+		return;
 
+	time := daytime->now();
 	if(t.d[t.last].t0 != time) {
 		reclaim(t, time);
 		t.last = (t.last+1) % len t.d;
 		t.winsum -= t.d[t.last].t1;
 		t.d[t.last] = (time, 0);
 	}
-	t.d[t.last].t1 += bytes;
-	t.winsum += bytes;
-	t.sum += big bytes;
+	t.d[t.last].t1 += nbytes;
+	t.winsum += nbytes;
+	t.sum += big nbytes;
 }
 
 reclaim(t: ref Traffic, time: int)
@@ -826,11 +673,6 @@ reclaim(t: ref Traffic, time: int)
 		t.winsum -= t.d[pos].t1;
 		t.d[pos] = (0, 0);
 	}
-}
-
-Traffic.packet(t: self ref Traffic)
-{
-	t.npackets++;
 }
 
 Traffic.rate(t: self ref Traffic): int
@@ -1093,11 +935,13 @@ Peerevent.text(pp: self ref Peerevent): string
 	return s;
 }
 
-sha1(d: array of byte): array of byte
+tablist[T](t: ref Table[T]): list of T
 {
-	digest := array[kr->SHA1dlen] of byte;
-	kr->sha1(d, len d, digest, nil);
-	return digest;
+	r: list of T;
+	for(i := 0; i < len t.items; i++)
+		for(l := t.items[i]; l != nil; l = tl l)
+			r = (hd l).t1::r;
+	return r;
 }
 
 say(s: string)

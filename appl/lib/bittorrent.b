@@ -878,6 +878,19 @@ reader(tx: ref Torrentx, c: chan of (array of byte, string))
 		c <-= (buf[:have], nil);
 }
 
+torrenthash(tx: ref Torrentx, haves: ref Bits): string
+{
+	spawn reader(tx, c := chan[2] of (array of byte, string));
+	for(i := 0; i < len tx.t.hashes; i++) {
+		(buf, err) := <-c;
+		if(err != nil)
+			return err;
+		if(hex(sha1(buf)) == hex(tx.t.hashes[i]))
+			haves.set(i);
+	}
+	return nil;
+}
+
 
 trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string)
 {
@@ -991,6 +1004,13 @@ simplepath(s: string): string
 	for(; toks != nil; toks = tl toks)
 		path += "/"+sane(hd toks);
 	return path[1:];
+}
+
+sha1(d: array of byte): array of byte
+{
+	digest := array[kr->SHA1dlen] of byte;
+	kr->sha1(d, len d, digest, nil);
+	return digest;
 }
 
 say(s: string)

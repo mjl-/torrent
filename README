@@ -39,8 +39,8 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
-- perhaps torrent/verify shouldn't depend on bittorrentpeer?
 - remove the premature optimisations
+- replace the peer* functions in bittorrentpeer by a Peers adt that holds all that info?
 - explain the design better
 
 
@@ -58,16 +58,14 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- use multiple peers
-- implement rarest first and random
-- keep track of which peer has which piece
-- handle choke/unchoke correctly, send interested only when peer has data
+- only set "have" for piece when we've written it to disk?  otherwise we might read it from disk (and send it to a peer) before having written it.
+- lots of testing
 - put more in progress/peerevents, such as errors (eg errors when writing to disk).
 - perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
 - allow starting after being stopped.  implement start ctl.
-- move styx code to separate file?
 - write manual page
 - optim: Piece.hashstate, for keeping the hash of the piece up to date in case of sequentially fetching blocks (a common case).
+- make the scheduler capable of taking abuse into account.  the more abuse from peers (bogus hashes), the fewer peers we schedule on a single peer?  or the harder we try to correct faulty blocks?  make sure it's all the same standard code path, to prevent obscure bugs only laid bare by abusive peers.
 
 ## torrent/track
 

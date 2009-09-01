@@ -8,6 +8,7 @@ include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "arg.m";
+include "bitarray.m";
 include "bittorrent.m";
 	bt: Bittorrent;
 	Bee, Torrent: import bt;
