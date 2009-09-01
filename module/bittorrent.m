@@ -61,42 +61,56 @@ Bittorrent: module
 		read:		fn(fd: ref Sys->FD): (ref Msg, string);
 		packedsize:	fn(m: self ref Msg): int;
 		pack:		fn(m: self ref Msg): array of byte;
+		packbuf:	fn(m: self ref Msg, buf: array of byte);
 		unpack:		fn(d: array of byte): (ref Msg, string);
 		text:		fn(m: self ref Msg): string;
 	};
 
 	File: adt {
-		index:	int;
-		path,
-		origpath:	string;
-		length,
-		off:	big;
-		pfirst,
-		plast:	int;
+		path:	string;
+		length:	big;
 	};
 
 	Torrent: adt {
 		announce:	string;
 		piecelen:	int;
-		hash:		array of byte;
+		infohash:	array of byte;
 		piececount:	int;
 		hashes:		array of array of byte;
-		files:		list of ref File;
+		files:		array of ref File;
 		name:		string;
 		length:		big;
-		statepath:	string;
 
 		open:		fn(path: string): (ref Torrent, string);
-		openfiles:	fn(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string);
 		piecelength:	fn(t: self ref Torrent, index: int): int;
 		pack:		fn(t: self ref Torrent): array of byte;
 	};
 
+	Filex: adt {
+		f:	ref File;
+		index:	int;
+		path:	string;
+		fd:		ref Sys->FD;
+		offset:		big;  # in entire torrent
+		pfirst,
+		plast:		int;
+	};
+
+	Torrentx: adt {
+		t:		ref Torrent;
+		files:		array of ref Filex;
+		statepath:	string;
+		statefd:	ref Sys->FD;
+
+		open:		fn(t: ref Torrent, torrentpath: string, nofix, nocreate: int): (ref Torrentx, int, string);
+		pieceread:	fn(tx: self ref Torrentx, index: int): (array of byte, string);
+		piecewrite:	fn(tx: self ref Torrentx, index: int, buf: array of byte): string;
+		blockread:	fn(tx: self ref Torrentx, index, begin, length: int): (array of byte, string);
+		pwritex:	fn(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string;
+		preadx:		fn(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string;
+	};
+        reader:		fn(tx: ref Torrentx, c: chan of (array of byte, string));
+
 	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string);
 	genpeerid:	fn(): array of byte;
-	pieceread:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int): (array of byte, string);
-	blockread:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index, begin, length: int): (array of byte, string);
-	piecewrite:	fn(t: ref Torrent, fds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string;
-	torrentpwritex:	fn(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string;
-	torrentpreadx:	fn(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string;
 };

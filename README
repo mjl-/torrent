@@ -39,9 +39,9 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
-- separate peer-implementation out of adt Torrent?
-- remove the premature optimisations
 - perhaps torrent/verify shouldn't depend on bittorrentpeer?
+- remove the premature optimisations
+- explain the design better
 
 
 ## wm/torrent: 
@@ -58,7 +58,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- explain the design better
 - use multiple peers
 - implement rarest first and random
 - keep track of which peer has which piece
@@ -68,6 +67,7 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 - allow starting after being stopped.  implement start ctl.
 - move styx code to separate file?
 - write manual page
+- optim: Piece.hashstate, for keeping the hash of the piece up to date in case of sequentially fetching blocks (a common case).
 
 ## torrent/track
 

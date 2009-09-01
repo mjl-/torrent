@@ -77,7 +77,8 @@ init(nil: ref Draw->Context, args: list of string)
 	lhash: list of array of byte;
 	piece := array[piecelen] of byte;
 	have := 0;
-	files: list of ref File;
+	files := array[len paths] of ref File;
+	i := 0;
 file:
 	while(paths != nil) {
 		length := big 0;
@@ -91,10 +92,9 @@ file:
 			if(nn < 0)
 				fail(sprint("read: %r"));
 			if(nn == 0) {
-				f := ref File;
-				f.path = f.origpath = path;
+				files[i++] = f := ref File;
+				f.path = path;
 				f.length = length;
-				files = f::files;
 				continue file;
 			}
 			length += big nn;
@@ -108,10 +108,9 @@ file:
 			}
 		}
 	}
-	files = rev(files);
 	hashes := l2a(rev(lhash));
 
-	t := ref Torrent (announce, piecelen, nil, len hashes, hashes, files, name, total, nil);
+	t := ref Torrent (announce, piecelen, nil, len hashes, hashes, files, name, total);
 	d := t.pack();
 	if(sys->write(sys->fildes(1), d, len d) != len d)
 		fail(sprint("write: %r"));

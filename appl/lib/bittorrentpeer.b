@@ -21,7 +21,7 @@ include "bitarray.m";
 	Bits: import bitarray;
 include "bittorrent.m";
 	bt: Bittorrent;
-	Torrent: import bt;
+	File, Torrent, Filex, Torrentx: import bt;
 include "util0.m";
 	util: Util0;
 	hex, sizefmt, preadn, min, warn, rev, l2a, inssort: import util;
@@ -82,7 +82,7 @@ maskip(ipstr: string): string
 Piece.new(index, length: int): ref Piece
 {
 	nblocks := (length+Blocksize-1)/Blocksize;
-	return ref Piece(nil, 0, index, Bits.new(nblocks), Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
+	return ref Piece(index, Bits.new(nblocks), Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
 }
 
 Piece.orphan(p: self ref Piece): int
@@ -98,12 +98,6 @@ Piece.isdone(p: self ref Piece): int
 	return p.have.n == p.have.have;
 }
 
-
-Piece.hashadd(p: self ref Piece, buf: array of byte)
-{
-	p.hashstate = kr->sha1(buf, len buf, nil, p.hashstate);
-	p.hashstateoff += len buf;
-}
 
 Piece.text(p: self ref Piece): string
 {
@@ -647,95 +641,14 @@ schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pee
 	}
 }
 
-
-chunkreader(fds: list of ref (ref Sys->FD, big), reqc: chan of ref (int, big, chan of (array of byte, string)))
+torrenthash(tx: ref Torrentx, haves: ref Bits): string
 {
-	for(;;) {
-		req := <-reqc;
-		if(req == nil)
-			break;
-
-		(n, off, chunkc) := *req;
-		while(n > 0) {
-			want := min(Diskchunksize, n);
-			buf := array[want] of byte;
-			err := bt->torrentpreadx(fds, buf, len buf, off);
-			if(err != nil) {
-				chunkc <-= (nil, err);
-				return;
-			}
-			off += big len buf;
-			n -= len buf;
-			chunkc <-= (buf, nil);
-		}
-		chunkc <-= (nil, nil);
-	}
-}
-
-piecehash(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Piece): (array of byte, string)
-{
-	reqc := chan[1] of ref (int, big, chan of (array of byte, string));
-	spawn chunkreader(fds, reqc);
-
-	chunkc := chan of (array of byte, string);
-	reqc <-= ref (p.length-p.hashstateoff, big p.index*big piecelen+big p.hashstateoff, chunkc);
-	reqc <-= nil;
-
-	st := p.hashstate;
-	for(;;) {
-		(buf, err) := <-chunkc;
-		if(err != nil)
-			return (nil, sprint("reading piece %d: %s", p.index, err));
-		if(buf == nil)
-			break;
-		st = kr->sha1(buf, len buf, nil, st);
-	}
-
-	hash := array[Keyring->SHA1dlen] of byte;
-	kr->sha1(nil, 0, hash, st);
-	return (hash, nil);
-}
-
-reader(fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string))
-{
-	have := 0;
-	buf := array[state.t.piecelen] of byte;
-
-	for(; fds != nil; fds = tl fds) {
-		(fd, size) := *hd fds;
-		o := big 0;
-		while(o < size) {
-			want := state.t.piecelen-have;
-			if(size-o < big want)
-				want = int (size-o);
-			nn := preadn(fd, buf[have:], want, o);
-			if(nn <= 0) {
-				c <-= (nil, sprint("reading: %r"));
-				return;
-			}
-			have += nn;
-			o += big nn;
-			if(have == state.t.piecelen) {
-				c <-= (buf, nil);
-				buf = array[state.t.piecelen] of byte;
-				have = 0;
-			}
-		}
-	}
-	if(have != 0)
-		c <-= (buf[:have], nil);
-}
-
-torrenthash(fds: list of ref (ref Sys->FD, big), haves: ref Bits): string
-{
-	spawn reader(fds, c := chan[2] of (array of byte, string));
-	digest := array[kr->SHA1dlen] of byte;
+	spawn bt->reader(tx, c := chan[2] of (array of byte, string));
 	for(i := 0; i < len state.t.hashes; i++) {
 		(buf, err) := <-c;
 		if(err != nil)
 			return err;
-		kr->sha1(buf, len buf, digest, nil);
-		if(hex(digest) == hex(state.t.hashes[i]))
+		if(hex(sha1(buf)) == hex(state.t.hashes[i]))
 			haves.set(i);
 	}
 	return nil;
@@ -1178,6 +1091,13 @@ Peerevent.text(pp: self ref Peerevent): string
 	Done =>		s += sprint(" %d", p.id);
 	}
 	return s;
+}
+
+sha1(d: array of byte): array of byte
+{
+	digest := array[kr->SHA1dlen] of byte;
+	kr->sha1(d, len d, digest, nil);
+	return digest;
 }
 
 say(s: string)

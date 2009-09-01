@@ -17,6 +17,7 @@ Bittorrentpeer: module
 
 	State: adt {
 		t:		ref Bittorrent->Torrent;
+		tx:		ref Bittorrent->Torrentx;
 		pieces:		list of ref Piece;  # only active pieces
 		trackerpeers:   list of Newpeer;  # peers we are not connected to
 		peers:		list of ref Peer;  # peers we are connected to
@@ -67,8 +68,6 @@ Bittorrentpeer: module
 
 
 	Piece: adt {
-		hashstate:	ref Keyring->DigestState;
-		hashstateoff:	int;
 		index:	int;
 		have:	ref Bitarray->Bits;
 		written:	ref Bitarray->Bits;
@@ -79,7 +78,6 @@ Bittorrentpeer: module
 		new:	fn(index, length: int): ref Piece;
 		isdone:	fn(p: self ref Piece): int;
 		orphan:	fn(p: self ref Piece): int;
-		hashadd:	fn(p: self ref Piece, buf: array of byte);
 		text:	fn(p: self ref Piece): string;
 	};
 
@@ -220,10 +218,7 @@ Bittorrentpeer: module
 
 	batches:	fn(p: ref Piece): array of ref Batch;
 
-	piecehash:	fn(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Piece): (array of byte, string);
-	torrenthash:	fn(fds: list of ref (ref Sys->FD, big), haves: ref Bitarray->Bits): string;
-	reader:		fn(fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string));
-
+	torrenthash:	fn(tx: ref Torrentx, haves: ref Bitarray->Bits): string;
 
 	needblocks:	fn(p: ref Peer): int;
 	schedule:	fn(reqc: chan of ref (ref Piece, list of Req, chan of int), p: ref Peer);

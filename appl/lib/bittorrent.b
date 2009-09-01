@@ -12,6 +12,9 @@ include "keyring.m";
 	kr: Keyring;
 include "security.m";
 	random: Random;
+include "tables.m";
+	tables: Tables;
+	Strhash: import tables;
 include "filter.m";
 include "mhttp.m";
 	http: Http;
@@ -35,6 +38,7 @@ init()
 	random = load Random Random->PATH;
 	kr = load Keyring Keyring->PATH;
 	bufio = load Bufio Bufio->PATH;
+	tables = load Tables Tables->PATH;
 	http = load Http Http->PATH;
 	http->init(bufio);
 	bitarray = load Bitarray Bitarray->PATH;
@@ -60,7 +64,7 @@ Bee.pack(b: self ref Bee): array of byte
 	a := array[n] of byte;
 	m := beepack(b, a, 0);
 	if(n != m)
-		raise "fail:internal error packing bee structure";
+		raise "internal error packing bee structure";
 	return a;
 }
 
@@ -383,16 +387,26 @@ Msg.pack(mm: self ref Msg): array of byte
 {
 	msize := mm.packedsize();
 	d := array[msize] of byte;
+	mm.packbuf(d);
+	return d;
+}
+
+Msg.packbuf(mm: self ref Msg, d: array of byte)
+{
+	msize := len d;
 	i := p32i(d, 0, msize-4);
 
 	if(tagof mm == tagof Msg.Keepalive)
-		return d;
+		return;
 
 	t := tag2type[tagof mm];
 	d[i++] = byte t;
 
 	pick m := mm {
-	Choke or Unchoke or Interested or Notinterested =>
+	Choke or
+	Unchoke or
+	Interested or
+	Notinterested =>
 	Have =>
 		i = p32i(d, i, m.index);
 	Bitfield =>
@@ -403,15 +417,16 @@ Msg.pack(mm: self ref Msg): array of byte
 		i = p32i(d, i, m.begin);
 		d[i:] = m.d;
 		i += len m.d;
-	Request or Cancel =>
+	Request or
+	Cancel =>
 		i = p32i(d, i, m.index);
 		i = p32i(d, i, m.begin);
 		i = p32i(d, i, m.length);
-	* =>	raise "fail:bad message type";
+	* =>
+		raise "bad message type";
 	};
 	if(i != len d)
-		raise "fail:Msg.pack internal error";
-	return d;
+		raise "Msg.pack internal error";
 }
 
 Msg.unpack(d: array of byte): (ref Msg, string)
@@ -451,7 +466,8 @@ Msg.unpack(d: array of byte): (ref Msg, string)
 		i += len nd;
 		m = ref Msg.Piece(index, begin, nd);
 		# xxx verify that piece has right size?
-	MRequest or MCancel =>
+	MRequest or
+	MCancel =>
 		index, begin, length: int;
 		(index, i) = g32i(d, i);
 		(begin, i) = g32i(d, i);
@@ -493,7 +509,8 @@ Msg.text(mm: self ref Msg): string
 	Have =>		s += sprint(" index=%d", m.index);
 	Bitfield =>	; # xxx show bitfield...?
 	Piece =>	s += sprint(" index=%d begin=%d length=%d", m.index, m.begin, len m.d);
-	Request or Cancel =>	s += sprint(" index=%d begin=%d length=%d", m.index, m.begin, m.length);
+	Request or
+	Cancel =>	s += sprint(" index=%d begin=%d length=%d", m.index, m.begin, m.length);
 	}
 	return s;
 }
@@ -533,7 +550,7 @@ foldpath(l: list of string): string
 
 Torrent.open(path: string): (ref Torrent, string)
 {
-	d := readfile(path, 512*1024);
+	d := readfile(path, -1);
 	if(d == nil)
 		return (nil, sprint("%r"));
 
@@ -549,8 +566,8 @@ Torrent.open(path: string): (ref Torrent, string)
 	if(binfo == nil)
 		return (nil, sprint("%s: missing info field", path));
 	bd := binfo.pack();
-	hash := array[kr->SHA1dlen] of byte;
-	kr->sha1(bd, len bd, hash, nil);
+	infohash := array[kr->SHA1dlen] of byte;
+	kr->sha1(bd, len bd, infohash, nil);
 
 	bpiecelen := binfo.geti("piece length"::nil);
 	if(bpiecelen == nil)
@@ -581,22 +598,24 @@ Torrent.open(path: string): (ref Torrent, string)
 	# determine paths for files, and total length
 	length := big 0;
 	blength := binfo.geti("length"::nil);
-	files: list of ref File;
+	files: array of ref File;
 	if(blength != nil) {
 		length = blength.i;
-		files = ref File (0, simplepath(name), name, length, big 0, 0, len pieces-1)::nil;
+		files = array[] of {ref File (name, length)};
 	} else {
 		bfiles := binfo.getl("files"::nil);
 		if(bfiles == nil)
 			return (nil, sprint("%s: missing field 'length' or 'files' in 'info'", path));
 		if(len bfiles.a == 0)
 			return (nil, sprint("%s: no files in torrent", path));
+		files = array[len bfiles.a] of ref File;
 		length = big 0;
 		for(i = 0; i < len bfiles.a; i++) {
 			blen := bfiles.a[i].geti("length"::nil);
 			if(blen == nil)
 				return (nil, sprint("%s: missing field 'length' in 'files[%d]' in 'info'", path, i));
-			filelength := blen.i;
+			files[i] = f := ref File;
+			f.length = blen.i;
 
 			pathl := bfiles.a[i].getl("path"::nil);
 			if(pathl == nil)
@@ -609,112 +628,13 @@ Torrent.open(path: string): (ref Torrent, string)
 				* =>
 					return (nil, sprint("bad type for element of 'path' for file"));
 				}
-			dstpath := foldpath(name::pathls);
-			if(dstpath == nil)
+			f.path = foldpath(name::pathls);
+			if(f.path == nil)
 				return (nil, sprint("weird path, refusing to create: %q", join(pathls, "/")));
-			pfirst := int (length/big piecelen);
-			plast := int ((length+filelength+big piecelen-big 1)/big piecelen);
-			files = ref File (i, simplepath(dstpath), dstpath, filelength, length, pfirst, plast)::files;
-			length += filelength;
+			length += f.length;
 		}
 	}
-	files = rev(files);
-
-	# xxx sanity checks
-	statepath := hd rev(sys->tokenize(path, "/").t1)+".state";
-	return (ref Torrent(string bannoun.a, piecelen, hash, len pieces, pieces, files, name, length, statepath), nil);
-}
-
-
-mkdirs(elems: list of string): string
-{
-	if(elems == nil)
-		return nil;
-
-	path := ".";
-	for(; elems != nil; elems = tl elems) {
-		path += "/"+hd elems;
-		(ok, dir) := sys->stat(path);
-		if(ok == 0) {
-			if(dir.mode & Sys->DMDIR)
-				continue;
-			return sprint("existing %q should be a directory but it is not", path);
-		}
-		fd := sys->create(path, Sys->OREAD, 8r777);
-		if(fd == nil)
-			return sprint("creating %q: %r", path);
-	}
-	return nil;
-}
-
-filename(f: ref File, nofix: int): string
-{
-	if(nofix)
-		return f.origpath;
-	return f.path;
-}
-
-Torrent.openfiles(t: self ref Torrent, nofix, nocreate: int): (list of ref (ref Sys->FD, big), int, string)
-{
-	fds: list of ref (ref Sys->FD, big);
-
-	# verify file names are unique
-	filenames: list of string;
-	for(l := t.files; l != nil; l = tl l)
-		filenames = filename(hd l, nofix)::filenames;
-
-	for(m := filenames; m != nil; m = tl m)
-		if(hasstr(tl m, hd m))
-			return (nil, 0, "duplicate path: "+hd m);
-
-	# attempt to open paths as existing files
-	opens: list of string;
-	for(l = t.files; l != nil; l = tl l) {
-		f := hd l;
-		path := filename(f, nofix);
-		fd := sys->open("./"+path, Sys->ORDWR);
-		fds = ref (fd, f.length)::fds;
-		if(fd != nil) {
-			(ok, dir) := sys->fstat(fd);
-			if(ok != 0)
-				return (nil, 0, sprint("fstat %s: %r", path));
-			if(dir.length != f.length)
-				return (nil, 0, sprint("%s: length of existing file is %bd, torrent says %bd", path, dir.length, f.length));
-			opens = path::opens;
-			say(sprint("opened %q", path));
-		}
-	}
-	fds = rev(fds);
-	if(len opens == len t.files)
-		return (fds, 0, nil);
-
-	if(len opens != 0)
-		return (nil, 0, sprint("%s: already exists", hd opens));
-
-	if(nocreate)
-		return (nil, 0, nil); 
-
-	# none could be opened, create paths as new files
-	fds = nil;
-	for(l = t.files; l != nil; l = tl l) {
-		f := hd l;
-		path := filename(f, nofix);
-		(nil, elems) := sys->tokenize(path, "/");
-		err := mkdirs(rev(tl rev(elems)));
-		if(err != nil)
-			return (nil, 0, err);
-		fd := sys->create("./"+path, Sys->ORDWR, 8r666);
-		if(fd == nil)
-			return (nil, 0, sprint("create %s: %r", path));
-		dir := sys->nulldir;
-		dir.length = f.length;
-		if(sys->fwstat(fd, dir) != 0)
-			return (nil, 0, sprint("fwstat file size %s: %r", path));
-		fds = ref (fd, f.length)::fds;
-		say(sprint("created %q", path));
-	}
-	fds = rev(fds);
-	return (fds, 1, nil);
+	return (ref Torrent(string bannoun.a, piecelen, infohash, len pieces, pieces, files, name, length), nil);
 }
 
 Torrent.piecelength(t: self ref Torrent, index: int): int
@@ -742,18 +662,18 @@ Torrent.pack(t: self ref Torrent): array of byte
 
 	info: ref Bee.Dict;
 	if(len t.files == 1) {
-		f := hd t.files;
-		path := str->splitstrr(f.origpath, "/").t1;
+		f := t.files[0];
+		path := str->splitstrr(f.path, "/").t1;
 		name := beekey("name", beestr(path));
 		length := beekey("length", beebig(f.length));
 		info = beedict(list of {name, length, piecelen, pieces});
 	} else {
 		name := beekey("name", beestr(t.name));
 		fl: list of ref Bee.Dict;
-		for(l := t.files; l != nil; l = tl l) {
-			f := hd l;
+		for(i = 0; i < len t.files; i++) {
+			f := t.files[i];
 			elems: list of ref Bee.String;
-			for(e := sys->tokenize(f.origpath, "/").t1; e != nil; e = tl e)
+			for(e := sys->tokenize(f.path, "/").t1; e != nil; e = tl e)
 				elems = beestr(hd e)::elems;
 			elems = rev(elems);
 			path := beekey("path", beelist(elems));
@@ -761,12 +681,201 @@ Torrent.pack(t: self ref Torrent): array of byte
 			fd := beedict(list of {length, path});
 			fl = fd::fl;
 		}
-		fl = rev(fl);
-		files := beekey("files", beelist(fl));
+		files := beekey("files", beelist(rev(fl)));
 		info = beedict(list of {name, files, piecelen, pieces});
 	}
 	b := beedict(list of {beekey("announce", beestr(t.announce)), beekey("info", info)});
 	return b.pack();
+}
+
+mkdirs(elems: list of string): string
+{
+	if(elems == nil)
+		return nil;
+
+	path := ".";
+	for(; elems != nil; elems = tl elems) {
+		path += "/"+hd elems;
+		(ok, dir) := sys->stat(path);
+		if(ok == 0) {
+			if(dir.mode & Sys->DMDIR)
+				continue;
+			return sprint("existing %q should be a directory but it is not", path);
+		}
+		fd := sys->create(path, Sys->OREAD, 8r777);
+		if(fd == nil)
+			return sprint("creating %q: %r", path);
+	}
+	return nil;
+}
+
+filename(f: ref File, nofix: int): string
+{
+	if(nofix)
+		return f.path;
+	return simplepath(f.path);
+}
+
+Torrentx.open(t: ref Torrent, tpath: string, nofix, nocreate: int): (ref Torrentx, int, string)
+{
+	statepath := str->splitstrr(tpath, "/").t1+".state";
+	tx := ref Torrentx (t, array[len t.files] of ref Filex, statepath, nil);
+
+	# attempt to open paths as existing files, and ensure they are unique
+	names := Strhash[string].new(32, nil);
+	opens: list of string;
+	offset := big 0;
+	for(i := 0; i < len t.files; i++) {
+		f := t.files[i];
+		path := filename(f, nofix);
+		if(names.find(path) != nil)
+			return (nil, 0, "duplicate path: "+path);
+		names.add(path, path);
+
+		fd := sys->open("./"+path, Sys->ORDWR);
+		if(fd != nil) {
+			(ok, dir) := sys->fstat(fd);
+			if(ok != 0)
+				return (nil, 0, sprint("fstat %s: %r", path));
+			if(dir.length != f.length)
+				return (nil, 0, sprint("%s: length of existing file is %bd, torrent says %bd", path, dir.length, f.length));
+			opens = path::opens;
+			say(sprint("opened %q", path));
+		}
+		pfirst := offset/big t.piecelen;
+		plast := (offset+f.length+big (t.piecelen-1))/big t.piecelen;
+		tx.files[i] = ref Filex (f, i, path, fd, offset, int pfirst, int plast);
+		offset += f.length;
+	}
+	names = nil;
+	if(len opens == len t.files)
+		return (tx, 0, nil);
+	if(len opens != 0)
+		return (nil, 0, sprint("%s: already exists", hd opens));
+	if(nocreate)
+		return (nil, 0, nil); 
+
+	# none could be opened, create paths as new files
+	offset = big 0;
+	for(i = 0; i < len t.files; i++) {
+		fx := tx.files[i];
+		(nil, elems) := sys->tokenize(fx.path, "/");
+		err := mkdirs(rev(tl rev(elems)));
+		if(err != nil)
+			return (nil, 0, err);
+		fx.fd = sys->create("./"+fx.path, Sys->ORDWR, 8r666);
+		if(fx.fd == nil)
+			return (nil, 0, sprint("create %s: %r", fx.path));
+		dir := sys->nulldir;
+		dir.length = fx.f.length;
+		if(sys->fwstat(fx.fd, dir) != 0)
+			return (nil, 0, sprint("fwstat file size %s: %r", fx.path));
+		say(sprint("created %q", fx.path));
+	}
+	return (tx, 1, nil);
+}
+
+Torrentx.blockread(tx: self ref Torrentx, index, begin, length: int): (array of byte, string)
+{
+	buf := array[length] of byte;
+	return (buf, tx.preadx(buf, len buf, big index*big tx.t.piecelen+big begin));
+}
+
+Torrentx.pieceread(tx: self ref Torrentx, index: int): (array of byte, string)
+{
+	buf := array[tx.t.piecelength(index)] of byte;
+	return (buf, tx.preadx(buf, len buf, big index*big tx.t.piecelen));
+}
+
+Torrentx.piecewrite(tx: self ref Torrentx, index: int, buf: array of byte): string
+{
+	return tx.pwritex(buf, tx.t.piecelen, big index*big tx.t.piecelen);
+}
+
+Torrentx.preadx(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string
+{
+	for(i := 0; i < len tx.files; i++) {
+		f := tx.files[i];
+		size := f.f.length;
+		if(size <= off) {
+			off -= size;
+			continue;
+		}
+
+		want := n;
+		if(size < off+big n)
+			want = int (size-off);
+		nn := preadn(f.fd, buf, want, off);
+		if(nn < 0)
+			return sprint("reading: %r");
+		if(nn != want)
+			return "short read";
+		n -= nn;
+		buf = buf[nn:];
+		off -= size;
+	}
+	if(n != 0)
+		return "could not read all requested data";
+	return nil;
+}
+
+Torrentx.pwritex(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string
+{
+	for(i := 0; i < len tx.files; i++) {
+		f := tx.files[i];
+		size := f.f.length;
+		if(size <= off) {
+			off -= size;
+			continue;
+		}
+
+		want := n;
+		if(size < off+big n)
+			want = int (size-off);
+		nn := sys->pwrite(f.fd, buf, want, off);
+		if(nn < 0)
+			return sprint("write: %r");
+		if(nn != want)
+			return "short write";
+		n -= nn;
+		buf = buf[nn:];
+		off -= size;
+	}
+	if(n != 0)
+		return "could not write all requested data";
+	return nil;
+}
+
+reader(tx: ref Torrentx, c: chan of (array of byte, string))
+{
+	piecelen := tx.t.piecelen;
+	have := 0;
+	buf := array[piecelen] of byte;
+
+	for(i := 0; i < len tx.files; i++) {
+		f := tx.files[i];
+		size := f.f.length;
+		o := big 0;
+		while(o < size) {
+			want := piecelen-have;
+			if(size-o < big want)
+				want = int (size-o);
+			nn := preadn(f.fd, buf[have:], want, o);
+			if(nn <= 0) {
+				c <-= (nil, sprint("reading: %r"));
+				return;
+			}
+			have += nn;
+			o += big nn;
+			if(have == piecelen) {
+				c <-= (buf, nil);
+				buf = array[piecelen] of byte;
+				have = 0;
+			}
+		}
+	}
+	if(have != 0)
+		c <-= (buf[:have], nil);
 }
 
 
@@ -777,7 +886,7 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
 		return (0, nil, nil, "parsing announce url: "+uerr);
 
 	s := "";
-	s += "&info_hash="+encode(t.hash);
+	s += "&info_hash="+encode(t.infohash);
 	s += "&peer_id="+encode(peerid);
 	s += "&port="+string lport;
 	s += sprint("&uploaded=%bd", up);
@@ -848,76 +957,6 @@ genpeerid(): array of byte
 	return array of byte peerid;
 }
 
-piecewrite(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int, buf: array of byte): string
-{
-	return torrentpwritex(dstfds, buf, len buf, big index*big t.piecelen);
-}
-
-torrentpreadx(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string
-{
-	for(f := dstfds; n > 0 && f != nil; f = tl f) {
-		(fd, size) := *hd f;
-		if(size <= off) {
-			off -= size;
-			continue;
-		}
-
-		want := n;
-		if(size < off+big n)
-			want = int (size-off);
-		nn := preadn(fd, buf, want, off);
-		if(nn < 0)
-			return sprint("reading: %r");
-		if(nn != want)
-			return "short read";
-		n -= nn;
-		buf = buf[nn:];
-		off -= size;
-	}
-	if(n != 0)
-		return "could not read all requested data";
-	return nil;
-}
-
-torrentpwritex(dstfds: list of ref (ref Sys->FD, big), buf: array of byte, n: int, off: big): string
-{
-	for(f := dstfds; n > 0 && f != nil; f = tl f) {
-		(fd, size) := *hd f;
-		if(size <= off) {
-			off -= size;
-			continue;
-		}
-
-		want := n;
-		if(size < off+big n)
-			want = int (size-off);
-		nn := sys->pwrite(fd, buf, want, off);
-		if(nn < 0)
-			return sprint("write: %r");
-		if(nn != want)
-			return "short write";
-		n -= nn;
-		buf = buf[nn:];
-		off -= size;
-	}
-	if(n != 0)
-		return "could not write all requested data";
-	return nil;
-}
-
-pieceread(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index: int): (array of byte, string)
-{
-	buf := array[t.piecelength(index)] of byte;  # xxx memory hog
-	return (buf, torrentpreadx(dstfds, buf, len buf, big index*big t.piecelen));
-}
-
-blockread(t: ref Torrent, dstfds: list of ref (ref Sys->FD, big), index, begin, length: int): (array of byte, string)
-{
-	buf := array[length] of byte;
-	return (buf, torrentpreadx(dstfds, buf, len buf, big index*big t.piecelen+big begin));
-}
-
-
 sane(s: string): string
 {
 	ascii := "0-9a-zA-Z";
@@ -942,7 +981,6 @@ sane(s: string): string
 			p2[len p2] = p1[i];
 	return p2;
 }
-
 
 simplepath(s: string): string
 {

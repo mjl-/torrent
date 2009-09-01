@@ -24,7 +24,7 @@ Torrentinfo: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
-Dflag: int;
+dflag: int;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -39,10 +39,10 @@ init(nil: ref Draw->Context, args: list of string)
 	util->init();
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-D] torrentfile");
+	arg->setusage(arg->progname()+" [-d] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
-		'D' =>	Dflag++;
+		'd' =>	dflag++;
 		* =>	arg->usage();
 		}
 
@@ -59,14 +59,14 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("pieces:         %d\n", t.piececount);
 	sys->print("total length:   %s (%bd bytes)\n", sizefmt(t.length), t.length);
 	sys->print("files:\n");
-	for(l := t.files; l != nil; l = tl l) {
-		f := hd l;
+	for(i := 0; i < len t.files; i++) {
+		f := t.files[i];
 		sys->print("%10s  %s\n", sizefmt(f.length), f.path);
 	}
 }
 
 say(s: string)
 {
-	if(Dflag)
+	if(dflag)
 		warn(s);
 }
