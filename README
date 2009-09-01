@@ -39,9 +39,9 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
-- move some state from btp to torrent/peer.b?  perhaps put the state in an adt.
 - separate peer-implementation out of adt Torrent?
 - remove the premature optimisations
+- perhaps torrent/verify shouldn't depend on bittorrentpeer?
 
 
 ## wm/torrent: 
@@ -58,15 +58,15 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- put more in progress/peerevents, such as errors (eg from tracker, when writing to disk).
 - explain the design better
-- perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
-- allow starting after being stopped.  implement start ctl.
-- move styx code to separate file?
 - use multiple peers
 - implement rarest first and random
 - keep track of which peer has which piece
 - handle choke/unchoke correctly, send interested only when peer has data
+- put more in progress/peerevents, such as errors (eg errors when writing to disk).
+- perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
+- allow starting after being stopped.  implement start ctl.
+- move styx code to separate file?
 - write manual page
 
 ## torrent/track

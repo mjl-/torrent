@@ -14,6 +14,8 @@ include "rand.m";
 include "ip.m";
 	ipmod: IP;
 	IPaddr: import ipmod;
+include "styx.m";
+	Rmsg, Tmsg: import Styx;
 include "bitarray.m";
 	bitarray: Bitarray;
 	Bits: import bitarray;
@@ -37,7 +39,9 @@ ip6mask := IPaddr(array[] of {
 	byte 0, byte 0, byte 0, byte 0,
 	byte 0, byte 0, byte 0, byte 0});
 
-init()
+state:	ref State;
+
+init(st: ref State)
 {
 	sys = load Sys Sys->PATH;
 	daytime = load Daytime Daytime->PATH;
@@ -51,6 +55,8 @@ init()
 	bt = load Bittorrent Bittorrent->PATH;
 	util = load Util0 Util0->PATH;
 	util->init();
+
+	state = st;
 }
 
 randomize[T](a: array of T)
@@ -123,25 +129,25 @@ Block.text(b: self ref Block): string
 }
 
 
-piecenew(t: ref Torrent, index: int): ref Piece
+piecenew(index: int): ref Piece
 {
-	p := Piece.new(index, t.piecelength(index));
-	pieces = p::pieces;
+	p := Piece.new(index, state.t.piecelength(index));
+	state.pieces = p::state.pieces;
 	return p;
 }
 
 piecedel(p: ref Piece)
 {
 	new: list of ref Piece;
-	for(l := pieces; l != nil; l = tl l)
+	for(l := state.pieces; l != nil; l = tl l)
 		if(hd l != p)
 			new = hd l::new;
-	pieces = new;
+	state.pieces = new;
 }
 
 piecefind(index: int): ref Piece
 {
-	for(l := pieces; l != nil; l = tl l)
+	for(l := state.pieces; l != nil; l = tl l)
 		if((hd l).index == index)
 			return hd l;
 	return nil;
@@ -210,21 +216,21 @@ peerstatestr(state: int): string
 
 Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
 {
-	getmsgch := chan of list of ref Bittorrent->Msg;
-	state := RemoteChoking|LocalChoking;
+	getmsgc := chan of list of ref Bittorrent->Msg;
+	st := RemoteChoking|LocalChoking;
 	msgseq := 0;
-	writech := chan[4] of ref (int, int, array of byte);
-	readch := chan of ref (int, int, int);
+	writec := chan[4] of ref (int, int, array of byte);
+	readc := chan of ref (int, int, int);
 	return ref Peer(
 		peergen++,
 		np, fd, extensions, peerid, hex(peerid),
-		0, getmsgch, nil, nil,
+		0, getmsgc, nil, nil,
 		Reqs.new(Blockqueuesize),
 		Bits.new(npieces),
-		state,
+		st,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, dialed, Buf.new(), writech, readch, nil);
+		nil, 0, dialed, Buf.new(), writec, readc, nil);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -331,25 +337,25 @@ Buf.overlaps(b: self ref Buf, piece, begin, end: int): int
 
 trackerpeerdel(np: Newpeer)
 {
-	n := trackerpeers;
+	n := state.trackerpeers;
 	n = nil;
-	for(; trackerpeers != nil; trackerpeers = tl trackerpeers) {
-		e := hd trackerpeers;
+	for(; state.trackerpeers != nil; state.trackerpeers = tl state.trackerpeers) {
+		e := hd state.trackerpeers;
 		if(e.addr != np.addr)
 			n = e::n;
 	}
-	trackerpeers = n;
+	state.trackerpeers = n;
 }
 
 trackerpeeradd(np: Newpeer)
 {
-	trackerpeers = np::trackerpeers;
+	state.trackerpeers = np::state.trackerpeers;
 }
 
 trackerpeertake(): Newpeer
 {
-	np := hd trackerpeers;
-	trackerpeers = tl trackerpeers;
+	np := hd state.trackerpeers;
+	state.trackerpeers = tl state.trackerpeers;
 	return np;
 }
 
@@ -358,7 +364,7 @@ trackerpeertake(): Newpeer
 
 peerconnected(addr: string): int
 {
-	for(l := peers; l != nil; l = tl l) {
+	for(l := state.peers; l != nil; l = tl l) {
 		e := hd l;
 		if(e.np.addr == addr)
 			return 1;
@@ -370,24 +376,24 @@ peerconnected(addr: string): int
 peerdel(peer: ref Peer)
 {
 	npeers: list of ref Peer;
-	for(; peers != nil; peers = tl peers)
-		if(hd peers != peer)
-			npeers = hd peers::npeers;
-	peers = npeers;
+	for(; state.peers != nil; state.peers = tl state.peers)
+		if(hd state.peers != peer)
+			npeers = hd state.peers::npeers;
+	state.peers = npeers;
 
-	if(luckypeer == peer)
-		luckypeer = nil;
+	if(state.luckypeer == peer)
+		state.luckypeer = nil;
 }
 
 peeradd(p: ref Peer)
 {
 	peerdel(p);
-	peers = p::peers;
+	state.peers = p::state.peers;
 }
 
 peerknownip(ip: string): int
 {
-	for(l := peers; l != nil; l = tl l)
+	for(l := state.peers; l != nil; l = tl l)
 		if((hd l).np.ip == ip)
 			return 1;
 	return 0;
@@ -395,7 +401,7 @@ peerknownip(ip: string): int
 
 peerhas(p: ref Peer): int
 {
-	for(l := peers; l != nil; l = tl l)
+	for(l := state.peers; l != nil; l = tl l)
 		if(p == hd l)
 			return 1;
 	return 0;
@@ -404,7 +410,7 @@ peerhas(p: ref Peer): int
 peersdialed(): int
 {
 	i := 0;
-	for(l := peers; l != nil; l = tl l)
+	for(l := state.peers; l != nil; l = tl l)
 		if((hd l).dialed)
 			i++;
 	return i;
@@ -412,7 +418,7 @@ peersdialed(): int
 
 peerfind(id: int): ref Peer
 {
-	for(l := peers; l != nil; l = tl l)
+	for(l := state.peers; l != nil; l = tl l)
 		if((hd l).id == id)
 			return hd l;
 	return nil;
@@ -421,7 +427,7 @@ peerfind(id: int): ref Peer
 peersunchoked(): list of ref Peer
 {
 	r: list of ref Peer;
-	for(l := peers; l != nil; l = tl l)
+	for(l := state.peers; l != nil; l = tl l)
 		if(!(hd l).localchoking())
 			r = hd l::r;
 	return r;
@@ -430,44 +436,44 @@ peersunchoked(): list of ref Peer
 peersactive(): list of ref Peer
 {
 	r: list of ref Peer;
-	for(l := peers; l != nil; l = tl l)
+	for(l := state.peers; l != nil; l = tl l)
 		if(!(hd l).localchoking() && (hd l).remoteinterested())
 			r = hd l::r;
 	return r;
 }
 
 
-request(reqch: chan of ref (ref Piece, list of Req, chan of int), p: ref Piece, reqs: list of Req)
+request(reqc: chan of ref (ref Piece, list of Req, chan of int), p: ref Piece, reqs: list of Req)
 {
-	donech := chan of int;
-	reqch <-= ref (p, reqs, donech);
-	<-donech;
+	donec := chan of int;
+	reqc <-= ref (p, reqs, donec);
+	<-donec;
 }
 
-schedbatches(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer, b: array of ref Batch)
+schedbatches(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer, b: array of ref Batch)
 {
 	for(i := 0; needblocks(peer) && i < len b; i++)
-		request(reqch, b[i].piece, b[i].unused());
+		request(reqc, b[i].piece, b[i].unused());
 }
 
-schedpieces(reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer, a: array of ref Piece)
+schedpieces(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer, a: array of ref Piece)
 {
 	for(i := 0; needblocks(peer) && i < len a; i++)
 		if((peer.piecehave).get(a[i].index)) {
 			b := batches(a[i]);
-			schedbatches(reqch, peer, b);
+			schedbatches(reqc, peer, b);
 		}
 }
 
 
-getrandompiece(t: ref Torrent): ref Piece
+getrandompiece(): ref Piece
 {
 	# will succeed, this is only called when few pieces are busy
 	for(;;) {
-		i := rand->rand(piecebusy.n);
-		if(!piecebusy.get(i)) {
-			p := piecenew(t, i);
-			piecebusy.set(i);
+		i := rand->rand(state.piecebusy.n);
+		if(!state.piecebusy.get(i)) {
+			p := piecenew(i);
+			state.piecebusy.set(i);
 			return p;
 		}
 	}
@@ -482,11 +488,11 @@ getrarestpiece(b: ref Bits)
 	for(i := 0; i < b.n && seen < b.have; i++) {
 		if(b.get(i)) {
 			seen++;
-			if(min < 0 || piececounts[i] < min) {
+			if(min < 0 || state.piececounts[i] < min) {
 				rarest = nil;
-				min = piececounts[i];
+				min = state.piececounts[i];
 			}
-			if(piececounts[i] <= min)
+			if(state.piececounts[i] <= min)
 				rarest = i::rarest;
 		}
 	}
@@ -509,11 +515,11 @@ needblocks(peer: ref Peer): int
 inactiverare(): array of ref (int, int)
 {
 	# we just use .t0 of the ref (int, int).  it's used here so we can use polymorphic functions
-	a := array[piecebusy.n-piecebusy.have] of ref (int, int);
-	say(sprint("inactiverare: %d pieces, %d busy, finding %d", piecebusy.n, piecebusy.have, len a));
+	a := array[state.piecebusy.n-state.piecebusy.have] of ref (int, int);
+	say(sprint("inactiverare: %d pieces, %d busy, finding %d", state.piecebusy.n, state.piecebusy.have, len a));
 	j := 0;
-	for(i := 0; j < len a && i < piecebusy.n; i++)
-		if(!piecebusy.get(i))
+	for(i := 0; j < len a && i < state.piecebusy.n; i++)
+		if(!state.piecebusy.get(i))
 			a[j++] = ref (i, 0);
 
 	randomize(a);
@@ -522,13 +528,13 @@ inactiverare(): array of ref (int, int)
 
 rarepiececmp(p1, p2: ref Piece): int
 {
-	return piececounts[p1.index]-piececounts[p2.index];
+	return state.piececounts[p1.index]-state.piececounts[p2.index];
 }
 
 piecesrareorphan(orphan: int): array of ref Piece
 {
 	r: list of ref Piece;
-	for(l := pieces; l != nil; l = tl l) {
+	for(l := state.pieces; l != nil; l = tl l) {
 		p := hd l;
 		if(p.orphan() && orphan)
 			r = p::r;
@@ -548,16 +554,16 @@ progresscmp(p1, p2: ref Piece): int
 
 rarestfirst(): int
 {
-	return piecehave.have >= Piecesrandom;
+	return state.piecehave.have >= Piecesrandom;
 }
 
-schedule(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)
+schedule(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)
 {
-	schedule0(t, reqch, peer);
-	reqch <-= nil;
+	schedule0(reqc, peer);
+	reqc <-= nil;
 }
 
-schedule0(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)
+schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)
 {
 	if(rarestfirst()) {
 		say("schedule: doing rarest first");
@@ -568,13 +574,13 @@ schedule0(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of in
 		if(req != nil) {
 			piece := piecefind(req.pieceindex);
 			if(piece != nil)
-				schedpieces(reqch, peer, array[] of {piece});
+				schedpieces(reqc, peer, array[] of {piece});
 		}
 
 		# find rarest orphan pieces to work on
 		say("schedule: trying rarest orphans");
 		a := piecesrareorphan(1);
-		schedpieces(reqch, peer, a);
+		schedpieces(reqc, peer, a);
 		if(!needblocks(peer))
 			return;
 
@@ -584,9 +590,9 @@ schedule0(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of in
 		for(i := 0; i < len rare; i++) {
 			v := rare[i].t0;  # it's a ref tuple to allow using polymorphic functions
 			say(sprint("using new rare piece %d", v));
-			p := piecenew(t, v);
-			piecebusy.set(v);
-			schedpieces(reqch, peer, array[] of {p});
+			p := piecenew(v);
+			state.piecebusy.set(v);
+			schedpieces(reqc, peer, array[] of {p});
 			if(!needblocks(peer))
 				return;
 		}
@@ -594,7 +600,7 @@ schedule0(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of in
 		# find rarest active non-orphan piece to work on
 		say("schedule: trying rarest non-orphans");
 		a = piecesrareorphan(0);
-		schedpieces(reqch, peer, a);
+		schedpieces(reqc, peer, a);
 		if(!needblocks(peer))
 			return;
 		
@@ -602,7 +608,7 @@ schedule0(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of in
 		say("schedule: doing random");
 
 		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-		a := l2a(pieces);
+		a := l2a(state.pieces);
 		inssort(a, progresscmp);
 		for(i := 0; i < len a; i++) {
 			piece := a[i];
@@ -617,14 +623,14 @@ schedule0(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of in
 
 			# request blocks from unused batches first
 			say("schedule: trying unused batches from piece");
-			schedbatches(reqch, peer, b);
+			schedbatches(reqc, peer, b);
 			if(!needblocks(peer))
 				return;
 
 			# if more requests needed, start on partially used batches too, in reverse order (for fewer duplicate data)
 			say("schedule: trying partially used batches from piece");
 			for(k := len b-1; k >= 0; k--) {
-				request(reqch, piece, b[k].usedpartial(peer));
+				request(reqc, piece, b[k].usedpartial(peer));
 				if(!needblocks(peer))
 					return;
 			}
@@ -632,74 +638,74 @@ schedule0(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of in
 
 		# otherwise, get new random pieces to work on
 		say("schedule: trying random pieces");
-		while(needblocks(peer) && piecebusy.have < piecebusy.n) {
+		while(needblocks(peer) && state.piecebusy.have < state.piecebusy.n) {
 			say("schedule: getting another random piece...");
-			piece := getrandompiece(t);
+			piece := getrandompiece();
 			b := batches(piece);
-			schedbatches(reqch, peer, b);
+			schedbatches(reqc, peer, b);
 		}
 	}
 }
 
 
-chunkreader(fds: list of ref (ref Sys->FD, big), reqch: chan of ref (int, big, chan of (array of byte, string)))
+chunkreader(fds: list of ref (ref Sys->FD, big), reqc: chan of ref (int, big, chan of (array of byte, string)))
 {
 	for(;;) {
-		req := <-reqch;
+		req := <-reqc;
 		if(req == nil)
 			break;
 
-		(n, off, chunkch) := *req;
+		(n, off, chunkc) := *req;
 		while(n > 0) {
 			want := min(Diskchunksize, n);
 			buf := array[want] of byte;
 			err := bt->torrentpreadx(fds, buf, len buf, off);
 			if(err != nil) {
-				chunkch <-= (nil, err);
+				chunkc <-= (nil, err);
 				return;
 			}
 			off += big len buf;
 			n -= len buf;
-			chunkch <-= (buf, nil);
+			chunkc <-= (buf, nil);
 		}
-		chunkch <-= (nil, nil);
+		chunkc <-= (nil, nil);
 	}
 }
 
 piecehash(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Piece): (array of byte, string)
 {
-	reqch := chan[1] of ref (int, big, chan of (array of byte, string));
-	spawn chunkreader(fds, reqch);
+	reqc := chan[1] of ref (int, big, chan of (array of byte, string));
+	spawn chunkreader(fds, reqc);
 
-	chunkch := chan of (array of byte, string);
-	reqch <-= ref (p.length-p.hashstateoff, big p.index*big piecelen+big p.hashstateoff, chunkch);
-	reqch <-= nil;
+	chunkc := chan of (array of byte, string);
+	reqc <-= ref (p.length-p.hashstateoff, big p.index*big piecelen+big p.hashstateoff, chunkc);
+	reqc <-= nil;
 
-	state := p.hashstate;
+	st := p.hashstate;
 	for(;;) {
-		(buf, err) := <-chunkch;
+		(buf, err) := <-chunkc;
 		if(err != nil)
 			return (nil, sprint("reading piece %d: %s", p.index, err));
 		if(buf == nil)
 			break;
-		state = kr->sha1(buf, len buf, nil, state);
+		st = kr->sha1(buf, len buf, nil, st);
 	}
 
 	hash := array[Keyring->SHA1dlen] of byte;
-	kr->sha1(nil, 0, hash, p.hashstate);
+	kr->sha1(nil, 0, hash, st);
 	return (hash, nil);
 }
 
-reader(t: ref Torrent, fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string))
+reader(fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string))
 {
 	have := 0;
-	buf := array[t.piecelen] of byte;
+	buf := array[state.t.piecelen] of byte;
 
 	for(; fds != nil; fds = tl fds) {
 		(fd, size) := *hd fds;
 		o := big 0;
 		while(o < size) {
-			want := t.piecelen-have;
+			want := state.t.piecelen-have;
 			if(size-o < big want)
 				want = int (size-o);
 			nn := preadn(fd, buf[have:], want, o);
@@ -709,9 +715,9 @@ reader(t: ref Torrent, fds: list of ref (ref Sys->FD, big), c: chan of (array of
 			}
 			have += nn;
 			o += big nn;
-			if(have == t.piecelen) {
+			if(have == state.t.piecelen) {
 				c <-= (buf, nil);
-				buf = array[t.piecelen] of byte;
+				buf = array[state.t.piecelen] of byte;
 				have = 0;
 			}
 		}
@@ -720,16 +726,16 @@ reader(t: ref Torrent, fds: list of ref (ref Sys->FD, big), c: chan of (array of
 		c <-= (buf[:have], nil);
 }
 
-torrenthash(fds: list of ref (ref Sys->FD, big), t: ref Torrent, haves: ref Bits): string
+torrenthash(fds: list of ref (ref Sys->FD, big), haves: ref Bits): string
 {
-	spawn reader(t, fds, c := chan[2] of (array of byte, string));
+	spawn reader(fds, c := chan[2] of (array of byte, string));
 	digest := array[kr->SHA1dlen] of byte;
-	for(i := 0; i < len t.hashes; i++) {
+	for(i := 0; i < len state.t.hashes; i++) {
 		(buf, err) := <-c;
 		if(err != nil)
 			return err;
 		kr->sha1(buf, len buf, digest, nil);
-		if(hex(digest) == hex(t.hashes[i]))
+		if(hex(digest) == hex(state.t.hashes[i]))
 			haves.set(i);
 	}
 	return nil;
@@ -1025,6 +1031,154 @@ Pool[T].text(p: self ref Pool): string
 	return sprint("<rotation len active=%d len pool=%d poolnext=%d mode=%s>", len p.active, len p.pool, p.poolnext, poolmodes[p.mode]);
 }
 
+
+progresstags := array[] of {
+"", "done", "started", "stopped", "piece", "block", "pieces", "blocks", "filedone", "tracker",
+};
+Progress.text(pp: self ref Progress): string
+{
+	s := progresstags[tagof pp];
+	pick p := pp {
+	Nil or
+	Done or
+	Started or
+	Stopped =>	;
+	Piece =>	s += sprint(" %d %d %d", p.p, p.have, p.total);
+	Block =>	s += sprint(" %d %d %d %d", p.p, p.b, p.have, p.total);
+	Pieces =>	for(l := p.l; l != nil; l = tl l)
+				s += " "+string hd l;
+	Blocks =>	s += sprint(" %d", p.p);
+			for(l := p.l; l != nil; l = tl l)
+				s += " "+string hd l;
+	Filedone =>	s += sprint(" %d %q %q", p.index, p.path, p.origpath);
+	Tracker =>	s += sprint(" %d %d %q", p.interval, p.npeers, p.err);
+	* =>	raise "missing case";
+	}
+	return s;
+}
+
+Progressfid.new(fid: int): ref Progressfid
+{
+	return ref Progressfid (fid, nil, ref Progress.Nil (nil));
+}
+
+Progressfid.putread(pf: self ref Progressfid, r: ref Tmsg.Read)
+{
+	pf.r = r::pf.r;
+}
+
+Progressfid.read(pf: self ref Progressfid): ref Rmsg.Read
+{
+	if(pf.r == nil || pf.last.next == nil)
+		return nil;
+
+	pf.r = rev(pf.r);
+	m := hd pf.r;
+	pf.r = rev(tl pf.r);
+
+	# note: the following knows that progress.text() always returns ascii
+	s := "";
+	while(pf.last.next != nil) {
+		p := pf.last.next;
+		ns := p.text();
+		if(s != nil && len s+len ns+1 > m.count)
+			break;
+		if(ns != nil)
+			ns[len ns] = '\n';
+		s += ns;
+		pf.last = p;
+	}
+	if(m.count < len s)
+		s = s[:m.count];
+	data := array of byte s;
+	return ref Rmsg.Read (m.tag, data);
+}
+
+Progressfid.flushtag(pf: self ref Progressfid, tag: int): int
+{
+	r: list of ref Tmsg.Read;
+	for(l := pf.r; l != nil; l = tl l)
+		if((hd l).tag != tag)
+			r = (hd l)::r;
+	if(len r == len pf.r)
+		return 0;
+	pf.r = rev(r);
+	return 1;
+}
+
+Peerfid.new(fid: int): ref Peerfid
+{
+	return ref Peerfid (fid, nil, ref Peerevent.Nil (nil));
+}
+
+Peerfid.putread(pf: self ref Peerfid, r: ref Tmsg.Read)
+{
+	pf.r = r::pf.r;
+}
+
+Peerfid.read(pf: self ref Peerfid): ref Rmsg.Read
+{
+	if(pf.r == nil || pf.last.next == nil)
+		return nil;
+
+	pf.r = rev(pf.r);
+	m := hd pf.r;
+	pf.r = rev(tl pf.r);
+
+	s := "";
+	while(pf.last.next != nil) {
+		p := pf.last.next;
+		ns := p.text();
+		# note: the following depends on all data being ascii!
+		if(s != nil && len s+len ns+1 > m.count)
+			break;
+		if(ns != nil)
+			ns[len ns] = '\n';
+		s += ns;
+		pf.last = p;
+	}
+	if(len s > m.count)
+		s = s[:m.count];
+	return ref Rmsg.Read (m.tag, array of byte s);
+}
+
+Peerfid.flushtag(pf: self ref Peerfid, tag: int): int
+{
+	r: list of ref Tmsg.Read;
+	for(l := pf.r; l != nil; l = tl l)
+		if((hd l).tag != tag)
+			r = hd l::r;
+	if(len r == len pf.r)
+		return 0;
+	pf.r = rev(r);
+	return 1;
+}
+
+peereventtags := array[] of {
+"", "endofstate", "dialing", "tracker", "new", "gone", "bad", "state", "piece", "pieces", "done",
+};
+eventstatestr0 := array[] of {"local", "remote"};
+eventstatestr1 := array[] of {"choking", "unchoking", "interested", "uninterested"};
+Peerevent.text(pp: self ref Peerevent): string
+{
+	s := peereventtags[tagof pp];
+	pick p := pp {
+	Nil or
+	Endofstate =>	;
+	Dialing =>	s += sprint(" %q", p.addr);
+	Tracker =>	s += sprint(" %q", p.addr);
+	New or 
+	Gone =>		s += sprint(" %q %d %s %d", p.addr, p.id, p.peeridhex, p.dialed);
+	Bad =>		s += sprint(" %q %d", p.addr, p.mtime);
+	State =>	s += sprint(" %d %s %s", p.id, eventstatestr0[p.s>>2], eventstatestr1[p.s&3]);
+	Piece => 	s += sprint(" %d %d", p.id, p.piece);
+	Pieces =>	s += sprint(" %d", p.id);
+			for(l := p.pieces; l != nil; l = tl l)
+				s += " "+string hd l;
+	Done =>		s += sprint(" %d", p.id);
+	}
+	return s;
+}
 
 say(s: string)
 {

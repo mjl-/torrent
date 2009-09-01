@@ -3,7 +3,7 @@ Bittorrentpeer: module
 	PATH:	con "/dis/lib/bittorrentpeer.dis";
 
 	dflag:	int;
-	init:	fn();
+	init:	fn(st: ref State);
 
 	Peeridlen:	con 20;
 
@@ -15,14 +15,16 @@ Bittorrentpeer: module
 	Batchsize:	con Diskchunksize/Blocksize;
 
 
-	pieces:		list of ref Piece;  # only active pieces
-	trackerpeers:   list of Newpeer;  # peers we are not connected to
-	peers:		list of ref Peer;  # peers we are connected to
-	luckypeer:	ref Peer;
-	piecehave:	ref Bitarray->Bits;
-	piecebusy:	ref Bitarray->Bits;
-	piececounts:	array of int;  # for each piece, count of peers that have it
-
+	State: adt {
+		t:		ref Bittorrent->Torrent;
+		pieces:		list of ref Piece;  # only active pieces
+		trackerpeers:   list of Newpeer;  # peers we are not connected to
+		peers:		list of ref Peer;  # peers we are connected to
+		luckypeer:	ref Peer;
+		piecehave:	ref Bitarray->Bits;
+		piecebusy:	ref Bitarray->Bits;
+		piececounts:	array of int;  # for each piece, count of peers that have it
+	};
 
 	randomize:	fn[T](a: array of T);
 	maskip:		fn(ipstr: string): string;
@@ -92,7 +94,7 @@ Bittorrentpeer: module
 	};
 
 
-	piecenew:	fn(t: ref Torrent, index: int): ref Piece;
+	piecenew:	fn(index: int): ref Piece;
 	piecedel:	fn(p: ref Piece);
 	piecefind:	fn(index: int): ref Piece;
 
@@ -119,7 +121,7 @@ Bittorrentpeer: module
 		peerid:		array of byte;
 		peeridhex:	string;
 		getmsg:		int;
-		getmsgch:	chan of list of ref Bittorrent->Msg;
+		getmsgc:	chan of list of ref Bittorrent->Msg;
 		metamsgs,
 		datamsgs: 	list of ref Bittorrent->Msg;
 		reqs:		ref Reqs;  # we want from remote
@@ -134,8 +136,8 @@ Bittorrentpeer: module
 		lastunchoke:	int;
 		dialed:		int;  # whether we initiated connection
 		buf:		ref Buf;  # unwritten part of piece
-		writech:	chan of ref (int, int, array of byte);
-		readch:		chan of ref (int, int, int);
+		writec:		chan of ref (int, int, array of byte);
+		readc:		chan of ref (int, int, int);
 		pids:		list of int;  # pids of net reader/writer to kill for cleaning up
 
 		new:		fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
@@ -188,7 +190,8 @@ Bittorrentpeer: module
 
 	Reqs: adt {
 		a:	array of Req;
-		first, next:	int;
+		first,
+		next:	int;
 		lastreq:	ref Req;
 
 		new:	fn(size: int): ref Reqs;
@@ -218,10 +221,103 @@ Bittorrentpeer: module
 	batches:	fn(p: ref Piece): array of ref Batch;
 
 	piecehash:	fn(fds: list of ref (ref Sys->FD, big), piecelen: int, p: ref Piece): (array of byte, string);
-	torrenthash:	fn(fds: list of ref (ref Sys->FD, big), t: ref Bittorrent->Torrent, haves: ref Bitarray->Bits): string;
-	reader:		fn(t: ref Bittorrent->Torrent, fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string));
+	torrenthash:	fn(fds: list of ref (ref Sys->FD, big), haves: ref Bitarray->Bits): string;
+	reader:		fn(fds: list of ref (ref Sys->FD, big), c: chan of (array of byte, string));
 
 
 	needblocks:	fn(p: ref Peer): int;
-	schedule:	fn(t: ref Torrent, reqch: chan of ref (ref Piece, list of Req, chan of int), p: ref Peer);
+	schedule:	fn(reqc: chan of ref (ref Piece, list of Req, chan of int), p: ref Peer);
+
+
+	Progress: adt {
+		next:	cyclic ref Progress;
+		pick {
+		Nil or
+		Done or
+		Started or
+		Stopped =>
+		Piece =>
+			p,
+			have,
+			total:	int;
+		Block =>
+			p,
+			b,
+			have,
+			total:	int;
+		Pieces =>
+			l:	list of int;
+		Blocks =>
+			p:	int;
+			l:	list of int;
+		Filedone =>
+			index:	int;
+			path,
+			origpath:	string;
+		Tracker =>
+			interval:	int;
+			npeers:	int;
+			err:	string;
+		}
+
+		text:	fn(p: self ref Progress): string;
+	};
+
+	Progressfid: adt {
+		fid:	int;
+		r:	list of ref Styx->Tmsg.Read;
+		last:	ref Progress;
+
+		new:		fn(fid: int): ref Progressfid;
+		putread:	fn(pf: self ref Progressfid, r: ref Styx->Tmsg.Read);
+		read:		fn(pf: self ref Progressfid): ref Styx->Rmsg.Read;
+		flushtag:	fn(pf: self ref Progressfid, tag: int): int;
+	};
+
+	Peerfid: adt {
+		fid:	int;
+		r:	list of ref Styx->Tmsg.Read;
+		last:	ref Peerevent;
+
+		new:		fn(fid: int): ref Peerfid;
+		putread:	fn(pf: self ref Peerfid, r: ref Styx->Tmsg.Read);
+		read:		fn(pf: self ref Peerfid): ref Styx->Rmsg.Read;
+		flushtag:	fn(pf: self ref Peerfid, tag: int): int;
+	};
+
+	Schoking, Sunchoking, Sinterested, Suninterested: con iota;
+	Slocal, Sremote: con iota<<2;
+	Peerevent: adt {
+		next:	cyclic ref Peerevent;
+		pick {
+		Nil =>	
+		Endofstate =>
+		Dialing =>
+			addr:	string;
+		Tracker =>
+			addr:	string;
+		New or
+		Gone =>
+			addr:	string;
+			id:	int;
+			peeridhex:	string;
+			dialed:	int;
+		Bad =>
+			addr:	string;
+			mtime:	int;
+		State =>
+			id:	int;
+			s:	int;
+		Piece =>
+			id:	int;
+			piece:	int;
+		Pieces =>
+			id:	int;
+			pieces:	list of int;
+		Done =>
+			id:	int;
+		}
+
+		text:	fn(pp: self ref Peerevent): string;
+	};
 };
