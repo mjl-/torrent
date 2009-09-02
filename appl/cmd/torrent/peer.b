@@ -56,6 +56,7 @@ peeripmap,					# peer.id
 peeraddrmap:	ref Tables->Strhash[ref Peer];  # newpeer.addr
 peeridmap:	ref Tables->Table[ref Peer];	# newpeer.ip
 peersdialed:	int;
+peersseeding:	int;
 luckypeer:	ref Peer;
 
 torrentpath:	string;
@@ -70,8 +71,10 @@ trafficdown,
 trafficmetaup,
 trafficmetadown:	ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
 maxratio	:= 0.0;
-maxdownload	:= big -1;
-maxupload	:= big -1;
+maxdownrate	:= big -1;
+maxuprate	:= big -1;
+maxdowntotal	:= big -1;
+maxuptotal	:= big -1;
 ip4mask,
 ip6mask:	IPaddr;
 
@@ -137,14 +140,15 @@ progresslast:	ref List[ref Progress];
 progressfids:	ref Table[ref Eventfid[ref Progress]];
 peereventlast:	ref List[ref Peerevent];
 peerfids:	ref Table[ref Eventfid[ref Peerevent]];
-
+trackereventlast: ref Progress.Tracker;
+nexttrack:	int;
 
 Qroot, Qctl, Qinfo, Qstate, Qfiles, Qprogress, Qpeerevents, Qpeers, Qpeerstracker, Qpeersbad: con iota;
 Qfirst:	con Qctl;
 Qlast:	con Qpeersbad;
 tab := array[] of {
 	(Qroot,		".",		Sys->DMDIR|8r555),
-	(Qctl,		"ctl",		8r222),
+	(Qctl,		"ctl",		8r666),
 	(Qinfo,		"info",		8r444),
 	(Qstate,	"state",	8r444),
 	(Qfiles,	"files",	8r444),
@@ -200,7 +204,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP, nil);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-dn] [-m ratio] [-D maxdownload] [-U maxupload] torrentfile");
+	arg->setusage(arg->progname()+" [-dn] [-m ratio] [-r maxuprate] [-R maxdownrate] [-t maxuptotal] [-T maxdowntotal] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'd' =>	bt->dflag = btp->dflag = dflag++;
@@ -208,12 +212,18 @@ init(nil: ref Draw->Context, args: list of string)
 		'm' =>	maxratio = real arg->earg();
 			if(maxratio <= 1.1)
 				fail("invalid maximum ratio");
-		'D' =>	maxdownload = sizeparse(arg->earg());
-			if(maxdownload < big 0)
-				fail("invalid maximum download rate");
-		'U' =>	maxupload = sizeparse(arg->earg());
-			if(maxupload < big (10*1024))
-				fail("invalid maximum upload rate");
+		'r' =>	maxuprate = sizeparse(arg->earg());
+			if(maxuprate < big (10*1024))
+				fail("invalid maximum uprate rate");
+		'R' =>	maxdownrate = sizeparse(arg->earg());
+			if(maxdownrate < big 0)
+				fail("invalid maximum downrate rate");
+		't' =>	maxuptotal = sizeparse(arg->earg());
+			if(maxuptotal < big (10*1024))
+				fail("invalid maximum uptotal total");
+		'T' =>	maxdowntotal = sizeparse(arg->earg());
+			if(maxdowntotal < big 0)
+				fail("invalid maximum downtotal total");
 		* =>
 			arg->usage();
 		}
@@ -278,6 +288,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	totalleft = state.t.length-big state.piecehave.have*big state.t.piecelen;
+	if(state.piecehave.get(state.t.piececount-1))
+		totalleft -= big (state.t.piecelen-state.t.piecelength(state.t.piececount-1));
 	localpeerid = bt->genpeerid();
 	localpeeridhex = hex(localpeerid);
 
@@ -327,8 +339,8 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn listener(conn);
 	spawn ticker();
 	spawn track();
-	spawn limiter(upc, int maxupload);
-	spawn limiter(downc, int maxdownload);
+	spawn limiter(upc, int maxuprate);
+	spawn limiter(downc, int maxdownrate);
 	spawn diskwriter(diskwritec);
 
 	time0 = daytime->now();
@@ -371,7 +383,21 @@ dostyx(mm: ref Tmsg)
 
 		case q {
 		Qctl =>
-			raise "bad mode";
+			if(m.offset == big 0) {
+				s := "";
+				s += sprint("listenport %d\n", listenport);
+				s += sprint("localpeerid %s\n", localpeeridhex);
+				s += sprint("maxratio %.2f\n", maxratio);
+				s += sprint("maxuprate %bd\n", maxuprate);
+				s += sprint("maxdownrate %bd\n", maxdownrate);
+				s += sprint("maxuptotal %bd\n", maxuptotal);
+				s += sprint("maxdowntotal %bd\n", maxdowntotal);
+				s += sprint("debugpeer %d\n", dflag);
+				s += sprint("debuglib %d\n", bt->dflag);
+				s += sprint("debugpeerlib %d\n", btp->dflag);
+				fid.data = array of byte s;
+			}
+			srv.reply(styxservers->readbytes(m, fid.data));
 		Qinfo =>
 			if(m.offset == big 0) {
 				t := state.t;
@@ -390,17 +416,15 @@ dostyx(mm: ref Tmsg)
 			if(m.offset == big 0) {
 				s := "";
 				s += sprint("stopped %d\n", stopped);
-				s += sprint("listenport %d\n", listenport);
-				s += sprint("localpeerid %s\n", localpeeridhex);
-				s += sprint("maxratio %.2f\n", maxratio);
-				s += sprint("maxupload %bd\n", maxupload);
-				s += sprint("maxdownload %bd\n", maxdownload);
 				s += sprint("totalleft %bd\n", totalleft);
 				s += sprint("totalup %bd\n", trafficup.total());
 				s += sprint("totaldown %bd\n", trafficdown.total());
 				s += sprint("rateup %d\n", trafficup.rate());
 				s += sprint("ratedown %d\n", trafficdown.rate());
 				s += sprint("eta %d\n", eta());
+				s += sprint("peers %d\n", len peers);
+				s += sprint("seeds %d\n", peersseeding);
+				s += sprint("trackerpeers %d\n", len newpeers.all());
 				fid.data = array of byte s;
 			}
 			srv.reply(styxservers->readbytes(m, fid.data));
@@ -467,46 +491,15 @@ dostyx(mm: ref Tmsg)
 		Qroot =>
 			raise "should not happen";
 		Qctl =>
-			s := string m.data;
-			if(s != nil && s[len s-1] == '\n')
-				s = s[:len s-1];
-			l := str->unquoted(s);
-			if(l == nil)
-				return replyerror(m, "missing command");
-			cmd := hd l;
-			l = tl l;
-			case cmd {
-			"stop" =>
-				return replyerror(m, "xxx implement");
-				if(!stopped)
-					stop();
-			"start" =>
-				return replyerror(m, "xxx implement");
-				if(stopped)
-					return replyerror(m, "xxx implement");
-			"disconnect" =>
-				if(len l != 1 || hd l == nil || str->toint(hd l, 10).t1 != nil)
-					return replyerror(m, styxservers->Ebadarg);
-				id := str->toint(hd l, 10).t0;
-				p := peeridmap.find(id);
-				if(p == nil)
-					return replyerror(m, "no such peer");
-				peerdrop(p, 0, nil);
-			"track" =>
-				spawn trackkick(0);
-			* =>
-				return replyerror(m, sprint("bad command %#q", cmd));
-			}
-			srv.reply(ref Rmsg.Write (m.tag, len m.data));
-			return;
+			return ctl(m);
 		}
 
 	Flush =>
 		for(l := tablist(progressfids); l != nil; l = tl l)
-			if((hd l).flushtag(m.tag))
+			if((hd l).flushtag(m.oldtag))
 				return srv.default(mm);
 		for(ll := tablist(peerfids); ll != nil; ll = tl ll)
-			if((hd ll).flushtag(m.tag))
+			if((hd ll).flushtag(m.oldtag))
 				return srv.default(mm);
 
 	Clunk or
@@ -525,6 +518,88 @@ dostyx(mm: ref Tmsg)
 		}
 	}
 	srv.default(mm);
+}
+
+commands0 := array[] of {"stop", "start", "track"};
+commands1 := array[] of {"disconnect", "debug", "maxratio", "maxdowntotal", "maxuptotal", "maxdownrate", "maxuprate"};
+ctl(m: ref Tmsg.Write)
+{
+	s := string m.data;
+	if(s != nil && s[len s-1] == '\n')
+		s = s[:len s-1];
+	l := str->unquoted(s);
+	if(l == nil)
+		return replyerror(m, "missing command");
+	cmd := hd l;
+	l = tl l;
+
+	ok := 0;
+	for(i := 0; !ok && i < len commands0; i++)
+		if(commands0[i] == cmd) {
+			if(len l != 0)
+				return replyerror(m, styxservers->Ebadarg);
+			ok = 1;
+		}
+	for(i = 0; !ok && i < len commands1; i++)
+		if(commands1[i] == cmd) {
+			if(len l != 1)
+				return replyerror(m, styxservers->Ebadarg);
+			ok = 1;
+		}
+	if(!ok)
+		return replyerror(m, "unknown command");
+
+	case cmd {
+	"stop" =>
+		return replyerror(m, "xxx implement");
+		if(!stopped)
+			stop();
+	"start" =>
+		return replyerror(m, "xxx implement");
+		if(stopped)
+			return replyerror(m, "xxx implement");
+	"disconnect" =>
+		(id, rem) := str->toint(hd l, 10);
+		if(rem != nil)
+			return replyerror(m, styxservers->Ebadarg);
+		p := peeridmap.find(id);
+		if(p == nil)
+			return replyerror(m, "no such peer");
+		peerdrop(p, 0, nil);
+	"track" =>
+		spawn trackkick(0);
+	"debug" =>
+		case hd l {
+		"peer" =>	dflag = !dflag;
+		"lib" =>	bt->dflag = !bt->dflag;
+		"peerlib" =>	btp->dflag = !btp->dflag;
+		}
+		putprogress(ref Progress.Newctl);
+	"maxratio" =>
+		(v, rem) := str->toreal(hd l, 10);
+		if(rem != nil || v <= 1.1)
+			return replyerror(m, styxservers->Ebadarg);
+		maxratio = v; # xxx might want to immediately rethink whether we want to stop
+		putprogress(ref Progress.Newctl);
+	"maxdowntotal" or
+	"maxuptotal" or
+	"maxdownrate" or
+	"maxuprate" =>
+		v := sizeparse(hd l);
+		if(v < big 0)
+			return replyerror(m, styxservers->Ebadarg);
+		case cmd {
+		"maxdowntotal" =>	maxdowntotal = v;
+		"maxuptotal" =>		maxuptotal = v;
+		"maxdownrate" =>	maxdownrate = v;
+		"maxuprate" =>		maxuprate = v;
+		}
+		putprogress(ref Progress.Newctl);
+	* =>
+		raise "missing case";
+	}
+	srv.reply(ref Rmsg.Write (m.tag, len m.data));
+	return;
 }
 
 putlist[T](fids: ref Table[ref Eventfid[T]], last: ref List[T], e: T): ref List[T]
@@ -587,6 +662,12 @@ putprogressstate(l: ref List[ref Progress])
 			l = next(l, ref Progress.Filedone (f.index, f.path, f.f.path));
 		}
 	}
+	t := trackereventlast;
+	if(t == nil)
+		t = ref Progress.Tracker (-1, -1, -1, nil);
+	t.next = nexttrack-daytime->now();
+	l = next(l, t);
+	l = next(l, ref Progress.Endofstate);
 	l.next = progresslast.next;
 }
 
@@ -602,15 +683,8 @@ putpeerstate(l: ref List[ref Peerevent])
 		if(p.isdone())
 			l = next(l, ref Peerevent.Done (p.id));
 		else if(p.piecehave.have != 0) {
-			lp := p.piecehave.all();
-			while(lp != nil) {
-				r: list of int;
-				for(i := 0; i < 20 && lp != nil; i++) {
-					r = hd lp::r;
-					lp = tl lp;
-				}
-				l = next(l, ref Peerevent.Pieces (p.id, r));
-			}
+			for(ll := peereventpieces(p.id, p.piecehave.all()); ll != nil; ll = tl ll)
+				l = next(l, hd ll);
 		}
 		if(p.localchoking())
 			l = next(l, ref Peerevent.State (p.id, Slocal|Schoking));
@@ -623,6 +697,20 @@ putpeerstate(l: ref List[ref Peerevent])
 	}
 	l = next(l, ref Peerevent.Endofstate);
 	l.next = peereventlast.next;
+}
+
+peereventpieces(id: int, lp: list of int): list of ref Peerevent.Pieces
+{
+	l: list of ref Peerevent.Pieces;
+	while(lp != nil) {
+		r: list of int;
+		for(i := 0; i < 20 && lp != nil; i++) {
+			r = hd lp::r;
+			lp = tl lp;
+		}
+		l = ref Peerevent.Pieces (id, r)::l;
+	}
+	return l;
 }
 
 chokestr(choked: int): string
@@ -813,6 +901,9 @@ peerdel(p: ref Peer)
 	peeraddrmap.del(p.np.addr);
 	if(p.dialed)
 		peersdialed--;
+	if(p.isdone())
+		peersseeding--;
+	putevent(ref Peerevent.Gone (p.id));
 }
 
 peersactive(): int
@@ -1291,10 +1382,11 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 		} else {
 			state.piececounts[m.index]++;
 			putevent(ref Peerevent.Piece (peer.id, m.index));
+			say(sprint("remote now has piece %d", m.index));
+			peer.piecehave.set(m.index);
+			if(peer.isdone())
+				peersseeding++;
 		}
-
-		say(sprint("remote now has piece %d", m.index));
-		peer.piecehave.set(m.index);
 
 		interesting(peer);
 		if(!peer.remotechoking())
@@ -1317,6 +1409,13 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 				state.piececounts[i]++;
 				n++;
 			}
+
+		if(peer.isdone()) {
+			putevent(ref Peerevent.Done (peer.id));
+			peersseeding++;
+		} else
+			for(l := peereventpieces(peer.id, peer.piecehave.all()); l != nil; l = tl l)
+				putevent(hd l);
 
 		interesting(peer);
 
@@ -1384,7 +1483,6 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 
 		piece.have.set(blockindex);
 		piece.done[blockindex] = peer.id;
-		totalleft -= big len m.d;
 		putprogress(ref Progress.Block (piece.index, blockindex, piece.have.have, piece.have.n));
 
 		if(piece.isdone()) {
@@ -1496,14 +1594,25 @@ main0()
 		}
 
 	(interval, nps, trackerr) := <-trackc =>
-		if(trackerr != nil) {
-			warn(sprint("tracker error: %s", trackerr));
-			putprogress(ref Progress.Tracker (interval, 0, trackerr));
-			return;
-		}
+		# schedule next call to tracker
+		if(interval < Intervalmin)
+			interval = Intervalmin;
+		if(interval > Intervalmax)
+			interval = Intervalmax;
+		now := daytime->now();
+		if(now < time0+Intervalstartupperiod && !isdone() && len peers+len newpeers.all() < Peersmax && interval > Intervalneed)
+			interval = Intervalneed;
+
+		say(sprint("next call to tracker will be in %d seconds", interval));
+		spawn trackkick(interval);
+		nexttrack = now+interval;
+		trackereventlast = ref Progress.Tracker (interval, interval, len nps, trackerr);
+		putprogress(trackereventlast);
+
+		if(trackerr != nil)
+			return warn(sprint("tracker error: %s", trackerr));
 
 		say("main, new peers");
-		putprogress(ref Progress.Tracker (interval, len nps, nil));
 		for(i := 0; i < len nps; i++) {
 			(ip, port, peerid) := nps[i];
 			if(hex(peerid) == localpeeridhex)
@@ -1518,17 +1627,6 @@ main0()
 				say("already connected to "+np.text());
 		}
 		dialpeers();
-
-		# schedule next call to tracker
-		if(interval < Intervalmin)
-			interval = Intervalmin;
-		if(interval > Intervalmax)
-			interval = Intervalmax;
-		if(daytime->now() < time0+Intervalstartupperiod && !isdone() && len peers+len newpeers.all() < Peersmax && interval > Intervalneed)
-			interval = Intervalneed;
-
-		say(sprint("next call to tracker will be in %d seconds", interval));
-		spawn trackkick(interval);
 
 	(dialed, np, peerfd, extensions, peerid, err) := <-newpeerc =>
 		if(!dialed)
@@ -1557,6 +1655,8 @@ main0()
 		peeraddrmap.add(peer.np.addr, peer);
 		if(peer.dialed)
 			peersdialed++;
+		if(peer.isdone())
+			peersseeding++;
 
 		say("new peer "+peer.fulltext());
 		putevent(ref Peerevent.New (peer.np.addr, peer.id, peer.peeridhex, peer.dialed));
@@ -1629,6 +1729,7 @@ main0()
 			return;
 		}
 
+		totalleft -= big state.t.piecelength(piece.index);
 		state.piecehave.set(piece.index);
 		state.pieces.del(piece.index);
 		putprogress(ref Progress.Piece (piece.index, state.piecehave.have, state.piecehave.n));

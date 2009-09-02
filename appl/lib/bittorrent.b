@@ -897,6 +897,8 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
 	(url, uerr) := Url.unpack(t.announce);
 	if(uerr != nil)
 		return (0, nil, nil, "parsing announce url: "+uerr);
+	if(left < big 0)
+		return (0, nil, nil, sprint("bogus negative 'left' %bd", left));
 
 	s := "";
 	s += "&info_hash="+encode(t.infohash);

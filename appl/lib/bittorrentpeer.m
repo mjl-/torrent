@@ -209,10 +209,11 @@ Bittorrentpeer: module
 
 	Progress: adt {
 		pick {
-		Nil or
+		Endofstate or
 		Done or
 		Started or
-		Stopped =>
+		Stopped or
+		Newctl =>
 		Piece =>
 			p,
 			have,
@@ -232,7 +233,8 @@ Bittorrentpeer: module
 			path,
 			origpath:	string;
 		Tracker =>
-			interval:	int;
+			interval,
+			next,
 			npeers:	int;
 			err:	string;
 		}
@@ -244,18 +246,18 @@ Bittorrentpeer: module
 	Slocal, Sremote: con iota<<2;
 	Peerevent: adt {
 		pick {
-		Nil =>	
 		Endofstate =>
 		Dialing =>
 			addr:	string;
 		Tracker =>
 			addr:	string;
-		New or
-		Gone =>
+		New =>
 			addr:	string;
 			id:	int;
 			peeridhex:	string;
 			dialed:	int;
+		Gone =>
+			id:	int;
 		Bad =>
 			addr:	string;
 			mtime:	int;

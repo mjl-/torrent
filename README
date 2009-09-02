@@ -40,15 +40,12 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 # todo
 
 - remove the premature optimisations
-- replace the peer* functions in bittorrentpeer by a Peers adt that holds all that info?
 - explain the design better
 
 
 ## wm/torrent: 
 
-- show percentage left, or done, in state view too.  perhaps make state view more compact?
-- somehow show when next tracker request is due, how many newpeers we have
-- add horizontal scroll in peers view.
+- available bar is not smoothly filled
 - figure out how to fill the panel with the bars (and thus bars themselves) in x direction
 - catch resizes and recreate the bars with new width.
 - merge the state & info grids, so they have same widths?
@@ -61,12 +58,15 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- peer down/up speed in Qpeers is always 0...
-- we don't seem to dial other peers after the first?
+- totalleft still becomes negative.  we are probably refetching blocks.  perhaps we don't verify correctly, or mess up writing?
+- peer down/up speed in Qpeers is always 0...  something is wrong with traffic accounting.
 - make eta fluctuate far less.  the bandwidth can be up to date, the eta should lag a bit, to give slower changes
+- don't keep doing tracker requests every 10 seconds.  even during startup it is too much.  we should start at 30, then back off to tracker's interval.
+- we don't seem to dial other peers after the first?
 - after having had a peer/seed, but no longer, do a tracker request before interval.  not too often though.
 - only set "have" for piece when we've written it to disk?  otherwise we might read it from disk (and send it to a peer) before having written it.
 - lots of testing
+- for unused peers from tracker, make difference between new ip's and known ip's (current peers, bad peers).
 - put more in progress/peerevents, such as errors (eg errors when writing to disk).
 - perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
 - allow starting after being stopped.  implement start ctl.
@@ -77,5 +77,5 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 ## torrent/track
 
 - make search for a peer (given ip & port) less inefficient.
-- torrent/track: might add scraping.
-- torrent/track: might be a bit smarter about which peers to send to a peer.  e.g. not itself, make randomizing cheaper, let peers that are done (left=0) not connect to each other.
+- might add scraping.
+- might be a bit smarter about which peers to send to a peer.  e.g. not itself, make randomizing cheaper, let peers that are done (left=0) not connect to each other.

@@ -788,16 +788,17 @@ Pool[T].text(p: self ref Pool): string
 
 
 progresstags := array[] of {
-"", "done", "started", "stopped", "piece", "block", "pieces", "blocks", "filedone", "tracker",
+"endofstate", "done", "started", "stopped", "newctl", "piece", "block", "pieces", "blocks", "filedone", "tracker",
 };
 Progress.text(pp: self ref Progress): string
 {
 	s := progresstags[tagof pp];
 	pick p := pp {
-	Nil or
+	Endofstate or
 	Done or
 	Started or
-	Stopped =>	;
+	Stopped or
+	Newctl =>	;
 	Piece =>	s += sprint(" %d %d %d", p.p, p.have, p.total);
 	Block =>	s += sprint(" %d %d %d %d", p.p, p.b, p.have, p.total);
 	Pieces =>	for(l := p.l; l != nil; l = tl l)
@@ -806,14 +807,14 @@ Progress.text(pp: self ref Progress): string
 			for(l := p.l; l != nil; l = tl l)
 				s += " "+string hd l;
 	Filedone =>	s += sprint(" %d %q %q", p.index, p.path, p.origpath);
-	Tracker =>	s += sprint(" %d %d %q", p.interval, p.npeers, p.err);
+	Tracker =>	s += sprint(" %d %d %d %q", p.interval, p.next, p.npeers, p.err);
 	* =>	raise "missing case";
 	}
 	return s;
 }
 
 peereventtags := array[] of {
-"", "endofstate", "dialing", "tracker", "new", "gone", "bad", "state", "piece", "pieces", "done",
+"endofstate", "dialing", "tracker", "new", "gone", "bad", "state", "piece", "pieces", "done",
 };
 eventstatestr0 := array[] of {"local", "remote"};
 eventstatestr1 := array[] of {"choking", "unchoking", "interested", "uninterested"};
@@ -821,12 +822,11 @@ Peerevent.text(pp: self ref Peerevent): string
 {
 	s := peereventtags[tagof pp];
 	pick p := pp {
-	Nil or
 	Endofstate =>	;
 	Dialing =>	s += sprint(" %q", p.addr);
 	Tracker =>	s += sprint(" %q", p.addr);
-	New or 
-	Gone =>		s += sprint(" %q %d %s %d", p.addr, p.id, p.peeridhex, p.dialed);
+	New =>		s += sprint(" %q %d %s %d", p.addr, p.id, p.peeridhex, p.dialed);
+	Gone =>		s += sprint(" %d", p.id);
 	Bad =>		s += sprint(" %q %d", p.addr, p.mtime);
 	State =>	s += sprint(" %d %s %s", p.id, eventstatestr0[p.s>>2], eventstatestr1[p.s&3]);
 	Piece => 	s += sprint(" %d %d", p.id, p.piece);

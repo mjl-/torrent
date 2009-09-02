@@ -10,6 +10,8 @@ include "arg.m";
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
+include "daytime.m";
+	daytime: Daytime;
 include "string.m";
 	str: String;
 include "rand.m";
@@ -26,7 +28,7 @@ include "tables.m";
 	Table: import tables;
 include "util0.m";
 	util: Util0;
-	warn, pid, kill, killgrp, unhex, writefile, rev, l2a, sizefmt: import util;
+	warn, pid, kill, killgrp, max, min, unhex, writefile, rev, l2a, sizefmt: import util;
 
 WmTorrent: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -53,18 +55,29 @@ Info: adt {
 
 State: adt {
 	stopped:	int;
-	listenport:	int;
-	localpeerid,
-	localpeeridhex:	string;
-	maxratio:	real;
-	maxup,
-	maxdown:	big;
 	up,
 	down,
 	left:	big;
 	upr,
 	downr:	int;
 	eta:	int;
+	npeers,
+	nseeds,
+	ntrackerpeers:	int;
+};
+
+Config: adt {
+	listenport:	int;
+	localpeerid,
+	localpeeridhex:	string;
+	maxratio:	real;
+	maxuprate,
+	maxdownrate,
+	maxuptotal,
+	maxdowntotal:	big;
+	debugpeer,
+	debuglib,
+	debugpeerlib:	int;
 };
 
 Prog: adt {
@@ -99,7 +112,8 @@ Badpeer: adt {
 };
 
 Tracker: adt {
-	interval:	int;
+	interval,
+	next,
 	npeers:	int;
 	err:	string;
 };
@@ -112,13 +126,13 @@ Bar: adt {
 	filli:	ref Image;
 	fill:	int;
 	div:	int;	# number of pieces that is full fill color
+	pixelscale:	real;
 };
 
 Stateinterval: con 3*1000;
 Peerinterval: con 5*1000;
 
 peers: ref Table[ref Peer];
-npeers, nseeds: int;
 badpeers: list of ref Badpeer;
 
 dflag: int;
@@ -129,9 +143,16 @@ mtpt: string;
 
 info: ref Info;
 state: ref State;
+config: ref Config;
+
 statefd: ref Sys->FD;
 statepid := -1;
 statec: chan of ref State;
+
+ctlfd: ref Sys->FD;
+newconfigc: chan of int;
+configc: chan of ref Config;
+
 prog: ref Prog;
 peersfd: ref Sys->FD;
 peerspid := -1;
@@ -160,11 +181,13 @@ tkcmds0 := array[] of {
 "frame .v", # view
 
 "frame .v.m",	# main
-"canvas .v.m.c -yscrollcommand {.v.m.scroll set}",
-"scrollbar .v.m.scroll -command {.v.m.c yview}",
+"canvas .v.m.c -yscrollcommand {.v.m.yscroll set} -xscrollcommand {.v.m.xscroll set}",
+"scrollbar .v.m.yscroll -command {.v.m.c yview}",
+"scrollbar .v.m.xscroll -orient horizontal -command {.v.m.c xview}",
 "frame .v.m.c.m",
 ".v.m.c create window 0 0 -window .v.m.c.m -anchor nw",
-"pack .v.m.scroll -side left -fill y",
+"pack .v.m.yscroll -side left -fill y",
+"pack .v.m.xscroll -side bottom -fill x",
 "frame .v.m.c.m.p -borderwidth 5",	# pieces
 "label .v.m.c.m.p.lhave -text have:",
 "label .v.m.c.m.p.lavail -text avail:",
@@ -176,15 +199,22 @@ tkcmds0 := array[] of {
 "grid .v.m.c.m.p.avail -row 1 -column 1 -sticky we -pady 2 -padx 10",
 "frame .v.m.c.m.s -borderwidth 5",	# state
 "frame .v.m.c.m.s.ctl",
-"button .v.m.c.m.s.ctl.start -text start -command {send cmd start}",
-"button .v.m.c.m.s.ctl.stop -text stop -command {send cmd stop}",
-"button .v.m.c.m.s.ctl.track -text track -command {send cmd track}",
+"button .v.m.c.m.s.ctl.start -text start -command {send cmd ctl start}",
+"button .v.m.c.m.s.ctl.stop -text stop -command {send cmd ctl stop}",
+"button .v.m.c.m.s.ctl.track -text track -command {send cmd ctl track}",
+"label .v.m.c.m.s.ctl.ldebug -text debug:",
+"button .v.m.c.m.s.ctl.dpeer -text peer -command {send cmd ctl debug peer}",
+"button .v.m.c.m.s.ctl.dlib -text lib -command {send cmd ctl debug lib}",
+"button .v.m.c.m.s.ctl.dpeerlib -text peerlib -command {send cmd ctl debug peerlib}",
 "label .v.m.c.m.s.ctl.error",
-"pack .v.m.c.m.s.ctl.start .v.m.c.m.s.ctl.stop .v.m.c.m.s.ctl.track .v.m.c.m.s.ctl.error -side left -anchor w",
+"pack .v.m.c.m.s.ctl.start .v.m.c.m.s.ctl.stop .v.m.c.m.s.ctl.track .v.m.c.m.s.ctl.error .v.m.c.m.s.ctl.ldebug .v.m.c.m.s.ctl.dpeer .v.m.c.m.s.ctl.dlib .v.m.c.m.s.ctl.dpeerlib -side left -anchor w",
 "frame .v.m.c.m.s.g",
 "pack .v.m.c.m.s.ctl .v.m.c.m.s.g -anchor w",
+"frame .v.m.c.m.c -borderwidth 5",	# config
+"frame .v.m.c.m.c.g",
+"pack .v.m.c.m.c.g -anchor w",
 "frame .v.m.c.m.i -borderwidth 5",	# info
-"pack .v.m.c.m.p .v.m.c.m.s .v.m.c.m.i -anchor w",
+"pack .v.m.c.m.p .v.m.c.m.s .v.m.c.m.c .v.m.c.m.i -anchor w",
 "pack .v.m.c -anchor w -fill both -expand 1",
 
 "frame .v.f -bg blue",	# files
@@ -194,27 +224,33 @@ tkcmds0 := array[] of {
 "frame .v.l",	# peerlog
 
 # files
-"canvas .v.f.c -yscrollcommand {.v.f.scroll set}",
+"canvas .v.f.c -yscrollcommand {.v.f.yscroll set} -xscrollcommand {.v.f.xscroll set}",
 "frame .v.f.c.g",
 ".v.f.c create window 0 0 -window .v.f.c.g -anchor nw",
-"scrollbar .v.f.scroll -command {.v.f.c yview}",
-"pack .v.f.scroll -side left -fill y",
+"scrollbar .v.f.yscroll -command {.v.f.c yview}",
+"scrollbar .v.f.xscroll -orient horizontal -command {.v.f.c xview}",
+"pack .v.f.yscroll -side left -fill y",
+"pack .v.f.xscroll -side bottom -fill x",
 "pack .v.f.c -fill both -expand 1",
 
 # peers
-"canvas .v.p.c -yscrollcommand {.v.p.scroll set}",
+"canvas .v.p.c -yscrollcommand {.v.p.yscroll set} -xscrollcommand {.v.p.xscroll set}",
 "frame .v.p.c.g",
 ".v.p.c create window 0 0 -window .v.p.c.g -anchor nw",
-"scrollbar .v.p.scroll -command {.v.p.c yview}",
-"pack .v.p.scroll -side left -fill y",
+"scrollbar .v.p.yscroll -command {.v.p.c yview}",
+"scrollbar .v.p.xscroll -orient horizontal -command {.v.p.c xview}",
+"pack .v.p.yscroll -side left -fill y",
+"pack .v.p.xscroll -side bottom -fill x",
 "pack .v.p.c -fill both -expand 1",
 
 # badpeers
-"canvas .v.b.c -yscrollcommand {.v.b.scroll set}",
+"canvas .v.b.c -yscrollcommand {.v.b.yscroll set} -xscrollcommand {.v.b.xscroll set}",
 "frame .v.b.c.g",
 ".v.b.c create window 0 0 -window .v.b.c.g -anchor nw",
-"scrollbar .v.b.scroll -command {.v.b.c yview}",
-"pack .v.b.scroll -side left -fill y",
+"scrollbar .v.b.yscroll -command {.v.b.c yview}",
+"scrollbar .v.b.xscroll -orient horizontal -command {.v.b.c xview}",
+"pack .v.b.yscroll -side left -fill y",
+"pack .v.b.xscroll -side bottom -fill x",
 "pack .v.b.c -fill both -expand 1",
 
 # torrentlog
@@ -243,6 +279,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	draw = load Draw Draw->PATH;
 	arg := load Arg Arg->PATH;
 	bufio = load Bufio Bufio->PATH;
+	daytime = load Daytime Daytime->PATH;
 	str = load String String->PATH;
 	rand = load Rand Rand->PATH;
 	tk = load Tk Tk->PATH;
@@ -273,13 +310,15 @@ init(ctxt: ref Draw->Context, args: list of string)
 	tkcmdc := chan of string;
 	tk->namechan(top, tkcmdc, "cmd");
 	tkcmds(tkcmds0);
-	setscrollregion(".v.m.c", ".v.m.c.m");
 
 	peers = peers.new(32, nil);
 	info = readinfo();
 	statefd = sys->open(mtpt+"/state", Sys->OREAD);
 	if(statefd == nil)
 		fail(sprint("open state: %r"));
+	ctlfd = sys->open(mtpt+"/ctl", Sys->ORDWR);
+	if(ctlfd == nil)
+		fail(sprint("open ctl: %r"));
 	peersfd = sys->open(mtpt+"/peers", Sys->OREAD);
 	if(peersfd == nil)
 		fail(sprint("open peers: %r"));
@@ -304,15 +343,22 @@ init(ctxt: ref Draw->Context, args: list of string)
 	tkclient->startinput(top, "kbd"::"ptr"::nil);
 
 	disp = ctxt.display;
-	havebar = ref Bar (".v.m.c.m.p.have", array[info.npieces] of {* => 0}, nil, nil, disp.color(Draw->Blue), Draw->Blue, 1);
+	havebar = ref Bar (".v.m.c.m.p.have", array[info.npieces] of {* => 0}, nil, nil, disp.color(Draw->Blue), Draw->Blue, 1, 0.0);
 	barinit(havebar);
-	availbar = ref Bar (".v.m.c.m.p.avail", array[info.npieces] of {* => 0}, nil, nil, disp.color(Draw->Green), Draw->Green, 5);
+	availbar = ref Bar (".v.m.c.m.p.avail", array[info.npieces] of {* => 0}, nil, nil, disp.color(Draw->Green), Draw->Green, 5, 0.0);
 	barinit(availbar);
+
+	config = readconfig();
+	setconfig();
 
 	state = readstate();
 	statec = chan of ref State;
 	spawn readstates(pidc := chan of int);
 	statepid = <-pidc;
+
+	newconfigc = chan of int;
+	configc = chan of ref Config;
+	spawn readconfigs();
 
 	peersc = chan of list of (int, Peercount);
 
@@ -342,7 +388,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	s := <-statec =>
 		state = s;
-		setmain();
+		setstate();
 		tkcmd("update");
 
 	l := <-peersc =>
@@ -366,10 +412,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 			redraw = progressword(t) || redraw;
 		}
 		if(redraw) {
-			setmain();
+			setstate();
 			setfiles();
 		}
 		tkcmd("update");
+
+	cfg := <-configc =>
+		config = cfg;
+		setconfig();
 
 	l := <-peereventsc =>
 		redraw := 0;
@@ -381,14 +431,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 			redraw = peerword(t) || redraw;
 		}
 		if(redraw) {
-			setmain();
+			setstate();
 			setpeers();
 		}
 		tkcmd("update");
 	}
 }
 
-setmain()
+setstate()
 {
 	if(view != Vmain)
 		return;
@@ -396,21 +446,52 @@ setmain()
 	s := state;
 	stategrid := list of {
 	l2("stopped",		string s.stopped),
-	l2("listen port",	string s.listenport),
-	l2("local peerid",	s.localpeerid),
-	l2("max ratio",		sprint("%.2f", s.maxratio)),
-	l2("max up",		infsizefmt(s.maxup)),
-	l2("max down",		infsizefmt(s.maxdown)),
-	l2("up",		sizefmt(s.up)),
-	l2("down",		sizefmt(s.down)),
-	l2("left",		sizefmt(s.left)),
-	l2("up rate",		sizefmt(big s.upr)+"/s"),
-	l2("down rate",		sizefmt(big s.downr)+"/s"),
 	l2("eta",		etastr(s.eta)),
-	l2("peers",		sprint("%d peers, of which %d seeds", npeers, nseeds)),
-	l2("last tracker",	trackerstr()),
+	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n)),
+	l2("total",		sprint("%5s   up, %5s   down", sizefmt(s.up), sizefmt(s.down))),
+	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
+	l2("peers",		sprint("%d peer%s, of which %d seed%s;  %d unused tracker address%s", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ntrackerpeers, trailes(s.ntrackerpeers))),
+	l2("tracker",		trackerstr()),
 	};
 	tkgrid(".v.m.c.m.s.g", stategrid);
+	setscrollregion(".v.m.c", ".v.m.c.m");
+}
+
+setconfig()
+{
+	if(view != Vmain)
+		return;
+
+	c := config;
+	configgrid := list of {
+	l2("listen port",	string c.listenport),
+	l2("local peerid",	c.localpeerid),
+	l2("max",		sprint("ratio %s,  rate: up %s, down %s,  total: up %s, down %s", ratiofmt(c.maxratio), infsizefmt(c.maxuprate), infsizefmt(c.maxdownrate), infsizefmt(c.maxuptotal), infsizefmt(c.maxdowntotal))),
+	l2("debug",		sprint("peer %d, lib %d, peerlib %d", c.debugpeer, c.debuglib, c.debugpeerlib)),
+	};
+	tkgrid(".v.m.c.m.c.g", configgrid);
+	setscrollregion(".v.m.c", ".v.m.c.m");
+}
+
+ratiofmt(r: real): string
+{
+	if(r == 0.0)
+		return "∞";
+	return sprint("%.2f", r);
+}
+
+trails(n: int): string
+{
+	if(n == 1)
+		return "";	
+	return "s";
+}
+
+trailes(n: int): string
+{
+	if(n == 1)
+		return "";
+	return "es";
 }
 
 infsizefmt(v: big): string
@@ -425,9 +506,12 @@ trackerstr(): string
 	t := lasttracker;
 	if(t == nil)
 		return "n/a";
+	s := sprint("next in %ds, interval %d, ", max(0, t.next-daytime->now()), t.interval);
 	if(t.err != nil)
-		return sprint("interval %d, %s", t.interval, t.err);
-	return sprint("interval %d, %d peers", t.interval, t.npeers);
+		s += t.err;
+	else
+		s += sprint("%d peers", t.npeers);
+	return s;
 }
 
 readstates(pidc: chan of int)
@@ -436,6 +520,14 @@ readstates(pidc: chan of int)
 	for(;;) {
 		statec <-= readstate();
 		sys->sleep(Stateinterval);
+	}
+}
+
+readconfigs()
+{
+	for(;;) {
+		<-newconfigc;
+		configc <-= readconfig();
 	}
 }
 
@@ -449,19 +541,22 @@ readpeers(pidc: chan of int)
 }
 
 progresswords := array[] of {
+("endofstate",	0),
 ("done",	0),
 ("started",	0),
 ("stopped",	0),
+("newctl",	0),
 ("piece",	3),
 ("block",	4),
 ("pieces",	-1),
 ("blocks",	-2),
 ("filedone",	3),
-("tracker",	3),
+("tracker",	4),
 };
 progressword(t: array of string): int
 {
 	case t[0] {
+	"endofstate" =>	;
 	"done" =>
 		prog.done = 1;
 		prog.pieces.setall();
@@ -472,6 +567,11 @@ progressword(t: array of string): int
 		return 1;
 	"started" =>	prog.started = 1;
 	"stopped" =>	prog.started = 0;
+	"newctl" =>
+		alt {
+		newconfigc <-= 1 =>	;
+		* =>	;
+		}
 	"piece" =>
 		p := getint(t[1]);
 		setfilepiece(p);
@@ -494,7 +594,7 @@ progressword(t: array of string): int
 		setfiles();
 		return 1;
 	"tracker" =>
-		lasttracker = ref Tracker (getint(t[1]), getint(t[2]), t[3]);
+		lasttracker = ref Tracker (getint(t[1]), daytime->now()+getint(t[2]), getint(t[3]), t[4]);
 		return 1;
 	* =>	raise "missing case";
 	}
@@ -519,7 +619,7 @@ peerwords := array[] of {
 ("dialing",	1),
 ("tracker",	1),
 ("new",		4),
-("gone",	4),
+("gone",	1),
 ("bad",		2),
 ("state",	3),
 ("piece",	2),
@@ -539,13 +639,9 @@ peerword(t: array of string): int
 		peerid := peeridfmt(peeridhex);
 		p := ref Peer (t[1], getint(t[2]), peerid, peeridhex, getint(t[4]), 0, Bits.new(info.npieces), 0, (big 0, big 0, 0, 0));
 		peers.add(p.id, p);
-		npeers++;
 		return 1;
 	"gone" =>
-		p := getpeer(getint(t[2]));
-		npeers--;
-		if(p.done)
-			nseeds--;
+		p := getpeer(getint(t[1]));
 		peers.del(p.id);
 
 		# xxx should do this more efficiently
@@ -595,10 +691,14 @@ peerword(t: array of string): int
 		return 1;
 	"done" =>
 		p := getpeer(getint(t[1]));
-		p.done = 1;
-		p.pieces.setall();
-		nseeds++;
-		# note: we should've seen all pieces already, so no need to update availbar
+		if(!p.done) {
+			# we haven't seen anything from peer yet, this is part of state
+			p.done = 1;
+			p.pieces.setall();
+			for(i := 0; i < p.pieces.n; i++)
+				barhave(availbar, i);
+			barflush(availbar);
+		}
 		return 1;
 	* =>	raise "missing case";
 	}
@@ -678,10 +778,8 @@ cmd(s: string)
 	"x" =>
 		setscrollregion(".v.m.c", ".v.m.c.m");
 
-	"start" or
-	"stop" or
-	"track" =>
-		err := writefile(mtpt+"/ctl", 0, array of byte op);
+	"ctl" =>
+		err := writefile(mtpt+"/ctl", 0, array of byte str->quoted(l));
 		tkcmd(".v.m.c.m.s.ctl.error configure -text '"+err);
 		tkcmd("update");
 
@@ -699,7 +797,7 @@ cmd(s: string)
 		tkcmd(sprint("pack .v.%s -anchor w -fill both -expand 1", op[:1]));
 		case view {
 		Vmain =>
-			setmain();
+			setstate();
 			spawn readstates(pidc := chan of int);
 			statepid = <-pidc;
 		Vfiles =>
@@ -768,6 +866,37 @@ readinfo(): ref Info
 	return i;
 }
 
+readconfig(): ref Config
+{
+	sys->seek(ctlfd, big 0, Sys->SEEKSTART);
+	b := bufio->fopen(ctlfd, Bufio->OREAD);
+	if(b == nil)
+		fail(sprint("fopen ctl: %r"));
+	c := ref Config;
+	for(l := readlines0(b); l != nil; l = tl l) {
+		t := l2a(str->unquoted(hd l));
+		if(len t != 2)
+			fail(sprint("bad ctl line, not two tokens: %s", hd l));
+		v := t[1];
+		case t[0] {
+		"listenport" =>		c.listenport = getint(v);
+		"localpeerid" =>
+			c.localpeerid = peeridfmt(v);
+			c.localpeeridhex = v;
+		"maxratio" =>		c.maxratio = getreal(v);
+		"maxuprate" =>		c.maxuprate = getbig(v);
+		"maxdownrate" =>	c.maxdownrate = getbig(v);
+		"maxuptotal" =>		c.maxuptotal = getbig(v);
+		"maxdowntotal" =>	c.maxdowntotal = getbig(v);
+		"debugpeer" =>		c.debugpeer = getint(v);
+		"debuglib" =>		c.debuglib = getint(v);
+		"debugpeerlib" =>	c.debugpeerlib = getint(v);
+		* =>	fail(sprint("unexpected ctl key %q", t[0]));
+		}
+	}
+	return c;
+}
+
 readstate(): ref State
 {
 	sys->seek(statefd, big 0, Sys->SEEKSTART);
@@ -782,19 +911,15 @@ readstate(): ref State
 		v := t[1];
 		case t[0] {
 		"stopped" =>	s.stopped = getint(v);
-		"listenport" =>	s.listenport = getint(v);
-		"localpeerid" =>
-			s.localpeerid = peeridfmt(v);
-			s.localpeeridhex = v;
-		"maxratio" =>	s.maxratio = getreal(v);
-		"maxupload" =>	s.maxup = getbig(v);
-		"maxdownload" =>	s.maxdown = getbig(v);
 		"totalleft" =>	s.left = getbig(v);
 		"totalup" =>	s.up = getbig(v);
 		"totaldown" =>	s.down = getbig(v);
 		"rateup" =>	s.upr = getint(v);
 		"ratedown" =>	s.downr = getint(v);
 		"eta" =>	s.eta = getint(v);
+		"peers" =>	s.npeers = getint(v);
+		"seeds" =>	s.nseeds = getint(v);
+		"trackerpeers" =>	s.ntrackerpeers = getint(v);
 		* =>	fail(sprint("unexpected state key %q", t[0]));
 		}
 	}
@@ -870,19 +995,18 @@ setpeers()
 	if(view != Vpeers)
 		return;
 
-	peergrid := l9("id", "addr", "dir", "rate", "total", "pieces", "remote", "local", "peerid")::nil;
+	peergrid := l8("id", "addr", "dir", "rate", "total", "pieces", " r/l", "peerid")::nil;
 	for(l := peerall(); l != nil; l = tl l) {
 		p := hd l;
 		dir := "in";
 		if(p.dialed)
 			dir = "out";
 		pr := sprint("%3d%%", 100*p.pieces.have/info.npieces);
-		rem := statefmt(p.state>>Remote);
-		loc := statefmt(p.state>>Local);
+		rl := sprint("%-2s/%-2s", statefmt(p.state>>Remote), statefmt(p.state>>Local));
 		c := p.counts;
 		rate := sprint("%s/%s", sizefmt(big c.upr), sizefmt(big c.downr));
 		total := sprint("%s/%s", sizefmt(c.up), sizefmt(c.down));
-		peergrid = l9(string p.id, p.addr, dir, rate, total, pr, rem, loc, peeridfmt(p.peerid))::peergrid;
+		peergrid = l8(string p.id, p.addr, dir, rate, total, pr, rl, peeridfmt(p.peerid))::peergrid;
 	}
 	tkgrid(".v.p.c.g", rev(peergrid));
 	setscrollregion(".v.p.c", ".v.p.c.g");
@@ -905,7 +1029,7 @@ statefmt(v: int): string
 		s += "c";
 	if(v & Interested)
 		s += "i";
-	return sprint("%2s", s);
+	return s;
 }
 
 setbadpeers()
@@ -967,17 +1091,14 @@ barinit(b: ref Bar)
 	y := int tkcmd(sprint("%s cget actheight", b.panel));
 say(sprint("barinit, %d x %d", x, y));
 	b.pixels = array[x-2] of {* => real 0.0};
-	b.i = disp.newimage(Rect((0,0), (x, y)), disp.image.chans, 0, draw->setalpha(Draw->Black, 255*1/3));
+	b.i = disp.newimage(Rect((0,0), (x, y)), disp.image.chans, 0, Draw->White);
 	if(b.i == nil)
 		fail(sprint("newimage: %r"));
-	r := b.i.r;
-	r.min = r.min.add(Point(1,1));
-	r.max = r.max.sub(Point(1,1));
-	b.i.draw(r, disp.white, nil, Point(0,0));
 	err := tk->putimage(top, b.panel, b.i, disp.opaque);
 	if(err != nil)
 		warn("putimage: "+err);
 	tkcmd(sprint("%s dirty; update", b.panel));
+	b.pixelscale = real (x-2)/real info.npieces;
 }
 
 barclear(b: ref Bar)
@@ -1012,20 +1133,19 @@ barhave(b: ref Bar, i: int)
 	end := real x;
 	if(e >= end)
 		e = end-0.0001;
-#say(sprint("have piece, i %d, len b.pixels %d, s %.2f e %.2f int s %d, int e %d", i, len b.pixels, s, e, int s, int e));
+
 	si := int s;
 	if(real si > s && si != 0)
 		si--;
 	ei := int e;
 	if(real ei > e)
 		ei--;
-	b.pixels[si] += real (si+1)-s;
-	b.pixels[ei] += e-real ei;
+	b.pixels[si] += (real (si+1)-s)*b.pixelscale;
+	b.pixels[ei] += (e-real ei)*b.pixelscale;
 
 	for(j := si+1; j < ei; j++)
-		b.pixels[j] += 1.0;
+		b.pixels[j] += b.pixelscale;
 
-#say(sprint("drawing: start %d (%.2f) end %d (%.2f), fill %d-%d", si, b.pixels[si], ei, b.pixels[ei], si+1, ei-1));
 	b.i.draw(Rect((si+1,1), (si+2,y-1)), color(b.fill, b.pixels[si], b.div), nil, ZP);
 	b.i.draw(Rect((ei+1,1), (ei+2,y-1)), color(b.fill, b.pixels[ei], b.div), nil, ZP);
 	if(b.div == 1)
@@ -1046,7 +1166,7 @@ barfill(b: ref Bar)
 color(c: int, r: real, div: int): ref Image
 {
 	r = r*255.0/real div;
-	return disp.color(draw->setalpha(c, int r));
+	return disp.color(draw->setalpha(c, min(255, int r)));
 }
 
 tkgrid(w: string, r: list of list of string)
