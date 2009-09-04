@@ -743,8 +743,8 @@ Torrentx.open(t: ref Torrent, tpath: string, nofix, nocreate: int): (ref Torrent
 			say(sprint("opened %q", path));
 		}
 		pfirst := offset/big t.piecelen;
-		plast := (offset+f.length+big (t.piecelen-1))/big t.piecelen;
-		tx.files[i] = ref Filex (f, i, path, fd, offset, int pfirst, int plast);
+		pend := (offset+f.length+big (t.piecelen-1))/big t.piecelen;
+		tx.files[i] = ref Filex (f, i, path, fd, offset, int pfirst, int pend-1);
 		offset += f.length;
 	}
 	names = nil;

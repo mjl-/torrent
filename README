@@ -58,22 +58,19 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- don't keep doing tracker requests every 10 seconds.  even during startup it is too much.  we should start at 30, then back off to tracker's interval.
-- after having had a peer/seed, but no longer, do a tracker request before interval.  not too often though.
-
-- totalleft still becomes negative.  we are probably refetching blocks.  perhaps we don't verify correctly, or mess up writing?
-- only set "have" for piece when we've written it to disk?  otherwise we might read it from disk (and send it to a peer) before having written it.
-
-- we don't seem to dial other peers after the first?
+- improve piece/peer scheduling.  it seems we are not looking at peer availability.  or at least nog enough...
+- it seems we can now get blocks for inactive pieces?
 
 - lots of testing
 - for unused peers from tracker, make difference between new ip's and known ip's (current peers, bad peers).
-- put more in progress/peerevents, such as errors (eg errors when writing to disk).
-- perhaps put the code for each thread in a separate file.  should help to reduce accidental global variable use & associated obscure bugs.
-- allow starting after being stopped.  implement start ctl.
 - write manual page
+
 - optim: Piece.hashstate, for keeping the hash of the piece up to date in case of sequentially fetching blocks (a common case).
+- optim: use better data structures in eg Peerbox, so picking peers to unchoke etc doesn't require walking through all the peers and their pieces.
 - make the scheduler capable of taking abuse into account.  the more abuse from peers (bogus hashes), the fewer peers we schedule on a single peer?  or the harder we try to correct faulty blocks?  make sure it's all the same standard code path, to prevent obscure bugs only laid bare by abusive peers.
+- use numwant in tracker request, set it high
+- after having had a peer/seed, but no longer, do a tracker request before interval.  not too often though.
+- set max number of peers connected, and max number of seeds among those?
 
 ## torrent/track
 

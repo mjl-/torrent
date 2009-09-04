@@ -158,13 +158,14 @@ peersfd: ref Sys->FD;
 peerspid := -1;
 peersc: chan of list of (int, Peercount);
 lasttracker: ref Tracker;
+lasterror: string;
 
 havebar,
 availbar: ref Bar;
 
 Vmain, Vfiles, Vpeers, Vbadpeers, Vtorrentlog, Vlog: con iota;
 view := Vmain;
-views := array[] of {"main", "files", "peers", "badpeers", "torrentlog", "log"};
+views := array[] of {"main", "files", "peers", "badpeers", "torrentlog", "log", "errors"};
 
 tkcmds0 := array[] of {
 "frame .ctl",
@@ -174,8 +175,9 @@ tkcmds0 := array[] of {
 "button .ctl.badpeers -text badpeers -command {send cmd badpeers}",
 "button .ctl.torrentlog -text torrentlog -command {send cmd torrentlog}",
 "button .ctl.log -text peerlog -command {send cmd log}",
+"button .ctl.errors -text errors -command {send cmd errors}",
 "button .ctl.x -text x -command {send cmd x}",
-"pack .ctl.info .ctl.files .ctl.peers .ctl.badpeers .ctl.torrentlog .ctl.log .ctl.x -fill x -side left",
+"pack .ctl.info .ctl.files .ctl.peers .ctl.badpeers .ctl.torrentlog .ctl.log .ctl.errors .ctl.x -fill x -side left",
 "pack .ctl -fill x",
 
 "frame .v", # view
@@ -222,6 +224,7 @@ tkcmds0 := array[] of {
 "frame .v.b",	# badpeers
 "frame .v.t",	# torrentlog
 "frame .v.l",	# peerlog
+"frame .v.e",	# errors
 
 # files
 "canvas .v.f.c -yscrollcommand {.v.f.yscroll set} -xscrollcommand {.v.f.xscroll set}",
@@ -264,6 +267,12 @@ tkcmds0 := array[] of {
 "pack .v.l.scroll -side left -fill y",
 "text .v.l.t -yscrollcommand {.v.l.scroll set}",
 "pack .v.l.t -fill both -expand 1",
+
+# errors
+"scrollbar .v.e.scroll -command {.v.e.t yview}",
+"pack .v.e.scroll -side left -fill y",
+"text .v.e.t -yscrollcommand {.v.e.scroll set}",
+"pack .v.e.t -fill both -expand 1",
 
 "pack .v.m -anchor w -fill both -expand 1",
 "pack .v -anchor w -fill both -expand 1",
@@ -452,6 +461,7 @@ setstate()
 	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
 	l2("peers",		sprint("%d peer%s, of which %d seed%s;  %d unused tracker address%s", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ntrackerpeers, trailes(s.ntrackerpeers))),
 	l2("tracker",		trackerstr()),
+	l2("last error",	lasterror),
 	};
 	tkgrid(".v.m.c.m.s.g", stategrid);
 	setscrollregion(".v.m.c", ".v.m.c.m");
@@ -553,6 +563,8 @@ progresswords := array[] of {
 ("blocks",	-2),
 ("filedone",	3),
 ("tracker",	4),
+("error",	1),
+("hashfail",	1),
 };
 progressword(t: array of string): int
 {
@@ -566,8 +578,12 @@ progressword(t: array of string): int
 		barfill(havebar);
 		barflush(havebar);
 		return 1;
-	"started" =>	prog.started = 1;
-	"stopped" =>	prog.started = 0;
+	"started" =>
+		prog.started = 1;
+		return 1;
+	"stopped" =>
+		prog.started = 0;
+		return 1;
 	"newctl" =>
 		alt {
 		newconfigc <-= 1 =>	;
@@ -597,6 +613,12 @@ progressword(t: array of string): int
 	"tracker" =>
 		lasttracker = ref Tracker (getint(t[1]), daytime->now()+getint(t[2]), getint(t[3]), t[4]);
 		return 1;
+	"error" =>
+		lasterror = t[1];
+		tkcmd(".v.e.t insert end '"+t[1]+"\n");
+		return 1;
+	"hashfail" =>
+		lasterror = sprint("piece %d failed hashcheck", getint(t[1]));
 	* =>	raise "missing case";
 	}
 	return 0;
@@ -789,7 +811,8 @@ cmd(s: string)
 	"peers" or
 	"badpeers" or
 	"torrentlog" or
-	"log" =>
+	"log" or
+	"errors" =>
 		nview := getindex(views, op);
 		if(view == nview)
 			return;

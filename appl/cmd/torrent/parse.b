@@ -16,14 +16,15 @@ include "bittorrent.m";
 	Bee: import bt;
 include "util0.m";
 	util: Util0;
-	fail, warn, readfile: import util;
+	fail, warn, hex, readfile: import util;
 
 Torrentparse: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
 bout: ref Iobuf;
-Dflag: int;
+dflag: int;
+vflag: int;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -33,12 +34,15 @@ init(nil: ref Draw->Context, args: list of string)
 	bitarray = load Bitarray Bitarray->PATH;
 	bt = load Bittorrent Bittorrent->PATH;
 	bt->init();
+	util = load Util0 Util0->PATH;
+	util->init();
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" torrentfile");
+	arg->setusage(arg->progname()+" [-d] [-v] beefile");
 	while((c := arg->opt()) != 0)
 		case c {
-		'D' =>	Dflag++;
+		'd' =>	bt->dflag = dflag++;
+		'v' =>	vflag++;
 		* =>	arg->usage();
 		}
 
@@ -54,17 +58,14 @@ init(nil: ref Draw->Context, args: list of string)
 	d := readfile(f, -1);
 	if(d == nil)
 		fail(sprint("%r"));
-	say("have file");
 	say(sprint("file length=%d byte0=%c", len d, int d[0]));
 
 	(b, err) := Bee.unpack(d);
 	if(err != nil)
 		fail(sprint("parsing %s: %s", f, err));
-	say("have unpacked bee");
 
 	beeprint(b, 0, "");
 	bout.close();
-	say("done");
 
 	if(0) {
 		nd := b.pack();
@@ -98,11 +99,12 @@ beeprint(bb: ref Bee, indent: int, end: string)
 
 arrayfmt(a: array of byte): string
 {
+	if(vflag || len a < 20)
+		return "hex "+hex(a);
 	s := "";
-	for(i := 0; i <= 20 && i < len a; i++)
+	for(i := 0; i < 20-3 && i < len a; i++)
 		s += sprint("%02x", int a[i]);
-	if(len a > 20)
-		s += "...";
+	s += "...";
 	return "hex "+s;
 }
 
@@ -116,6 +118,6 @@ stringfmt(a: array of byte): string
 
 say(s: string)
 {
-	if(Dflag)
+	if(dflag)
 		warn(s);
 }

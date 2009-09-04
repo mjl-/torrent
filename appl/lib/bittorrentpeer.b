@@ -90,7 +90,7 @@ Piece.isdone(p: self ref Piece): int
 
 Piece.text(p: self ref Piece): string
 {
-	return sys->sprint("<piece %d have %s>", p.index, p.have.text());
+	return sprint("Piece(index %d, nblocks %d, haveblocks %d)", p.index, p.have.n, p.have.have);
 }
 
 
@@ -108,7 +108,7 @@ Block.eq(b1, b2: ref Block): int
 
 Block.text(b: self ref Block): string
 {
-	return sys->sprint("<block piece %d, begin %d, length %d>", b.piece, b.begin, b.length);
+	return sprint("Block(piece %d, begin %d, length %d)", b.piece, b.begin, b.length);
 }
 
 
@@ -128,14 +128,6 @@ peeridfmt(d: array of byte): string
 }
 
 
-Newpeer.text(np: self Newpeer): string
-{
-	peerid := "nil";
-	if(np.peerid != nil)
-		peerid = peeridfmt(np.peerid);
-	return sprint("(newpeer %s peerid %s)", np.addr, peerid);
-}
-
 peerstatestrs := array[] of {
 "remotechoking",
 "remoteinterested",
@@ -154,10 +146,18 @@ peerstatestr(state: int): string
 }
 
 
+Newpeer.text(np: self Newpeer): string
+{
+	peerid := "nil";
+	if(np.peerid != nil)
+		peerid = peeridfmt(np.peerid);
+	return sprint("Newpeer(addr %s, peerid %s)", np.addr, peerid);
+}
+
+
 Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
 {
 	getmsgc := chan of list of ref Bittorrent->Msg;
-	st := RemoteChoking|LocalChoking;
 	msgseq := 0;
 	writec := chan[4] of ref (int, int, array of byte);
 	readc := chan of ref (int, int, int);
@@ -167,7 +167,7 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 		0, getmsgc, nil, nil,
 		Reqs.new(Blockqueuesize),
 		Bits.new(npieces),
-		st,
+		RemoteChoking|LocalChoking,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
 		nil, 0, dialed, Buf.new(), writec, readc, nil);
@@ -200,12 +200,12 @@ Peer.isdone(p: self ref Peer): int
 
 Peer.text(p: self ref Peer): string
 {
-	return sprint("<peer %s id %d>", p.np.addr, p.id);
+	return sprint("Peer(id %d, addr %s)", p.id, p.np.addr);
 }
 
 Peer.fulltext(p: self ref Peer): string
 {
-	return sprint("<peer %s, id %d, wantblocks %d peerid %s>", p.np.text(), p.id, len p.wants, peeridfmt(p.peerid));
+	return sprint("Peer(id %d, addr %s, wantblocks %d, peerid %s>", p.id, p.np.addr, len p.wants, peeridfmt(p.peerid));
 }
 
 
@@ -216,7 +216,7 @@ Buf.new(): ref Buf
 
 Buf.tryadd(b: self ref Buf, piece: ref Piece, begin: int, buf: array of byte): int
 {
-	if(len b.data == 0) {
+	if(b.piece < 0) {
 		b.data = array[len buf] of byte;
 		b.data[:] = buf;
 		b.piece = piece.index;
@@ -255,7 +255,7 @@ Buf.tryadd(b: self ref Buf, piece: ref Piece, begin: int, buf: array of byte): i
 
 Buf.isfull(b: self ref Buf): int
 {
-	return len b.data == Diskchunksize || b.pieceoff+len b.data == b.piecelength;
+	return len b.data >= Diskchunksize || b.pieceoff+len b.data == b.piecelength;
 }
 
 Buf.clear(b: self ref Buf)
@@ -327,6 +327,15 @@ schedpieces(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref P
 		}
 }
 
+batches(p: ref Piece): array of ref Batch
+{
+	nblocks := p.have.n;
+	nbatches := (nblocks+Batchsize-1)/Batchsize;
+	b := array[nbatches] of ref Batch;
+	for(i := 0; i < len b; i++)
+		b[i] = Batch.new(i*Batchsize, min(Batchsize, nblocks-i*Batchsize), p);
+	return b;
+}
 
 getrandompiece(): ref Piece
 {
@@ -377,7 +386,6 @@ needblocks(peer: ref Peer): int
 
 inactiverare(): array of ref (int, int)
 {
-	# we just use .t0 of the ref (int, int).  it's used here so we can use polymorphic functions
 	a := array[state.piecebusy.n-state.piecebusy.have] of ref (int, int);
 	say(sprint("inactiverare: %d pieces, %d busy, finding %d", state.piecebusy.n, state.piecebusy.have, len a));
 	j := 0;
@@ -451,7 +459,7 @@ schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Pee
 		say("schedule: trying inactive pieces");
 		rare := inactiverare();
 		for(i := 0; i < len rare; i++) {
-			v := rare[i].t0;  # it's a ref tuple to allow using polymorphic functions
+			v := rare[i].t0;
 			say(sprint("using new rare piece %d", v));
 			p := Piece.new(v, state.t.piecelength(v));
 			state.pieces.add(v, p);
@@ -524,7 +532,7 @@ Req.eq(r1, r2: Req): int
 
 Req.text(r: self Req): string
 {
-	return sprint("<req piece=%d block=%d begin=%d>", r.pieceindex, r.blockindex, r.blockindex*Blocksize);
+	return sprint("Req(piece %d, block %d, begin %d)", r.pieceindex, r.blockindex, r.blockindex*Blocksize);
 }
 
 
@@ -539,15 +547,14 @@ Reqs.take(r: self ref Reqs, req: Req): int
 		raise "take on empty list";
 
 	# first, skip over cancelled requests if necessary
-	first := r.first; 
-	for(; first != r.next && !Req.eq(r.a[first], req); first = (first+1) % len r.a)
-		if(!r.a[first].cancelled)
-			return 0;
+	f := r.first; 
+	while(f != r.next && !Req.eq(r.a[f], req) && r.a[f].cancelled)
+		f = (f+1) % len r.a;
 
 	# then see if request was the one expected, if any
-	if(first == r.next && !Req.eq(r.a[first], req))
+	if(f == r.next && !Req.eq(r.a[f], req))
 		return 0;
-	r.first = (first+1) % len r.a;
+	r.first = (f+1) % len r.a;
 	return 1;
 }
 
@@ -606,7 +613,7 @@ Reqs.size(r: self ref Reqs): int
 
 Reqs.text(r: self ref Reqs): string
 {
-	return sprint("<reqs first=%d next=%d size=%d>", r.first, r.next, len r.a);
+	return sprint("Reqs(first %d, next %d, size %d)", r.first, r.next, len r.a);
 }
 
 
@@ -632,27 +639,17 @@ Batch.unused(b: self ref Batch): list of Req
 Batch.usedpartial(b: self ref Batch, peer: ref Peer): list of Req
 {
 	reqs: list of Req;
-	for(i := len b.blocks-1; i >= 0; i--)
+	for(i := len b.blocks-1; i >= 0; i--) {
 		busy := b.piece.busy[b.blocks[i]];
 		if(busy.t0 != peer.id && busy.t1 != peer.id && (busy.t0 < 0 || busy.t1 < 0))
 			reqs = Req.new(b.piece.index, b.blocks[i])::reqs;
+	}
 	return reqs;
 }
 
 Batch.text(nil: self ref Batch): string
 {
 	return "<batch ...>";
-}
-
-
-batches(p: ref Piece): array of ref Batch
-{
-	nblocks := p.have.n;
-	nbatches := (nblocks+Batchsize-1)/Batchsize;
-	b := array[nbatches] of ref Batch;
-	for(i := 0; i < len b; i++)
-		b[i] = Batch.new(i*Batchsize, min(Batchsize, nblocks-i*Batchsize), p);
-	return b;
 }
 
 
@@ -694,7 +691,7 @@ Traffic.rate(t: self ref Traffic): int
 {
 	tm := now();
 	reclaim(t, tm);
-	return t.winsum*1000/min(int (tm-t.time0), TrafficHistsecs*1000);
+	return int (big t.winsum*big 1000/big min(int (tm-t.time0), TrafficHistsecs*1000));
 }
 
 Traffic.total(t: self ref Traffic): big
@@ -711,6 +708,11 @@ Traffic.text(t: self ref Traffic): string
 Pool[T].new(mode: int): ref Pool[T]
 {
 	return ref Pool[T](array[0] of T, array[0] of T, 0, mode);
+}
+
+Pool[T].clear(p: self ref Pool)
+{
+	*p = *Pool[T].new(p.mode);
 }
 
 Pool[T].fill(p: self ref Pool)
@@ -792,12 +794,12 @@ Pool[T].pooldel(p: self ref Pool, e: T)
 poolmodes := array[] of {"random", "rotaterandom", "inorder"};
 Pool[T].text(p: self ref Pool): string
 {
-	return sprint("<rotation len active=%d len pool=%d poolnext=%d mode=%s>", len p.active, len p.pool, p.poolnext, poolmodes[p.mode]);
+	return sprint("Pool(npool %d, nactive %d, poolnext %d, mode %s)", len p.pool, len p.active, p.poolnext, poolmodes[p.mode]);
 }
 
 
 progresstags := array[] of {
-"endofstate", "done", "started", "stopped", "newctl", "piece", "block", "pieces", "blocks", "filedone", "tracker",
+"endofstate", "done", "started", "stopped", "newctl", "piece", "block", "pieces", "blocks", "filedone", "tracker", "error", "hashfail",
 };
 Progress.text(pp: self ref Progress): string
 {
@@ -817,6 +819,8 @@ Progress.text(pp: self ref Progress): string
 				s += " "+string hd l;
 	Filedone =>	s += sprint(" %d %q %q", p.index, p.path, p.origpath);
 	Tracker =>	s += sprint(" %d %d %d %q", p.interval, p.next, p.npeers, p.err);
+	Error =>	s += sprint(" %q", p.msg);
+	Hashfail =>	s += sprint(" %d", p.index);
 	* =>	raise "missing case";
 	}
 	return s;

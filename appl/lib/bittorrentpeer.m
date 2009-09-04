@@ -19,8 +19,8 @@ Bittorrentpeer: module
 		t:		ref Bittorrent->Torrent;
 		tx:		ref Bittorrent->Torrentx;
 		pieces:		ref Tables->Table[ref Piece];  # only active pieces
-		piecehave:	ref Bitarray->Bits;
-		piecebusy:	ref Bitarray->Bits;
+		piecehave:	ref Bitarray->Bits;	# pieces we completed (including verified)
+		piecebusy:	ref Bitarray->Bits;	# pieces we completed or are working on.  we can start on the other pieces.
 		piececounts:	array of int;  # for each piece, count of peers that have it
 	};
 
@@ -39,6 +39,7 @@ Bittorrentpeer: module
 		mode:	int;
 
 		new:	fn(mode: int): ref Pool[T];
+		clear:	fn(p: self ref Pool);
 		fill:	fn(p: self ref Pool);
 		take:	fn(p: self ref Pool): T;
 		pooladd:	fn(p: self ref Pool, e: T);
@@ -239,6 +240,10 @@ Bittorrentpeer: module
 			next,
 			npeers:	int;
 			err:	string;
+		Error =>
+			msg:	string;
+		Hashfail =>
+			index:	int;
 		}
 
 		text:	fn(p: self ref Progress): string;
