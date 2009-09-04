@@ -740,9 +740,9 @@ peerline(p: ref Peer): string
 	s += sprint(" %d", p.lastunchoke);
 	s += sprint(" %d", p.piecehave.have);
 	s += sprint(" up %bd %d", p.up.total(), p.up.rate());
-	s += sprint(" down %bd %d", p.up.total(), p.up.rate());
+	s += sprint(" down %bd %d", p.down.total(), p.down.rate());
 	s += sprint(" metaup %bd %d", p.metaup.total(), p.metaup.rate());
-	s += sprint(" metadown %bd %d", p.up.total(), p.up.rate());
+	s += sprint(" metadown %bd %d", p.metadown.total(), p.metadown.rate());
 	s += "\n";
 	return s;
 }
@@ -1320,8 +1320,8 @@ handleinmsg0(peer: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int,
 		# xxx count pieces we did not request as overhead (meta)?
 		dsize := len m.d;
 		peer.down.add(dsize, 1);
-		trafficdown.add(dsize, 1);
 		peer.metadown.add(msize-dsize, 0);
+		trafficdown.add(dsize, 1);
 		trafficmetadown.add(msize-dsize, 0);
 	* =>
 		peer.metadown.add(msize, 1);
@@ -2181,12 +2181,25 @@ etastr(n: int): string
 	return s;
 }
 
+haveeta := 0;
+preveta: int;
+lasteta: int;
 eta(): int
 {
-	r := trafficdown.rate();
-	if(r <= 0)
-		return -1;
-	return int (totalleft/big r);
+	ms := sys->millisec();
+	if(!haveeta || ms-preveta >= 1000) {
+		r := trafficdown.rate();
+		if(r <= 0)
+			return -1;
+		neweta := int (totalleft/big r);
+		if(haveeta)
+			lasteta = (lasteta*8+neweta*2)/10;
+		else
+			lasteta = neweta;
+		haveeta = 1;
+		preveta = ms;
+	}
+	return lasteta;
 }
 
 tablist[T](t: ref Table[T]): list of T

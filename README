@@ -58,13 +58,14 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- totalleft still becomes negative.  we are probably refetching blocks.  perhaps we don't verify correctly, or mess up writing?
-- peer down/up speed in Qpeers is always 0...  something is wrong with traffic accounting.
-- make eta fluctuate far less.  the bandwidth can be up to date, the eta should lag a bit, to give slower changes
 - don't keep doing tracker requests every 10 seconds.  even during startup it is too much.  we should start at 30, then back off to tracker's interval.
-- we don't seem to dial other peers after the first?
 - after having had a peer/seed, but no longer, do a tracker request before interval.  not too often though.
+
+- totalleft still becomes negative.  we are probably refetching blocks.  perhaps we don't verify correctly, or mess up writing?
 - only set "have" for piece when we've written it to disk?  otherwise we might read it from disk (and send it to a peer) before having written it.
+
+- we don't seem to dial other peers after the first?
+
 - lots of testing
 - for unused peers from tracker, make difference between new ip's and known ip's (current peers, bad peers).
 - put more in progress/peerevents, such as errors (eg errors when writing to disk).

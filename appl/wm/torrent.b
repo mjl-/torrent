@@ -506,11 +506,12 @@ trackerstr(): string
 	t := lasttracker;
 	if(t == nil)
 		return "n/a";
-	s := sprint("next in %ds, interval %d, ", max(0, t.next-daytime->now()), t.interval);
+	s := sprint("interval %d, ", t.interval);
 	if(t.err != nil)
 		s += t.err;
 	else
 		s += sprint("%d peers", t.npeers);
+	s += sprint(", next in %4ds", max(0, t.next-daytime->now()));
 	return s;
 }
 

@@ -45,6 +45,19 @@ init(st: ref State)
 	util->init();
 
 	state = st;
+
+	lastmsec = sys->millisec();
+	lastnow = big lastmsec;
+}
+
+lastmsec: int;
+lastnow: big;
+now(): big
+{
+	msec := sys->millisec();
+	lastnow += big (msec-lastmsec);
+	lastmsec = msec;
+	return lastnow;
 }
 
 randomize[T](a: array of T)
@@ -645,7 +658,24 @@ batches(p: ref Piece): array of ref Batch
 
 Traffic.new(): ref Traffic
 {
-	return ref Traffic(0, array[TrafficHistorysize] of {* => (0, 0)}, 0, big 0, 0, daytime->now());
+	nslots: con (TrafficHistsecs*1000+(2**TrafficHistslotmsec2-1)) >> TrafficHistslotmsec2;
+	tm := now();
+	return ref Traffic(tm, 0, array[nslots] of {* => 0}, 0, big 0, 0, tm);
+}
+
+reclaim(t: ref Traffic, tm: big)
+{
+	diff := int ((tm>>TrafficHistslotmsec2) - (t.last>>TrafficHistslotmsec2));
+	if(diff == 0)
+		return;
+	o := (t.lasti+1) % len t.bytes;
+	for(i := 0; i < diff; i++) {
+		t.winsum -= t.bytes[o];
+		t.bytes[o] = 0;
+		o = (o+1) % len t.bytes;
+	}
+	t.last = tm;
+	t.lasti = (t.lasti+diff) % len t.bytes;
 }
 
 Traffic.add(t: self ref Traffic, nbytes, npkts: int)
@@ -654,38 +684,17 @@ Traffic.add(t: self ref Traffic, nbytes, npkts: int)
 	if(nbytes == 0)
 		return;
 
-	time := daytime->now();
-	if(t.d[t.last].t0 != time) {
-		reclaim(t, time);
-		t.last = (t.last+1) % len t.d;
-		t.winsum -= t.d[t.last].t1;
-		t.d[t.last] = (time, 0);
-	}
-	t.d[t.last].t1 += nbytes;
+	reclaim(t, now());
+	t.bytes[t.lasti] += nbytes;
 	t.winsum += nbytes;
 	t.sum += big nbytes;
 }
 
-reclaim(t: ref Traffic, time: int)
-{
-	first := t.last+1;
-	for(i := 0; t.d[pos := (first+i) % len t.d].t0 < time-TrafficHistorysize && i < TrafficHistorysize; i++) {
-		t.winsum -= t.d[pos].t1;
-		t.d[pos] = (0, 0);
-	}
-}
-
 Traffic.rate(t: self ref Traffic): int
 {
-	time := daytime->now();
-	reclaim(t, time);
-
-	div := TrafficHistorysize;
-	if(time-t.time0< TrafficHistorysize)
-		div = time-t.time0;
-	if(div == 0)
-		div = 1;
-	return t.winsum/div;
+	tm := now();
+	reclaim(t, tm);
+	return t.winsum*1000/min(int (tm-t.time0), TrafficHistsecs*1000);
 }
 
 Traffic.total(t: self ref Traffic): big
@@ -695,7 +704,7 @@ Traffic.total(t: self ref Traffic): big
 
 Traffic.text(t: self ref Traffic): string
 {
-	return sprint("<rate %s/s total %s>", sizefmt(big t.rate()), sizefmt(t.total()));
+	return sprint("Traffic(rate %s, total %s)", sizefmt(big t.rate()), sizefmt(t.total()));
 }
 
 

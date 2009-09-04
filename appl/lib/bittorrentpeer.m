@@ -49,14 +49,16 @@ Bittorrentpeer: module
 	};
 
 
-	TrafficHistorysize:	con 10;
+	TrafficHistsecs:	con 10;
+	TrafficHistslotmsec2:	con 8;  # msecs for slot: 2**TrafficHistslotmsec2
 	Traffic: adt {
-		last:	int;  # last element in `d' that may have been used
-		d:	array of (int, int);  # time, bytes
+		last:	big;  # last time, in msec
+		lasti:	int;  # index in `bytes' for `last'
+		bytes:	array of int; 
 		winsum:	int;
 		sum:	big;
 		npackets:	int;
-		time0:	int;
+		time0:	big;
 
 		new:	fn(): ref Traffic;
 		add:	fn(t: self ref Traffic, nbytes, npkts: int);
