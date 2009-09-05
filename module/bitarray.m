@@ -16,12 +16,21 @@ Bitarray: module
 		clear:		fn(b: self ref Bits, i: int);
 		clearall:	fn(b: self ref Bits);
 		invert:		fn(b: self ref Bits);
-		and:		fn(l: array of ref Bits): ref Bits;
-		union:		fn(l: array of ref Bits): ref Bits;
+		nand:		fn(a, na: ref Bits): ref Bits;
 		isempty:	fn(b: self ref Bits): int;
 		isfull:		fn(b: self ref Bits): int;
 		bytes:		fn(b: self ref Bits): array of byte;
 		all:		fn(b: self ref Bits): list of int;
+		iter:		fn(b: self ref Bits): ref Bititer;
+		inviter:	fn(b: self ref Bits): ref Bititer;
 		text:		fn(b: self ref Bits): string;
+	};
+
+	Bititer: adt {
+		b:	ref Bits;
+		last:	int;
+		inv:	int;
+
+		next:	fn(b: self ref Bititer): int;
 	};
 };

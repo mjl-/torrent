@@ -2,35 +2,51 @@ implement Bitarray;
 
 include "bitarray.m";
 
+nibblebitcounts := array[16] of {
+0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
+};
 
-sethave(b: ref Bits)
+nbits(b: byte): int
 {
-	b.have = 0;
-	for(i := 0; i < b.n; i++)
-		if(b.get(i))
-			b.have++;
+	i := int b;
+	return nibblebitcounts[i>>4]+nibblebitcounts[i&15];
+}
+
+clearhigh(b: ref Bits)
+{
+	n := b.n&7;
+	b.d[(b.n-1)>>3] &= byte ~((1<<n)-1);
+}
+
+bytebit(i: int): byte
+{
+	return byte (1<<(7-(i&7)));
 }
 
 
 Bits.new(n: int): ref Bits
 {
-	return ref Bits(array[(n+8-1)/8] of {* => byte 0}, n, 0);
+	return ref Bits(array[(n+8-1)>>3] of {* => byte 0}, n, 0);
 }
 
 newones(n: int): ref Bits
 {
-	return ref Bits(array[(n+8-1)/8] of {* => byte 16rFF}, n, 0);
+	b := ref Bits(array[(n+8-1)>>3] of {* => byte ~0}, n, 0);
+	clearhigh(b);
+	return b;
 }
 
 Bits.mk(n: int, d: array of byte): (ref Bits, string)
 {
-	need := (n+8-1)/8;
+	need := (n+8-1)>>3;
 	if(len d != need)
 		return (nil, "wrong number of bytes, need "+string need+", got "+string len d);
 	nd := array[len d] of byte;
 	nd[:] = d;
 	b := ref Bits(nd, n, 0);
-	sethave(b);
+	clearhigh(b);
+	for(i := 0; i < len b.d; i++)
+		b.have += nbits(b.d[i]);
 	return (b, nil);
 }
 
@@ -43,13 +59,13 @@ Bits.clone(b: self ref Bits): ref Bits
 
 Bits.get(b: self ref Bits, i: int): int
 {
-	return int (b.d[i/8] & (byte 1<<(7-(i&7))));
+	return int (b.d[i>>3] & bytebit(i));
 }
 
 Bits.set(b: self ref Bits, i: int)
 {
 	if(!b.get(i)) {
-		b.d[i/8] |= (byte 1<<(7-(i&7)));
+		b.d[i>>3] |= bytebit(i);
 		b.have++;
 	}
 }
@@ -57,13 +73,14 @@ Bits.set(b: self ref Bits, i: int)
 Bits.setall(b: self ref Bits)
 {
 	b.d = array[len b.d] of {* => byte ~0};
+	clearhigh(b);
 	b.have = b.n;
 }
 
 Bits.clear(b: self ref Bits, i: int)
 {
 	if(b.get(i)) {
-		b.d[i/8] &= ~(byte 1<<(7-(i&7)));
+		b.d[i>>3] &= ~bytebit(i);
 		b.have--;
 	}
 }
@@ -81,34 +98,14 @@ Bits.invert(b: self ref Bits)
 	b.have = b.n-b.have;
 }
 
-Bits.and(a: array of ref Bits): ref Bits
+Bits.nand(a, na: ref Bits): ref Bits
 {
-	n := a[0].n;
-	for(i := 0; i < len a; i++)
-		if(a[i].n != n)
-			return nil;  # raise error?
-
-	b := newones(n);
-	for(i = 0; i < len a; i++)
-		for(j := 0; j < len b.d; j++)
-			b.d[j] &= a[i].d[j];
-	sethave(b);
-	return b;
-}
-
-Bits.union(a: array of ref Bits): ref Bits
-{
-	n := a[0].n;
-	for(i := 0; i < len a; i++)
-		if(a[i].n != n)
-			return nil;  # raise error?
-
-	b := Bits.new(n);
-	for(i = 0; i < len a; i++)
-		for(j := 0; j < len b.d; j++)
-			b.d[j] |= a[i].d[j];
-	sethave(b);
-	return b;
+	r := ref Bits(array[len a.d] of byte, 0, a.n);
+	for(i := 0; i < len a.d; i++) {
+		r.d[i] = a.d[i]&~na.d[i];
+		r.have += nbits(r.d[i]);
+	}
+	return r;
 }
 
 Bits.isempty(b: self ref Bits): int
@@ -137,13 +134,43 @@ Bits.all(b: self ref Bits): list of int
 	return l;
 }
 
+Bits.iter(b: self ref Bits): ref Bititer
+{
+	return ref Bititer(b, -1, 0);
+}
+
+Bits.inviter(b: self ref Bits): ref Bititer
+{
+	return ref Bititer(b, -1, 1);
+}
+
 Bits.text(b: self ref Bits): string
 {
 	s := "";
-	for(i := 0; i < b.n; i++)
+	for(i := 0; i < b.n; i++) {
 		if(b.get(i))
-			s += "1";
+			s[len s] = '1';
 		else
-			s += "0";
+			s[len s] = '0';
+		if((i&63) == 63)
+			s[len s] = '\n';
+	}
+	if((i&63) != 63)
+		s[len s] = '\n';
 	return s;
+}
+
+
+Bititer.next(b: self ref Bititer): int
+{
+	if(b.inv) {
+		while(++b.last < b.b.n)
+			if(!b.b.get(b.last))
+				return b.last;
+	} else {
+		while(++b.last < b.b.n)
+			if(b.b.get(b.last))
+				return b.last;
+	}
+	return -1;
 }

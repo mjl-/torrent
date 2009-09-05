@@ -9,7 +9,6 @@ Bittorrentpeer: module
 
 	Piecesrandom:	con 4;
 	Blocksize:	con 16*1024;
-	Blockqueuemax:	con 100;  # max number of Requests a peer can queue at our side without being considered bad
 	Blockqueuesize:	con 30;  # number of pending blocks to request to peer
 	Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
 	Batchsize:	con Diskchunksize/Blocksize;
@@ -28,7 +27,7 @@ Bittorrentpeer: module
 
 	batches:	fn(p: ref Piece): array of ref Batch;
 	needblocks:	fn(p: ref Peer): int;
-	schedule:	fn(reqc: chan of ref (ref Piece, list of Req, chan of int), p: ref Peer);
+	schedule:	fn(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer);
 
 
 	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # Pool.mode
@@ -68,32 +67,6 @@ Bittorrentpeer: module
 		text:	fn(t: self ref Traffic): string;
 	};
 
-
-	Piece: adt {
-		index:	int;
-		have:	ref Bitarray->Bits;
-		written:	ref Bitarray->Bits;
-		length:	int;
-		busy:	array of (int, int);  # peerid, peerid
-		done:	array of int;  # peerid
-
-		new:	fn(index, length: int): ref Piece;
-		isdone:	fn(p: self ref Piece): int;
-		orphan:	fn(p: self ref Piece): int;
-		text:	fn(p: self ref Piece): string;
-	};
-
-	Block: adt {
-		piece,
-		begin,
-		length:	int;
-
-		new:	fn(piece, begin, length: int): ref Block;
-		eq:	fn(b1, b2: ref Block): int;
-		text:	fn(b: self ref Block): string;
-	};
-
-
 	Newpeer: adt {
 		addr:   string;
 		ip:     string;
@@ -112,6 +85,60 @@ Bittorrentpeer: module
 		empty:	fn(n: self ref Newpeers): int;
 	};
 
+
+	Piece: adt {
+		index:		int;
+		have:		ref Bitarray->Bits;
+		written:	ref Bitarray->Bits;
+		length:		int;
+		busy:		array of (int, int);  # peerid, peerid
+		done:		array of int;  # peerid
+
+		new:	fn(index, length: int): ref Piece;
+		isdone:	fn(p: self ref Piece): int;
+		orphan:	fn(p: self ref Piece): int;
+		text:	fn(p: self ref Piece): string;
+	};
+
+
+	Link: adt[T] {
+		prev,
+		next:	cyclic ref Link[T];
+		e:	T;
+	};
+
+	Bigtab: adt[T] {
+		items:	array of list of (big, T);
+
+		new:	fn(n: int): ref Bigtab;
+		add:	fn(t: self ref Bigtab, k: big, v: T);
+		del:	fn(t: self ref Bigtab, k: big): T;
+		find:	fn(t: self ref Bigtab, k: big): T;
+	};
+
+	RReq: adt {
+		piece,
+		begin,
+		length:	int;
+
+		eq:	fn(r1, r2: ref RReq): int;
+		text:	fn(rr: self ref RReq): string;
+	};
+
+	RReqs: adt {
+		first,
+		last:	ref Link[ref RReq];
+		tab:	ref Bigtab[ref Link[ref RReq]];
+		length:	int;
+
+		new:		fn(): ref RReqs;
+		clear:		fn(rr: self ref RReqs);
+		add:		fn(rr: self ref RReqs, r: ref RReq);
+		del:		fn(rr: self ref RReqs, r: ref RReq): int;
+		dropfirst:	fn(rr: self ref RReqs);
+	};
+
+
 	# Peer.state
 	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
 	peerstatestr:	fn(state: int): string;
@@ -126,35 +153,36 @@ Bittorrentpeer: module
 		getmsgc:	chan of list of ref Bittorrent->Msg;
 		metamsgs,
 		datamsgs: 	list of ref Bittorrent->Msg;
-		reqs:		ref Reqs;  # we want from remote
-		piecehave:	ref Bitarray->Bits;
+		rhave,					# pieces remote has
+		lwant:		ref Bitarray->Bits;	# pieces remote has and we do not
 		state:		int;  # interested/choked
 		msgseq:		int;
 		up,
 		down,
 		metaup,
 		metadown: 	ref Traffic;
-		wants:		list of ref Block;  # remote wants from us
+		lreqs:		ref LReqs;  # we want from remote
+		rreqs:		ref RReqs;  # remote wants from us
 		lastunchoke:	int;
 		dialed:		int;  # whether we initiated connection
 		buf:		ref Buf;  # unwritten part of piece
 		writec:		chan of ref (int, int, array of byte);
-		readc:		chan of ref (int, int, int);
+		readc:		chan of ref RReq;
 		pids:		list of int;  # pids of net reader/writer to kill for cleaning up
 
-		new:		fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
-		remotechoking:	fn(p: self ref Peer): int;
+		new:			fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
+		remotechoking:		fn(p: self ref Peer): int;
 		remoteinterested:	fn(p: self ref Peer): int;
-		localchoking:	fn(p: self ref Peer): int;
+		localchoking:		fn(p: self ref Peer): int;
 		localinterested:	fn(p: self ref Peer): int;
-		isdone:		fn(p: self ref Peer): int;
-		text:		fn(p: self ref Peer): string;
-		fulltext:	fn(p: self ref Peer): string;
+		isdone:			fn(p: self ref Peer): int;
+		text:			fn(p: self ref Peer): string;
+		fulltext:		fn(p: self ref Peer): string;
 	};
 
 	Buf: adt {
-		data:	array of byte;
-		piece:	int;
+		data:		array of byte;
+		piece:		int;
 		pieceoff:	int;
 		piecelength:	int;
 
@@ -166,42 +194,36 @@ Bittorrentpeer: module
 	};
 
 
-	Req: adt {
-		pieceindex, blockindex, cancelled: int;
+	LReq: adt {
+		piece,
+		block,
+		cancelled:	int;
 
-		new:	fn(pieceindex, blockindex: int): Req;
-		eq:	fn(r1, r2: Req): int;
-		text:	fn(r: self Req): string;
+		eq:	fn(r1, r2: ref LReq): int;
+		text:	fn(r: self ref LReq): string;
 	};
 
-	Reqs: adt {
-		a:	array of Req;
+	LReqs: adt {
 		first,
-		next:	int;
-		lastreq:	ref Req;
+		last:	ref Link[ref LReq];
+		tab:	ref Bigtab[ref Link[ref LReq]];
+		length:	int;	# number of non-cancelled lreq's
 
-		new:	fn(size: int): ref Reqs;
-		take:	fn(r: self ref Reqs, req: Req): int;
-		add:	fn(r: self ref Reqs, req: Req);
-		peek:	fn(r: self ref Reqs): Req;
-		cancel:	fn(r: self ref Reqs, req: Req);
-		flush:	fn(r: self ref Reqs);
-		last:	fn(r: self ref Reqs): ref Req;
-		isempty:	fn(r: self ref Reqs): int;
-		isfull:		fn(r: self ref Reqs): int;
-		count:	fn(r: self ref Reqs): int;
-		size:	fn(r: self ref Reqs): int;
-		text:	fn(r: self ref Reqs): string;
+		new:		fn(): ref LReqs;
+		add:		fn(rr: self ref LReqs, r: ref LReq);
+		take:		fn(rr: self ref LReqs, r: ref LReq): int;
+		cancel:		fn(rr: self ref LReqs, r: ref LReq): int;
+		text:		fn(rr: self ref LReqs): string;
 	};
 
 	Batch: adt {
-		blocks:	array of int;
-		piece:	ref Piece;
+		blocks:		array of int;
+		piece:		ref Piece;
 
-		new:	fn(first, n: int, piece: ref Piece): ref Batch;
-		unused:	fn(b: self ref Batch): list of Req;
-		usedpartial:	fn(b: self ref Batch, peer: ref Peer): list of Req;
-		text:	fn(b: self ref Batch): string;
+		new:		fn(first, n: int, piece: ref Piece): ref Batch;
+		unused:		fn(b: self ref Batch): list of ref LReq;
+		usedpartial:	fn(b: self ref Batch, peer: ref Peer): list of ref LReq;
+		text:		fn(b: self ref Batch): string;
 	};
 
 

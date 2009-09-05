@@ -58,6 +58,8 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
+- do we need to flush lreqs when remote chokes us?
+- keep track of rareness of pieces
 - improve piece/peer scheduling.  it seems we are not looking at peer availability.  or at least nog enough...
 - it seems we can now get blocks for inactive pieces?
 

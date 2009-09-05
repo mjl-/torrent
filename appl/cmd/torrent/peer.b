@@ -32,26 +32,19 @@ include "util0.m";
 	pid, kill, killgrp, hex, join, min, rev, l2a, g32i, readfile, readfd, inssort, sizefmt, sizeparse: import util;
 include "bitarray.m";
 	bitarray: Bitarray;
-	Bits: import bitarray;
+	Bits, Bititer: import bitarray;
 include "bittorrent.m";
 	bt: Bittorrent;
 	Bee, Msg, File, Torrent, Filex, Torrentx: import bt;
 include "../../lib/bittorrentpeer.m";
 	btp: Bittorrentpeer;
-	State, Pool, Traffic, Piece, Block, Peer, Newpeer, Newpeers, Buf, Req, Reqs, Batch, List, Progress, Peerevent, Eventfid: import btp;
+	State, Pool, Traffic, Piece, Peer, Newpeer, Newpeers, Buf, LReq, LReqs, RReq, RReqs, Batch, List, Progress, Peerevent, Eventfid: import btp;
 	Slocal, Sremote, Schoking, Sunchoking, Sinterested, Suninterested: import Bittorrentpeer;
 
 Torrentpeer: module {
 	init:	fn(nil: ref Draw->Context, nil: list of string);
 };
 
-
-dflag: int;
-nofix: int;
-
-state:	ref State;
-newpeers:	ref Newpeers;  # peers we are not connected to
-peerbox:	ref Peerbox;
 
 Peerbox: adt {
 	peers:		list of ref Peer;  # peers we are connected to
@@ -76,24 +69,38 @@ Peerbox: adt {
 };
 
 
-torrentpath:	string;
-time0:	int;
+# state
+state:		ref State;
+newpeers:	ref Newpeers;  # peers we are not connected to
+peerbox:	ref Peerbox;
+stopped:	int;
+ndialers:	int;  # number of active dialers
+rotateips:	ref Pool[string];  # masked ip address
+faulty:		list of (string, int);  # ip, time
+islistening:	int;  # whether listener() is listening
 totalleft:	big;
-listenport:	int;
-localpeerid:	array of byte;
-localpeeridhex:	string;
 trackerevent:	string;
 trafficup,
 trafficdown,
 trafficmetaup,
-trafficmetadown:	ref Traffic;  # global traffic counters.  xxx uses same sliding window as traffic speed used for choking
+trafficmetadown:	ref Traffic;
+
+# config
+dflag: int;
+nofix: int;
+torrentpath:	string;
+time0:	int;
+listenport:	int;
+localpeerid:	array of byte;
+localpeeridhex:	string;
+ip4mask,
+ip6mask:	IPaddr;
 maxratio	:= 0.0;
 maxdownrate	:= big -1;
 maxuprate	:= big -1;
 maxdowntotal	:= big -1;
 maxuptotal	:= big -1;
-ip4mask,
-ip6mask:	IPaddr;
+
 
 # tracker
 trackkickc:	chan of int;
@@ -107,13 +114,7 @@ newpeerc:	chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, stri
 # upload/download rate limiter
 upc, downc:	chan of (int, chan of int);
 
-# progress/state
-stopped := 0;
-ndialers:	int;  # number of active dialers
-rotateips:	ref Pool[string];  # masked ip address
-faulty:		list of (string, int);  # ip, time
-islistening:	int;  # whether listener() is listening
-
+# peer interaction
 peerinmsgc:	chan of (ref Peer, ref Msg, chan of list of ref (int, int, array of byte), string);
 peererrc:	chan of (ref Peer, string);
 wantmsgc:	chan of ref Peer;
@@ -122,8 +123,8 @@ diskwrittenc:	chan of (int, int, int, string);
 diskreadc:	chan of (ref Peer, int, int, array of byte, string);
 mainwrites:	list of ref (int, int, array of byte);
 
-# ticker
-tickc:		chan of int;
+# round ticker
+roundc:		chan of int;
 
 
 Dialersmax:	con 5;  # max number of dialer procs
@@ -291,7 +292,7 @@ init(nil: ref Draw->Context, args: list of string)
 	peerbox = Peerbox.new();
 	newpeers = ref Newpeers;
 
-	if(isdone())
+	if(done())
 		say("already done!");
 
 	if(state.tx.statefd == nil) {
@@ -318,7 +319,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	canlistenc = chan of int;
 	newpeerc = chan of (int, Newpeer, ref Sys->FD, array of byte, array of byte, string);
-	tickc = chan of int;
+	roundc = chan of int;
 
 	upc = chan of (int, chan of int);
 	downc = chan of (int, chan of int);
@@ -356,7 +357,7 @@ init(nil: ref Draw->Context, args: list of string)
 		say(sprint("listening on addr %s", listenaddr));
 
 	spawn listener(conn);
-	spawn ticker();
+	spawn roundticker();
 	spawn track();
 	spawn limiter(upc, int maxuprate);
 	spawn limiter(downc, int maxdownrate);
@@ -655,24 +656,20 @@ putprogressstate(l: ref List[ref Progress])
 		l = next(l, ref Progress.Stopped);
 	else
 		l = next(l, ref Progress.Started);
-	if(isdone())
+	if(done())
 		l = next(l, ref Progress.Done);
 	else {
-		lp := state.piecehave.all();
-		while(lp != nil) {
-			r: list of int;
-			for(i := 0; i < 20 && lp != nil; i++) {
-				r = hd lp::r;
-				lp = tl lp;
+		it := state.piecehave.iter();
+		r: list of int;
+		i: int;
+		do {
+			i = it.next();
+			if(i < 0 || len r == 20) {
+				l = next(l, ref Progress.Pieces (r));
+				r = nil;
 			}
-			l = next(l, ref Progress.Pieces (r));
-		}
-		for(pl := tablist(state.pieces); pl != nil; pl = tl pl) {
-			p := hd pl;
-			lb := p.have.all();
-			if(lb != nil)
-				l = next(l, ref Progress.Blocks (p.index, lb));
-		}
+			r = i::r;
+		} while(i >= 0);
 		for(fl := filesdone(-1); fl != nil; fl = tl fl) {
 			f := hd fl;
 			l = next(l, ref Progress.Filedone (f.index, f.path, f.f.path));
@@ -698,8 +695,8 @@ putpeerstate(l: ref List[ref Peerevent])
 		l = next(l, ref Peerevent.New (p.np.addr, p.id, p.peeridhex, p.dialed));
 		if(p.isdone())
 			l = next(l, ref Peerevent.Done (p.id));
-		else if(p.piecehave.have != 0) {
-			for(ll := peereventpieces(p.id, p.piecehave.all()); ll != nil; ll = tl ll)
+		else if(p.rhave.have != 0) {
+			for(ll := peereventpieces(p.id, p.rhave); ll != nil; ll = tl ll)
 				l = next(l, hd ll);
 		}
 		if(p.localchoking())
@@ -715,32 +712,21 @@ putpeerstate(l: ref List[ref Peerevent])
 	l.next = peereventlast.next;
 }
 
-peereventpieces(id: int, lp: list of int): list of ref Peerevent.Pieces
+peereventpieces(id: int, b: ref Bits): list of ref Peerevent.Pieces
 {
 	l: list of ref Peerevent.Pieces;
-	while(lp != nil) {
-		r: list of int;
-		for(i := 0; i < 20 && lp != nil; i++) {
-			r = hd lp::r;
-			lp = tl lp;
+	r: list of int;
+	i: int;
+	it := b.iter();
+	do {
+		i = it.next();
+		if(i < 0 || len r == 20) {
+			l = ref Peerevent.Pieces (id, r)::l;
+			r = nil;
 		}
-		l = ref Peerevent.Pieces (id, r)::l;
-	}
+		r = i::r;
+	} while(i >= 0);
 	return l;
-}
-
-chokestr(choked: int): string
-{
-	if(choked)
-		return "choked";
-	return "unchoked";
-}
-
-intereststr(i: int): string
-{
-	if(i)
-		return "interested";
-	return "uninterested";
 }
 
 # addr hex id direction localchoking localinterested remotechoking remoteinterested lastunchoke npiecehave "up" total rate "down" total rate "metaup" total rate "metadown" total rate
@@ -754,7 +740,7 @@ peerline(p: ref Peer): string
 	s += sprint(" %s %s", chokestr(p.localchoking()), intereststr(p.localinterested()));
 	s += sprint(" %s %s", chokestr(p.remotechoking()), intereststr(p.remoteinterested()));
 	s += sprint(" %d", p.lastunchoke);
-	s += sprint(" %d", p.piecehave.have);
+	s += sprint(" %d", p.rhave.have);
 	s += sprint(" up %bd %d", p.up.total(), p.up.rate());
 	s += sprint(" down %bd %d", p.down.total(), p.down.rate());
 	s += sprint(" metaup %bd %d", p.metaup.total(), p.metaup.rate());
@@ -775,18 +761,18 @@ navigate(oo: ref Navop)
 	q := int oo.path&16rff;
 	pick o := oo {
 	Stat =>
-		o.reply <-= (dir(int o.path, 0), nil);
+		o.reply <-= (dir(q), nil);
 
 	Walk =>
 		if(o.name == "..") {
-			o.reply <-= (dir(Qroot, 0), nil);
+			o.reply <-= (dir(Qroot), nil);
 			return;
 		}
 		case q {
 		Qroot =>
 			for(i := Qfirst; i <= Qlast; i++)
 				if(tab[i].t1 == o.name) {
-					o.reply <-= (dir(tab[i].t0, time0), nil);
+					o.reply <-= (dir(tab[i].t0), nil);
 					return;
 				}
 			o.reply <-= (nil, styxservers->Enotfound);
@@ -801,7 +787,7 @@ navigate(oo: ref Navop)
 			for(i := 0; have < o.count && o.offset+i < n; i++)
 				case Qfirst+i {
 				Qfirst to Qlast =>
-					o.reply <-= (dir(Qfirst+i, 0), nil);
+					o.reply <-= (dir(Qfirst+i), nil);
 					have++;
 				* =>
 					raise "missing case";
@@ -813,19 +799,18 @@ navigate(oo: ref Navop)
 	}
 }
 
-dir(path, mtime: int): ref Sys->Dir
+dir(q: int): ref Sys->Dir
 {
-	q := path&16rff;
 	(nil, name, perm) := tab[q];
 	d := ref sys->zerodir;
 	d.name = name;
 	d.uid = d.gid = "torrent";
-	d.qid.path = big path;
+	d.qid.path = big q;
 	if(perm&Sys->DMDIR)
 		d.qid.qtype = Sys->QTDIR;
 	else
 		d.qid.qtype = Sys->QTFILE;
-	d.mtime = d.atime = mtime;
+	d.mtime = d.atime = time0;
 	d.mode = perm;
 	return d;
 }
@@ -836,7 +821,7 @@ replyerror(m: ref Tmsg, s: string)
 }
 
 
-isdone(): int
+done(): int
 {
 	return state.piecehave.n == state.piecehave.have;
 }
@@ -877,16 +862,16 @@ writestate()
 		say("state written");
 }
 
-peerdrop(peer: ref Peer, faulty: int, err: string)
+peerdrop(p: ref Peer, faulty: int, err: string)
 {
 	if(err != nil)
 		warn(1, err);
 	if(faulty)
-		setfaulty(peer.np.ip);
+		setfaulty(p.np.ip);
 
 	n := 0;
-	for(i := 0; i < peer.piecehave.n && n < peer.piecehave.have; i++)
-		if(peer.piecehave.get(i)) {
+	for(i := 0; i < p.rhave.n && n < p.rhave.have; i++)
+		if(p.rhave.get(i)) {
 			state.piececounts[i]--;
 			n++;
 		}
@@ -894,35 +879,28 @@ peerdrop(peer: ref Peer, faulty: int, err: string)
 	for(l := tablist(state.pieces); l != nil; l = tl l) {
 		piece := hd l;
 		for(i = 0; i < len piece.busy; i++) {
-			if(piece.busy[i].t0 == peer.id)
+			if(piece.busy[i].t0 == p.id)
 				piece.busy[i].t0 = -1;
-			if(piece.busy[i].t1 == peer.id)
+			if(piece.busy[i].t1 == p.id)
 				piece.busy[i].t1 = -1;
 		}
 	}
 
-	if(peer.dialed)
+	if(p.dialed)
 		dialpeers();
 	else
 		awaitpeer();
-
-	peerdel(peer);
-
-	# peernetreader+peernetwriter
-	for(pids := peer.pids; pids != nil; pids = tl pids)
-		kill(hd pids);
-
-	spawn stopreadc(peer.readc);
-	spawn stopwritec(peer.writec);
-}
-
-peerdel(p: ref Peer)
-{
 	peerbox.del(p);
 	putevent(ref Peerevent.Gone (p.id));
+
+	# peernetreader,peernetwriter
+	for(pids := p.pids; pids != nil; pids = tl pids)
+		kill(hd pids);
+	spawn stopreadc(p.readc);
+	spawn stopwritec(p.writec);
 }
 
-stopreadc(c: chan of ref (int, int, int))
+stopreadc(c: chan of ref RReq)
 {
 	c <-= nil;
 }
@@ -935,7 +913,6 @@ stopwritec(c: chan of ref (int, int, array of byte))
 dialpeers()
 {
 	say(sprint("dialpeers, %d newpeers %d peers", len newpeers.all(), len peerbox.peers));
-
 	while(!newpeers.empty() && ndialers < Dialersmax && len peerbox.peers < Peersmax && peerbox.ndialed < Peersdialedmax) {
 		np := newpeers.take();
 		if(peerbox.findip(np.ip) != nil)
@@ -958,26 +935,24 @@ awaitpeer()
 	}
 }
 
-peersendmany(p: ref Peer, msgs: list of ref Msg)
+peersendmany(p: ref Peer, l: list of ref Msg)
 {
-	for(; msgs != nil; msgs = tl msgs)
-		peersend0(p, hd msgs);
+	for(; l != nil; l = tl l)
+		peersend0(p, hd l);
 	peergive(p);
 }
 
-peersend0(p: ref Peer, msg: ref Msg)
+peersend0(p: ref Peer, mm: ref Msg)
 {
-	pick m := msg {
-	Piece =>
-		p.datamsgs = rev(m::rev(p.datamsgs));
-	* =>
-		p.metamsgs = rev(m::rev(p.metamsgs));
+	pick m := mm {
+	Piece =>	p.datamsgs = rev(m::rev(p.datamsgs));
+	* =>		p.metamsgs = rev(m::rev(p.metamsgs));
 	}
 }
 
-peersend(p: ref Peer, msg: ref Msg)
+peersend(p: ref Peer, m: ref Msg)
 {
-	peersend0(p, msg);
+	peersend0(p, m);
 	peergive(p);
 }
 
@@ -1020,29 +995,29 @@ peergive(p: ref Peer)
 	}
 }
 
-blocksize(req: Req): int
+blocksize(req: ref LReq): int
 {
 	# first a quick check
-	if(req.pieceindex < state.t.piececount-1)
+	if(req.piece < state.t.piececount-1)
 		return btp->Blocksize;
 
 	# otherwise, the full check
-	if(big req.pieceindex*big state.t.piecelen + big (req.blockindex+1)*big btp->Blocksize > state.t.length)
+	if(big req.piece*big state.t.piecelen + big (req.block+1)*big btp->Blocksize > state.t.length)
 		return int (state.t.length % big btp->Blocksize);
 	return btp->Blocksize;
 }
 
-readblock(p: ref Peer)
+readrreq(p: ref Peer)
 {
-	if(p.wants == nil)
+	if(p.rreqs.length == 0)
 		return;
 
 	alt {
-	p.readc <-= hd p.wants =>
-		if(dflag) say("readblock: requested another block");
-		p.wants = tl p.wants;
+	p.readc <-= p.rreqs.first.e =>
+		if(dflag) say("readrreq: another rreq");
+		p.rreqs.dropfirst();
 	* =>
-		if(dflag) say("readblock: diskreader busy, did not request another block");
+		if(dflag) say("readrreq: diskreader busy, did get another not request");
 	}
 }
 
@@ -1060,25 +1035,25 @@ peerratecmp(a1, a2: ref (ref Peer, int)): int
 	return 1;
 }
 
-request(peer: ref Peer, piece: ref Piece, reqs: list of Req)
+request(p: ref Peer, pc: ref Piece, reqs: list of ref LReq)
 {
 	msgs: list of ref Msg;
 	for(; reqs != nil; reqs = tl reqs) {
 		req := hd reqs;
-		busy := piece.busy[req.blockindex];
+		busy := pc.busy[req.block];
 		if(busy.t0 < 0)
-			piece.busy[req.blockindex].t0 = peer.id;
+			pc.busy[req.block].t0 = p.id;
 		else if(busy.t1 < 0)
-			piece.busy[req.blockindex].t1 = peer.id;
+			pc.busy[req.block].t1 = p.id;
 		else
-			raise "both slots busy...";
+			raise "both slots busy";
 
 		if(dflag) say("requesting "+req.text());
-		peer.reqs.add(req);
-		msgs = ref Msg.Request(req.pieceindex, req.blockindex*btp->Blocksize, blocksize(req))::msgs;
+		p.lreqs.add(req);
+		msgs = ref Msg.Request(req.piece, req.block*btp->Blocksize, blocksize(req))::msgs;
 	}
 	if(msgs != nil)
-		peersendmany(peer, rev(msgs));
+		peersendmany(p, rev(msgs));
 }
 
 schedule(p: ref Peer)
@@ -1086,11 +1061,11 @@ schedule(p: ref Peer)
 	if(!btp->needblocks(p))
 		return;
 
-	reqc := chan of ref (ref Piece, list of Req, chan of int);
+	reqc := chan of ref (ref Piece, list of ref LReq, chan of int);
 	spawn btp->schedule(reqc, p);
 	while((r := <-reqc) != nil) {
-		(piece, reqs, donec) := *r;
-		request(p, piece, reqs);
+		(pc, reqs, donec) := *r;
+		request(p, pc, reqs);
 		donec <-= 0;
 	}
 }
@@ -1098,14 +1073,14 @@ schedule(p: ref Peer)
 
 choke(p: ref Peer)
 {
-	peersend(p, ref Msg.Choke());
+	peersend(p, ref Msg.Choke);
 	p.state |= btp->LocalChoking;
 	putevent(ref Peerevent.State (p.id, Slocal|Schoking));
 }
 
 unchoke(p: ref Peer)
 {
-	peersend(p, ref Msg.Unchoke());
+	peersend(p, ref Msg.Unchoke);
 	p.state &= ~btp->LocalChoking;
 	putevent(ref Peerevent.State (p.id, Slocal|Sunchoking));
 	p.lastunchoke = daytime->now();
@@ -1114,7 +1089,7 @@ unchoke(p: ref Peer)
 interested(p: ref Peer)
 {
 	say("we are now interested in "+p.text());
-	peersend(p, ref Msg.Interested());
+	peersend(p, ref Msg.Interested);
 	p.state |= btp->LocalInterested;
 	putevent(ref Peerevent.State (p.id, Slocal|Sinterested));
 }
@@ -1122,25 +1097,17 @@ interested(p: ref Peer)
 uninterested(p: ref Peer)
 {
 	say("we are no longer interested in "+p.text());
-	peersend(p, ref Msg.Notinterested());
+	peersend(p, ref Msg.Notinterested);
 	p.state &= ~btp->LocalInterested;
 	putevent(ref Peerevent.State (p.id, Slocal|Suninterested));
-}
-
-wantpeerpieces(p: ref Peer): ref Bits
-{
-	b := state.piecehave.clone();
-	b.invert();
-	b = Bits.and(array[] of {p.piecehave, b});
-	return b;
 }
 
 interesting(p: ref Peer)
 {
 	# xxx we should call this more often.  a peer may have a piece we don't have yet, but we may have assigned all remaining blocks to (multiple) other peers, or we may be in paranoid mode
-	if(p.localinterested() && p.reqs.isempty() && wantpeerpieces(p).isempty())
+	if(p.localinterested() && p.lreqs.length == 0 && p.lwant.have == 0)
 		uninterested(p);
-	else if(!p.localinterested() && !wantpeerpieces(p).isempty())
+	else if(!p.localinterested() && p.lwant.have > 0)
 		interested(p);
 }
 
@@ -1188,22 +1155,23 @@ mainbufflush(b: ref Buf)
 	b.clear();
 }
 
-batchflushcomplete(piece: ref Piece, block: int): int
+batchflushcomplete(pc: ref Piece, block: int): int
 {
-	b := btp->batches(piece)[block/btp->Batchsize];
+	b := btp->batches(pc)[block/btp->Batchsize];
 	for(i := 0; i < len b.blocks; i++)
-		if(!piece.have.get(b.blocks[i]))
+		if(!pc.have.get(b.blocks[i]))
 			return 0;
 
 	start := (block/btp->Batchsize)*btp->Batchsize*btp->Blocksize;
 	end := start+btp->Batchsize*btp->Blocksize;
 	for(l := peerbox.peers; l != nil; l = tl l) {
-		peer := hd l;
-		if(peer.buf.overlaps(piece.index, start, end))
-			mainbufflush(peer.buf);
+		p := hd l;
+		if(p.buf.overlaps(pc.index, start, end))
+			mainbufflush(p.buf);
 	}
 	return 1;
 }
+
 
 nextoptimisticunchoke(): ref Peer
 {
@@ -1285,12 +1253,12 @@ chokingdownload(gen: int)
 }
 
 # xxx fix this code to never either block entirely or delay on disk/net i/o
-handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int, array of byte))
+peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, array of byte))
 {
 	p.msgseq++;
 
-	msize := msg.packedsize();
-	pick m := msg {
+	msize := mm.packedsize();
+	pick m := mm {
 	Piece =>
 		# xxx count pieces we did not request as overhead (meta)?
 		dsize := len m.d;
@@ -1303,7 +1271,7 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 		trafficmetadown.add(msize, 1);
 	}
 
-	pick m := msg {
+	pick m := mm {
 	Keepalive =>
 		;
 
@@ -1333,7 +1301,7 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 		p.state |= btp->RemoteInterested;
 		putevent(ref Peerevent.State (p.id, Sremote|Sinterested));
 
-		if(!p.localchoking() && peerbox.nactive() >= Unchokedmax && !isdone()) {
+		if(!p.localchoking() && peerbox.nactive() >= Unchokedmax && !done()) {
 			# xxx choke slowest peer that is not the optimistic unchoke
 		}
 
@@ -1344,7 +1312,7 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 		say(sprint("%s is no longer interested", p.text()));
 		p.state &= ~btp->RemoteInterested;
 		putevent(ref Peerevent.State (p.id, Sremote|Suninterested));
-		p.wants = nil;
+		p.rreqs.clear();
 
 		# if peer was unchoked, we'll unchoke another during next round
 
@@ -1352,13 +1320,15 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 		if(m.index >= state.t.piececount)
 			return peerdrop(p, 1, sprint("%s sent 'have' for invalid piece %d, disconnecting", p.text(), m.index));
 
-		if(p.piecehave.get(m.index))
+		if(p.rhave.get(m.index))
 			return peerdrop(p, 1, sprint("peer already had piece %d", m.index));
 
 		state.piececounts[m.index]++;
 		putevent(ref Peerevent.Piece (p.id, m.index));
 		if(dflag) say(sprint("remote now has piece %d", m.index));
-		p.piecehave.set(m.index);
+		p.rhave.set(m.index);
+		if(!state.piecehave.get(m.index))
+			p.lwant.set(m.index);
 		if(p.isdone())
 			peerbox.nseeding++;
 
@@ -1371,13 +1341,14 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 			return peerdrop(p, 1, sprint("%s sent bitfield after first message, disconnecting", p.text()));
 
 		err: string;
-		(p.piecehave, err) = Bits.mk(state.t.piececount, m.d);
+		(p.rhave, err) = Bits.mk(state.t.piececount, m.d);
 		if(err != nil)
 			return peerdrop(p, 1, sprint("%s sent bogus bitfield message: %s, disconnecting", p.text(), err));
+		p.lwant = Bits.nand(p.rhave, state.piecehave);
 
 		n := 0;
-		for(i := 0; i < p.piecehave.n && n < p.piecehave.have; i++)
-			if(p.piecehave.get(i)) {
+		for(i := 0; i < p.rhave.n && n < p.rhave.have; i++)
+			if(p.rhave.get(i)) {
 				state.piececounts[i]++;
 				n++;
 			}
@@ -1386,7 +1357,7 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 			putevent(ref Peerevent.Done (p.id));
 			peerbox.nseeding++;
 		} else
-			for(l := peereventpieces(p.id, p.piecehave.all()); l != nil; l = tl l)
+			for(l := peereventpieces(p.id, p.rhave); l != nil; l = tl l)
 				putevent(hd l);
 
 		interesting(p);
@@ -1394,7 +1365,7 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 	Piece =>
 		if(dflag) say(sprint("peer %d sent block piece=%d begin=%d length=%d", p.id, m.index, m.begin, len m.d));
 
-		req := Req.new(m.index, m.begin/btp->Blocksize);
+		req := ref LReq (m.index, m.begin/btp->Blocksize, 0);
 		if(blocksize(req) != len m.d)
 			return peerdrop(p, 1, sprint("%s sent bad size for block %s, disconnecting", p.text(), req.text()));
 
@@ -1402,31 +1373,31 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 		if(piece == nil)
 			return peerdrop(p, 1, sprint("got data for inactive piece %d", m.index));
 
-		if(!p.reqs.take(req)) {
+		if(!p.lreqs.take(req)) {
 			exp := "nothing";
-			if(!p.reqs.isempty())
-				exp = p.reqs.peek().text();
+			if(p.lreqs.length > 0)
+				exp = p.lreqs.first.e.text();
 			return peerdrop(p, 1, sprint("%s sent block %s, expected %s, disconnecting", p.text(), req.text(), exp));
 		}
 
-		blockindex := m.begin/btp->Blocksize;
-		if(piece.have.get(blockindex)) {
+		block := m.begin/btp->Blocksize;
+		if(piece.have.get(block)) {
 			needwritec <-= nil;
 			return say("already have this block, skipping...");
 		}
 
 		# possibly send cancel to other peer
-		busy := piece.busy[blockindex];
+		busy := piece.busy[block];
 		busypeer: ref Peer;
 		if(busy.t0 >= 0 && busy.t0 != p.id) {
 			busypeer = peerbox.findid(busy.t0);
-			piece.busy[blockindex].t0 = -1;
+			piece.busy[block].t0 = -1;
 		} else if(busy.t1 >= 0 && busy.t1 != p.id) {
 			busypeer = peerbox.findid(busy.t1);
-			piece.busy[blockindex].t1 = -1;
+			piece.busy[block].t1 = -1;
 		}
 		if(busypeer != nil) {
-			p.reqs.cancel(Req.new(m.index, m.begin/btp->Blocksize));
+			p.lreqs.cancel(ref LReq (m.index, m.begin/btp->Blocksize, 0));
 			peersend(p, ref Msg.Cancel(m.index, m.begin, len m.d));
 		}
 
@@ -1447,50 +1418,46 @@ handleinmsg(p: ref Peer, msg: ref Msg, needwritec: chan of list of ref (int, int
 			if(needwrite != nil)
 				needwrites = needwrite::needwrites;
 		} else  # if this completes the batch, flush it for all peers that have blocks belonging to it
-			batchflushcomplete(piece, blockindex);
+			batchflushcomplete(piece, block);
 
 		needwritec <-= rev(needwrites);
 
-		piece.have.set(blockindex);
-		piece.done[blockindex] = p.id;
-		putprogress(ref Progress.Block (piece.index, blockindex, piece.have.have, piece.have.n));
+		piece.have.set(block);
+		piece.done[block] = p.id;
+		putprogress(ref Progress.Block (piece.index, block, piece.have.have, piece.have.n));
 
 		if(piece.isdone()) {
 			# flush all bufs about this piece, also from other peers, to disk.  to make hash-checking read right data.
 			for(l := peerbox.peers; l != nil; l = tl l) {
-				peer := hd l;
-				if(peer.buf.piece == m.index) {
+				op := hd l;
+				if(op.buf.piece == m.index) {
 					say("flushing buf of other peer before hash check");
-					mainbufflush(peer.buf);
+					mainbufflush(op.buf);
 				}
 			}
 		}
 		schedule(p);
 
 	Request =>
-		b := Block.new(m.index, m.begin, m.length);
-		if(dflag) say(sprint("%s sent request for %s", p.text(), b.text()));
+		rr := ref RReq (m.index, m.begin, m.length);
+		if(dflag) say(sprint("%s sent request for %s", p.text(), rr.text()));
 
 		if(m.length > Blocksizemax)
 			return peerdrop(p, 0, "requested block too large, disconnecting");
-		if(p.piecehave.get(m.index))
+		if(p.rhave.get(m.index))
 			return peerdrop(p, 1, "peer requested piece it already claimed to have");
-		if(blockhave(p.wants, b))
-			return peerdrop(p, 1, "duplicate request from peer");
-		if(len p.wants >= btp->Blockqueuemax)
-			return peerdrop(p, 0, sprint("peer scheduled one too many blocks, already has %d scheduled, disconnecting", len p.wants));
+		if(p.rreqs.length >= Blockqueuemax)
+			return peerdrop(p, 0, sprint("peer scheduled one too many blocks, already has %d scheduled, disconnecting", p.rreqs.length));
 
-		p.wants = rev(b::rev(p.wants));
-		if(!p.localchoking() && p.remoteinterested() && len p.wants > 0)
-			readblock(p);
+		p.rreqs.add(rr);
+		if(!p.localchoking() && p.remoteinterested())
+			readrreq(p);
 
 	Cancel =>
-		b := Block.new(m.index, m.begin, m.length);
-		if(dflag) say(sprint("%s sent cancel for %s", p.text(), b.text()));
-		nwants := blockdel(p.wants, b);
-		if(len nwants == len p.wants)
-			return say("peer did not want block before, skipping");
-		p.wants = nwants;
+		rr := ref RReq (m.index, m.begin, m.length);
+		if(dflag) say(sprint("%s sent cancel for %s", p.text(), rr.text()));
+		if(!p.rreqs.del(rr))
+			say("peer did not want block before, skipping");
 	}
 }
 
@@ -1520,13 +1487,13 @@ main0()
 		}
 		dostyx(mm);
 
-	<-tickc =>
+	<-roundc =>
 		if(stopped)
 			return;
 		say(sprint("ticking, %d peers", len peerbox.peers));
 
 		# do choking/unchoking algorithm round
-		if(isdone())
+		if(done())
 			chokingupload(gen);
 		else
 			chokingdownload(gen);
@@ -1548,7 +1515,7 @@ main0()
 		if(interval > Intervalmax)
 			interval = Intervalmax;
 		now := daytime->now();
-		if(now < time0+Intervalstartupperiod && !isdone() && len peerbox.peers+len newpeers.all() < Peersmax && interval > Intervalneed)
+		if(now < time0+Intervalstartupperiod && !done() && len peerbox.peers+len newpeers.all() < Peersmax && interval > Intervalneed)
 			interval = Intervalneed;
 
 		say(sprint("next call to tracker will be in %d seconds", interval));
@@ -1591,28 +1558,28 @@ main0()
 		if(isfaulty(np.ip))
 			return say(sprint("connected to faulty ip %s, dropping connection...", np.ip));
 
-		peer := Peer.new(np, peerfd, extensions, peerid, dialed, state.t.piececount);
+		p := Peer.new(np, peerfd, extensions, peerid, dialed, state.t.piececount);
 		pidc := chan of int;
-		spawn peernetreader(pidc, peer);
-		spawn peernetwriter(pidc, peer);
-		spawn diskwriter(peer.writec);
-		spawn diskreader(peer);
-		peer.pids = <-pidc::<-pidc::peer.pids;
+		spawn peernetreader(pidc, p);
+		spawn peernetwriter(pidc, p);
+		spawn diskwriter(p.writec);
+		spawn diskreader(p);
+		p.pids = <-pidc::<-pidc::p.pids;
 
-		peerbox.add(peer);
-		say("new peer "+peer.fulltext());
-		putevent(ref Peerevent.New (peer.np.addr, peer.id, peer.peeridhex, peer.dialed));
+		peerbox.add(p);
+		say("new peer "+p.fulltext());
+		putevent(ref Peerevent.New (p.np.addr, p.id, p.peeridhex, p.dialed));
 
 		rotateips.pooladdunique(maskip(np.ip));
 
 		if(state.piecehave.have == 0)
-			peersend(peer, ref Msg.Keepalive());
+			peersend(p, ref Msg.Keepalive());
 		else
-			peersend(peer, ref Msg.Bitfield(state.piecehave.bytes()));
+			peersend(p, ref Msg.Bitfield(state.piecehave.bytes()));
 
 		if(peerbox.nactive() < Unchokedmax) {
-			say("unchoking rare new peer: "+peer.text());
-			unchoke(peer);
+			say("unchoking rare new peer: "+p.text());
+			unchoke(p);
 		}
 
 		if(dialed) {
@@ -1621,17 +1588,17 @@ main0()
 		} else
 			awaitpeer();
 
-	(peer, msg, needwritec, err) := <-peerinmsgc =>
+	(p, msg, needwritec, err) := <-peerinmsgc =>
 		if(stopped)
 			return;
 		if(err != nil)
-			return peerdrop(peer, 0, "read error from peer: "+err);
+			return peerdrop(p, 0, "read error from peer: "+err);
 		if(msg == nil)
-			return peerdrop(peer, 0, "eof from peer "+peer.text());
-		handleinmsg(peer, msg, needwritec);
+			return peerdrop(p, 0, "eof from peer "+p.text());
+		peermsg(p, msg, needwritec);
 
-	(peer, err) := <-peererrc =>
-		peerdrop(peer, 0, "peer error: "+err);
+	(p, err) := <-peererrc =>
+		peerdrop(p, 0, "peer error: "+err);
 
 	(pieceindex, begin, length, err) := <-diskwrittenc =>
 		if(stopped)
@@ -1687,8 +1654,13 @@ main0()
 		}
 
 		# this could have been the last piece this peer had, making us no longer interested
-		for(l := peerbox.peers; l != nil; l = tl l)
-			interesting(hd l);
+		for(l := peerbox.peers; l != nil; l = tl l) {
+			pp := hd l;
+			if(pp.lwant.get(piece.index)) {
+				pp.lwant.clear(piece.index);
+				interesting(pp);
+			}
+		}
 
 		writestate();
 		say("piece now done: "+piece.text());
@@ -1696,7 +1668,7 @@ main0()
 		for(l = peerbox.peers; l != nil; l = tl l)
 			peersend(hd l, ref Msg.Have(piece.index));
 
-		if(isdone()) {
+		if(done()) {
 			trackerevent = "completed";
 			spawn trackkick(0);
 			npeers: list of ref Peer;
@@ -1728,21 +1700,21 @@ main0()
 	curwritec <-= curmainwrite =>
 		mainwrites = tl mainwrites;
 
-	peer := <-wantmsgc =>
-		peer.getmsg = 1;
+	p := <-wantmsgc =>
+		p.getmsg = 1;
 		if(stopped)
 			return;
-		peergive(peer);
-		if(!peer.localchoking() && peer.remoteinterested() && peer.getmsg && len peer.wants > 0)
-			readblock(peer);
+		peergive(p);
+		if(!p.localchoking() && p.remoteinterested() && p.getmsg)
+			readrreq(p);
 
-	(peer, pieceindex, begin, buf, err) := <-diskreadc =>
+	(p, piece, begin, buf, err) := <-diskreadc =>
 		if(stopped)
 			return;
 		if(err != nil)
-			return warnstop(sprint("error writing piece %d, begin %d, length %d: %s", pieceindex, begin, len buf, err));
+			return warnstop(sprint("error writing piece %d, begin %d, length %d: %s", piece, begin, len buf, err));
 
-		peersend(peer, ref Msg.Piece(pieceindex, begin, buf));
+		peersend(p, ref Msg.Piece(piece, begin, buf));
 		# xxx calculate if we need to request another block already
 	}
 }
@@ -1756,11 +1728,11 @@ warn(1, sprint("main pid %d", pid()));
 		main0();
 }
 
-ticker()
+roundticker()
 {
 	for(;;) {
 		sys->sleep(10*1000);
-		tickc <-= 0;
+		roundc <-= 0;
 	}
 }
 
@@ -1884,7 +1856,7 @@ handshake(fd: ref Sys->FD): (array of byte, array of byte, string)
 	d[i++] = byte 19;
 	d[i:] = array of byte "BitTorrent protocol";
 	i += 19;
-	d[i:] = array[8] of {* => byte '\0'};
+	d[i:] = array[8] of {* => byte 0};
 	i += 8;
 	d[i:] = state.t.infohash;
 	i += 20;
@@ -1978,30 +1950,30 @@ msgread(fd: ref Sys->FD): (ref Msg, string)
 }
 
 
-peernetreader(pidc: chan of int, peer: ref Peer)
+peernetreader(pidc: chan of int, p: ref Peer)
 {
 	pidc <-= pid();
 
 	needwritec := chan of list of ref (int, int, array of byte);
 	for(;;) {
-		(m, err) := msgread(peer.fd);
-		peerinmsgc <-= (peer, m, needwritec, err);
+		(m, err) := msgread(p.fd);
+		peerinmsgc <-= (p, m, needwritec, err);
 		if(err != nil || m == nil)
 			break;
 
 		if(tagof m == tagof Msg.Piece)
 			for(l := <-needwritec; l != nil; l = tl l)
-				peer.writec <-= hd l;  # will block if disk is slow, slowing down peer as well
+				p.writec <-= hd l;  # will block if disk is slow, slowing down peer as well
 	}
 }
 
-peernetwriter(pidc: chan of int, peer: ref Peer)
+peernetwriter(pidc: chan of int, p: ref Peer)
 {
 	pidc <-= pid();
 
 	for(;;) {
-		wantmsgc <-= peer;
-		ml := <-peer.getmsgc;
+		wantmsgc <-= p;
+		ml := <-p.getmsgc;
 		if(ml == nil) {
 			say("peernetwriter: stopping...");
 			return;
@@ -2018,9 +1990,9 @@ peernetwriter(pidc: chan of int, peer: ref Peer)
 			m.packbuf(d[o:o+size]);
 			o += size;
 		}
-		n := netwrite(peer.fd, d, len d);
+		n := netwrite(p.fd, d, len d);
 		if(n != len d) {
-			peererrc <-= (peer, sprint("write: %r"));
+			peererrc <-= (p, sprint("write: %r"));
 			return;
 		}
 	}
@@ -2042,18 +2014,17 @@ diskwriter(reqc: chan of ref (int, int, array of byte))
 	}
 }
 
-diskreader(peer: ref Peer)
+diskreader(p: ref Peer)
 {
 	for(;;) {
-		req := <-peer.readc;
-		if(req == nil) {
+		rr := <-p.readc;
+		if(rr == nil) {
 			say("diskreader: stopping...");
 			break;
 		}
-		(piece, begin, length) := *req;
-		off := big piece*big state.t.piecelen + big begin;
-		err := state.tx.preadx(buf := array[length] of byte, len buf, off);
-		diskreadc <-= (peer, piece, begin, buf, err);
+		off := big rr.piece*big state.t.piecelen + big rr.begin;
+		err := state.tx.preadx(buf := array[rr.length] of byte, len buf, off);
+		diskreadc <-= (p, rr.piece, rr.begin, buf, err);
 	}
 }
 
@@ -2172,24 +2143,6 @@ Peerbox.longestunchoked(b: self ref Peerbox): ref Peer
 }
 
 
-blockhave(l: list of ref Block, b: ref Block): int
-{
-	for(; l != nil; l = tl l)
-		if(Block.eq(hd l, b))
-			return 1;
-	return 0;
-}
-
-blockdel(l: list of ref Block, b: ref Block): list of ref Block
-{
-	r: list of ref Block;
-	for(; l != nil; l = tl l)
-		if(!Block.eq(hd l, b))
-			r = hd l::r;
-	return rev(r);
-}
-
-
 filedone(f: ref Filex): int
 {
 	for(i := f.pfirst; i <= f.plast; i++)
@@ -2226,7 +2179,7 @@ preveta: int;
 lasteta: int;
 eta(): int
 {
-	if(isdone())
+	if(done())
 		return 0;
 	ms := sys->millisec();
 	if(!haveeta || ms-preveta >= 1000) {
@@ -2242,6 +2195,20 @@ eta(): int
 		preveta = ms;
 	}
 	return lasteta;
+}
+
+chokestr(choked: int): string
+{
+	if(choked)
+		return "choked";
+	return "unchoked";
+}
+
+intereststr(i: int): string
+{
+	if(i)
+		return "interested";
+	return "uninterested";
 }
 
 tablist[T](t: ref Table[T]): list of T

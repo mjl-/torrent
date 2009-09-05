@@ -94,21 +94,110 @@ Piece.text(p: self ref Piece): string
 }
 
 
-Block.new(piece, begin, length: int): ref Block
+RReq.eq(r1, r2: ref RReq): int
 {
-	return ref Block(piece, begin, length);
+	return r1.piece == r2.piece &&
+		r1.begin == r2.begin &&
+		r1.length == r2.length;
 }
 
-Block.eq(b1, b2: ref Block): int
+RReq.text(r: self ref RReq): string
 {
-	return b1.piece == b2.piece &&
-		b1.begin == b2.begin &&
-		b1.length == b2.length;
+	return sprint("RReq(piece %d, begin %d, length %d)", r.piece, r.begin, r.length);
 }
 
-Block.text(b: self ref Block): string
+
+Bigtab[T].new(n: int): ref Bigtab
 {
-	return sprint("Block(piece %d, begin %d, length %d)", b.piece, b.begin, b.length);
+	return ref Bigtab[T] (array[n] of list of (big, T));
+}
+
+Bigtab[T].add(t: self ref Bigtab, k: big, v: T)
+{
+	i := int (k % big len t.items);
+	t.items[i] = (k, v)::t.items[i];
+}
+
+Bigtab[T].del(t: self ref Bigtab, k: big): T
+{
+	r: list of (big, T);
+	i := int (k % big len t.items);
+	v: T;
+	for(l := t.items[i]; l != nil; l = tl l)
+		if((hd l).t0 != k)
+			r = hd l::r;
+		else
+			v = (hd l).t1;
+	return v;
+}
+
+Bigtab[T].find(t: self ref Bigtab, k: big): T
+{
+	i := int (k % big len t.items);
+	for(l := t.items[i]; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return (hd l).t1;
+	return nil;
+}
+
+RReqs.new(): ref RReqs
+{
+	rr := ref RReqs;
+	rr.tab = rr.tab.new(17);
+	rr.length = 0;
+	return rr;
+}
+
+RReqs.clear(rr: self ref RReqs)
+{
+	*rr = *RReqs.new();
+}
+
+rrkey(r: ref RReq): big
+{
+	k := (big r.piece)<<32;;
+	k |= big r.begin;
+	return k;
+}
+
+RReqs.add(rr: self ref RReqs, r: ref RReq)
+{
+	l := ref Link[ref RReq](rr.last, nil, r);
+	if(rr.first == nil) {
+		rr.first = rr.last = l;
+	} else {
+		rr.last.next = l;
+		rr.last = l;
+	}
+	rr.tab.add(rrkey(r), l);
+	rr.length++;
+}
+
+RReqs.del(rr: self ref RReqs, r: ref RReq): int
+{
+	l := rr.tab.del(rrkey(r));
+	if(l == nil)
+		return 0;
+
+	if(rr.first == l) {
+		rr.first = rr.first.next;
+	} else {
+		l.prev.next = l.next;
+		if(l.next != nil)
+			l.next.prev = l.prev;
+	}
+	if(rr.last == l)
+		rr.last = l.prev;
+	rr.length--;
+	return 1;
+}
+
+RReqs.dropfirst(rr: self ref RReqs)
+{
+	rr.first.next.prev = nil;
+	rr.first.e = nil;
+	rr.first = rr.first.next;
+	rr.length--;
 }
 
 
@@ -160,17 +249,19 @@ Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed
 	getmsgc := chan of list of ref Bittorrent->Msg;
 	msgseq := 0;
 	writec := chan[4] of ref (int, int, array of byte);
-	readc := chan of ref (int, int, int);
+	readc := chan of ref RReq;
 	return ref Peer(
 		peergen++,
 		np, fd, extensions, peerid, hex(peerid),
 		0, getmsgc, nil, nil,
-		Reqs.new(Blockqueuesize),
+		Bits.new(npieces),
 		Bits.new(npieces),
 		RemoteChoking|LocalChoking,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		nil, 0, dialed, Buf.new(), writec, readc, nil);
+		LReqs.new(),
+		RReqs.new(),
+		0, dialed, Buf.new(), writec, readc, nil);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -195,7 +286,7 @@ Peer.localinterested(p: self ref Peer): int
 
 Peer.isdone(p: self ref Peer): int
 {
-	return p.piecehave.isfull();
+	return p.rhave.isfull();
 }
 
 Peer.text(p: self ref Peer): string
@@ -205,7 +296,7 @@ Peer.text(p: self ref Peer): string
 
 Peer.fulltext(p: self ref Peer): string
 {
-	return sprint("Peer(id %d, addr %s, wantblocks %d, peerid %s>", p.id, p.np.addr, len p.wants, peeridfmt(p.peerid));
+	return sprint("Peer(id %d, addr %s, len rreqs %d, peerid %s>", p.id, p.np.addr, p.rreqs.length, peeridfmt(p.peerid));
 }
 
 
@@ -305,25 +396,25 @@ Newpeers.empty(n: self ref Newpeers): int
 }
 
 
-request(reqc: chan of ref (ref Piece, list of Req, chan of int), p: ref Piece, reqs: list of Req)
+request(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Piece, reqs: list of ref LReq)
 {
 	donec := chan of int;
 	reqc <-= ref (p, reqs, donec);
 	<-donec;
 }
 
-schedbatches(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer, b: array of ref Batch)
+schedbatches(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer, b: array of ref Batch)
 {
-	for(i := 0; needblocks(peer) && i < len b; i++)
+	for(i := 0; needblocks(p) && i < len b; i++)
 		request(reqc, b[i].piece, b[i].unused());
 }
 
-schedpieces(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer, a: array of ref Piece)
+schedpieces(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer, a: array of ref Piece)
 {
-	for(i := 0; needblocks(peer) && i < len a; i++)
-		if((peer.piecehave).get(a[i].index)) {
+	for(i := 0; needblocks(p) && i < len a; i++)
+		if(p.rhave.get(a[i].index)) {
 			b := batches(a[i]);
-			schedbatches(reqc, peer, b);
+			schedbatches(reqc, p, b);
 		}
 }
 
@@ -376,18 +467,18 @@ getrarestpiece(b: ref Bits)
 	while(skip-- > 0)
 		rarest = tl rarest;
 	index := hd rarest;
-	say(sprint("choose rarest piece %d", index));
+	if(dflag) say(sprint("choose rarest piece %d", index));
 }
 
-needblocks(peer: ref Peer): int
+needblocks(p: ref Peer): int
 {
-	return peer.reqs.count() == 0 || peer.reqs.count()+Batchsize < peer.reqs.size();
+	return p.lreqs.length == 0 || p.lreqs.length+Batchsize < Blockqueuesize;
 }
 
 inactiverare(): array of ref (int, int)
 {
 	a := array[state.piecebusy.n-state.piecebusy.have] of ref (int, int);
-	say(sprint("inactiverare: %d pieces, %d busy, finding %d", state.piecebusy.n, state.piecebusy.have, len a));
+	if(dflag) say(sprint("inactiverare: %d pieces, %d busy, finding %d", state.piecebusy.n, state.piecebusy.have, len a));
 	j := 0;
 	for(i := 0; j < len a && i < state.piecebusy.n; i++)
 		if(!state.piecebusy.get(i))
@@ -423,197 +514,178 @@ progresscmp(p1, p2: ref Piece): int
 	return p2.have.n-p1.have.n;
 }
 
-rarestfirst(): int
+
+rarestfirst(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
 {
-	return state.piecehave.have >= Piecesrandom;
+	if(dflag) say("schedule: doing rarest first");
+
+	# attempt to work on last piece this peer was working on
+	if(dflag) say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
+	if(p.lreqs.length > 0) {
+		piece := state.pieces.find(p.lreqs.last.e.piece);
+		if(piece != nil)
+			schedpieces(reqc, p, array[] of {piece});
+	}
+
+	# find rarest orphan pieces to work on
+	if(dflag) say("schedule: trying rarest orphans");
+	a := piecesrareorphan(1);
+	schedpieces(reqc, p, a);
+	if(!needblocks(p))
+		return;
+
+	# find rarest inactive piece to work on
+	if(dflag) say("schedule: trying inactive pieces");
+	rare := inactiverare();
+	for(i := 0; i < len rare; i++) {
+		v := rare[i].t0;
+		if(dflag) say(sprint("using new rare piece %d", v));
+		pc := Piece.new(v, state.t.piecelength(v));
+		state.pieces.add(v, pc);
+		state.piecebusy.set(v);
+		schedpieces(reqc, p, array[] of {pc});
+		if(!needblocks(p))
+			return;
+	}
+
+	# find rarest active non-orphan piece to work on
+	if(dflag) say("schedule: trying rarest non-orphans");
+	a = piecesrareorphan(0);
+	schedpieces(reqc, p, a);
+	if(!needblocks(p))
+		return;
 }
 
-schedule(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)
+random(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
 {
-	schedule0(reqc, peer);
-	reqc <-= nil;
-}
+	if(dflag) say("schedule: doing random");
 
-schedule0(reqc: chan of ref (ref Piece, list of Req, chan of int), peer: ref Peer)
-{
-	if(rarestfirst()) {
-		say("schedule: doing rarest first");
+	# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
+	a := l2a(tablist(state.pieces));
+	inssort(a, progresscmp);
+	for(i := 0; i < len a; i++) {
+		piece := a[i];
+		if(dflag) say(sprint("schedule: looking at piece %d", piece.index));
 
-		# attempt to work on last piece this peer was working on
-		say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
-		req := peer.reqs.last();
-		if(req != nil) {
-			piece := state.pieces.find(req.pieceindex);
-			if(piece != nil)
-				schedpieces(reqc, peer, array[] of {piece});
-		}
+		# skip piece if this peer doesn't have it
+		if(!p.rhave.get(piece.index))
+			continue;
 
-		# find rarest orphan pieces to work on
-		say("schedule: trying rarest orphans");
-		a := piecesrareorphan(1);
-		schedpieces(reqc, peer, a);
-		if(!needblocks(peer))
+		# divide piece into batches
+		b := batches(piece);
+
+		# request blocks from unused batches first
+		if(dflag) say("schedule: trying unused batches from piece");
+		schedbatches(reqc, p, b);
+		if(!needblocks(p))
 			return;
 
-		# find rarest inactive piece to work on
-		say("schedule: trying inactive pieces");
-		rare := inactiverare();
-		for(i := 0; i < len rare; i++) {
-			v := rare[i].t0;
-			say(sprint("using new rare piece %d", v));
-			p := Piece.new(v, state.t.piecelength(v));
-			state.pieces.add(v, p);
-			state.piecebusy.set(v);
-			schedpieces(reqc, peer, array[] of {p});
-			if(!needblocks(peer))
+		# if more requests needed, start on partially used batches too, in reverse order (for fewer duplicate data)
+		if(dflag) say("schedule: trying partially used batches from piece");
+		for(k := len b-1; k >= 0; k--) {
+			request(reqc, piece, b[k].usedpartial(p));
+			if(!needblocks(p))
 				return;
 		}
+	}
 
-		# find rarest active non-orphan piece to work on
-		say("schedule: trying rarest non-orphans");
-		a = piecesrareorphan(0);
-		schedpieces(reqc, peer, a);
-		if(!needblocks(peer))
-			return;
-		
-	} else {
-		say("schedule: doing random");
-
-		# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-		a := l2a(tablist(state.pieces));
-		inssort(a, progresscmp);
-		for(i := 0; i < len a; i++) {
-			piece := a[i];
-			say(sprint("schedule: looking at piece %d", piece.index));
-
-			# skip piece if this peer doesn't have it
-			if(!peer.piecehave.get(piece.index))
-				continue;
-
-			# divide piece into batches
-			b := batches(piece);
-
-			# request blocks from unused batches first
-			say("schedule: trying unused batches from piece");
-			schedbatches(reqc, peer, b);
-			if(!needblocks(peer))
-				return;
-
-			# if more requests needed, start on partially used batches too, in reverse order (for fewer duplicate data)
-			say("schedule: trying partially used batches from piece");
-			for(k := len b-1; k >= 0; k--) {
-				request(reqc, piece, b[k].usedpartial(peer));
-				if(!needblocks(peer))
-					return;
-			}
-		}
-
-		# otherwise, get new random pieces to work on
-		say("schedule: trying random pieces");
-		while(needblocks(peer) && state.piecebusy.have < state.piecebusy.n) {
-			say("schedule: getting another random piece...");
-			piece := getrandompiece();
-			b := batches(piece);
-			schedbatches(reqc, peer, b);
-		}
+	# otherwise, get new random pieces to work on
+	if(dflag) say("schedule: trying random pieces");
+	while(needblocks(p) && state.piecebusy.have < state.piecebusy.n) {
+		if(dflag) say("schedule: getting another random piece...");
+		piece := getrandompiece();
+		b := batches(piece);
+		schedbatches(reqc, p, b);
 	}
 }
 
-
-Req.new(pieceindex, blockindex: int): Req
+schedule(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
 {
-	return Req(pieceindex, blockindex, 0);
-}
-
-Req.eq(r1, r2: Req): int
-{
-	return r1.pieceindex == r2.pieceindex && r1.blockindex == r2.blockindex;
-}
-
-Req.text(r: self Req): string
-{
-	return sprint("Req(piece %d, block %d, begin %d)", r.pieceindex, r.blockindex, r.blockindex*Blocksize);
+	if(state.piecehave.have >= Piecesrandom)
+		rarestfirst(reqc, p);
+	else
+		random(reqc, p);
+	reqc <-= nil;
 }
 
 
-Reqs.new(size: int): ref Reqs
+LReq.eq(r1, r2: ref LReq): int
 {
-	return ref Reqs(array[size] of Req, 0, 0, nil);
+	return r1.piece == r2.piece && r1.block == r2.block;
 }
 
-Reqs.take(r: self ref Reqs, req: Req): int
+LReq.text(r: self ref LReq): string
 {
-	if(r.isempty())
-		raise "take on empty list";
+	return sprint("LReq(piece %d, block %d)", r.piece, r.block);
+}
 
-	# first, skip over cancelled requests if necessary
-	f := r.first; 
-	while(f != r.next && !Req.eq(r.a[f], req) && r.a[f].cancelled)
-		f = (f+1) % len r.a;
 
-	# then see if request was the one expected, if any
-	if(f == r.next && !Req.eq(r.a[f], req))
+LReqs.new(): ref LReqs
+{
+	r := ref LReqs;
+	r.tab = r.tab.new(17);
+	r.length = 0;
+	return r;
+}
+
+lrkey(r: ref LReq): big
+{
+	v := (big r.piece)<<32;
+	v |= big r.block;
+	return v;
+}
+
+LReqs.add(r: self ref LReqs, lr: ref LReq)
+{
+	l := ref Link[ref LReq](r.last, nil, lr);
+	if(r.first == nil) {
+		r.first = r.last = l;
+	} else {
+		r.last.next = l;
+		r.last = l;
+	}
+	r.tab.add(lrkey(lr), l);
+	r.length++;
+}
+
+LReqs.take(r: self ref LReqs, lr: ref LReq): int
+{
+	# drop leading non-matching cancelled pieces
+	while(r.first != nil && !LReq.eq(r.first.e, lr) && r.first.e.cancelled) {
+		r.tab.del(lrkey(lr));
+		if(r.last == r.first)
+			r.last = nil;
+		r.first.e = nil;
+		r.first = r.first.next;
+		if(r.first != nil)
+			r.first.prev = nil;
+	}
+	if(r.first == nil || !LReq.eq(r.first.e, lr))
 		return 0;
-	r.first = (f+1) % len r.a;
+	r.tab.del(lrkey(lr));
+	if(r.first == r.last) {
+		r.first = r.last = nil;
+	} else {
+		r.first = r.first.next;
+		r.first.prev = nil;
+	}
+	r.length--;
 	return 1;
 }
 
-Reqs.peek(r: self ref Reqs): Req
+LReqs.cancel(r: self ref LReqs, lr: ref LReq): int
 {
-	if(r.isempty())
-		raise "peek on empty list";
-	return r.a[r.first];
+	v := r.tab.find(lrkey(lr));
+	if(v == nil)
+		return 0;
+	v.e.cancelled = 1;
+	r.length--;
+	return 1;
 }
 
-Reqs.cancel(r: self ref Reqs, req: Req)
+LReqs.text(r: self ref LReqs): string
 {
-	for(i := r.first; i != r.next; i = (i+1) % len r.a)
-		if(Req.eq(req, r.a[i]))
-			r.a[i].cancelled = 1;
-}
-
-Reqs.add(r: self ref Reqs, req: Req)
-{
-	if(r.isfull())
-		raise "add on full list";
-	r.a[r.next] = req;
-	r.next = (r.next+1) % len r.a;
-	r.lastreq = ref req;
-}
-
-Reqs.flush(r: self ref Reqs)
-{
-	r.first = r.next = 0;
-}
-
-Reqs.last(r: self ref Reqs): ref Req
-{
-	return r.lastreq;
-}
-
-Reqs.isempty(r: self ref Reqs): int
-{
-	return r.first == r.next;
-}
-
-Reqs.isfull(r: self ref Reqs): int
-{
-	return (r.next+1) % len r.a == r.first;
-}
-
-Reqs.count(r: self ref Reqs): int
-{
-	return (len r.a+r.next-r.first) % len r.a;
-}
-
-Reqs.size(r: self ref Reqs): int
-{
-	return len r.a;
-}
-
-Reqs.text(r: self ref Reqs): string
-{
-	return sprint("Reqs(first %d, next %d, size %d)", r.first, r.next, len r.a);
+	return sprint("LReqs(length %d)", r.length);
 }
 
 
@@ -625,24 +697,24 @@ Batch.new(first, n: int, piece: ref Piece): ref Batch
 	return ref Batch(blocks, piece);
 }
 
-Batch.unused(b: self ref Batch): list of Req
+Batch.unused(b: self ref Batch): list of ref LReq
 {
-	reqs: list of Req;
+	reqs: list of ref LReq;
 	for(i := len b.blocks-1; i >= 0; i--) {
 		busy := b.piece.busy[b.blocks[i]];
 		if(busy.t0 < 0 && busy.t1 < 0)
-			reqs = Req.new(b.piece.index, b.blocks[i])::reqs;
+			reqs = ref LReq (b.piece.index, b.blocks[i], 0)::reqs;
 	}
 	return reqs;
 }
 
-Batch.usedpartial(b: self ref Batch, peer: ref Peer): list of Req
+Batch.usedpartial(b: self ref Batch, p: ref Peer): list of ref LReq
 {
-	reqs: list of Req;
+	reqs: list of ref LReq;
 	for(i := len b.blocks-1; i >= 0; i--) {
 		busy := b.piece.busy[b.blocks[i]];
-		if(busy.t0 != peer.id && busy.t1 != peer.id && (busy.t0 < 0 || busy.t1 < 0))
-			reqs = Req.new(b.piece.index, b.blocks[i])::reqs;
+		if(busy.t0 != p.id && busy.t1 != p.id && (busy.t0 < 0 || busy.t1 < 0))
+			reqs = ref LReq (b.piece.index, b.blocks[i], 0)::reqs;
 	}
 	return reqs;
 }
