@@ -100,7 +100,7 @@ Bits.invert(b: self ref Bits)
 
 Bits.nand(a, na: ref Bits): ref Bits
 {
-	r := ref Bits(array[len a.d] of byte, 0, a.n);
+	r := ref Bits(array[len a.d] of byte, a.n, 0);
 	for(i := 0; i < len a.d; i++) {
 		r.d[i] = a.d[i]&~na.d[i];
 		r.have += nbits(r.d[i]);
@@ -136,12 +136,12 @@ Bits.all(b: self ref Bits): list of int
 
 Bits.iter(b: self ref Bits): ref Bititer
 {
-	return ref Bititer(b, -1, 0);
+	return ref Bititer(b, -1, 0, 0);
 }
 
 Bits.inviter(b: self ref Bits): ref Bititer
 {
-	return ref Bititer(b, -1, 1);
+	return ref Bititer(b, -1, 1, 0);
 }
 
 Bits.text(b: self ref Bits): string
@@ -164,13 +164,17 @@ Bits.text(b: self ref Bits): string
 Bititer.next(b: self ref Bititer): int
 {
 	if(b.inv) {
-		while(++b.last < b.b.n)
-			if(!b.b.get(b.last))
+		while(b.seen < b.b.n-b.b.have && ++b.last < b.b.n)
+			if(!b.b.get(b.last)) {
+				b.seen++;
 				return b.last;
+			}
 	} else {
-		while(++b.last < b.b.n)
-			if(b.b.get(b.last))
+		while(b.seen < b.b.have && ++b.last < b.b.n)
+			if(b.b.get(b.last)) {
+				b.seen++;
 				return b.last;
+			}
 	}
 	return -1;
 }

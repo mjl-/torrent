@@ -5,11 +5,9 @@ Bittorrentpeer: module
 	dflag:	int;
 	init:	fn(st: ref State);
 
-	Peeridlen:	con 20;
-
 	Piecesrandom:	con 4;
 	Blocksize:	con 16*1024;
-	Blockqueuesize:	con 30;  # number of pending blocks to request to peer
+	Blockqueuesize:	con 50;  # number of pending blocks to request to peer
 	Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
 	Batchsize:	con Diskchunksize/Blocksize;
 
@@ -17,10 +15,7 @@ Bittorrentpeer: module
 	State: adt {
 		t:		ref Bittorrent->Torrent;
 		tx:		ref Bittorrent->Torrentx;
-		pieces:		ref Tables->Table[ref Piece];  # only active pieces
-		piecehave:	ref Bitarray->Bits;	# pieces we completed (including verified)
-		piecebusy:	ref Bitarray->Bits;	# pieces we completed or are working on.  we can start on the other pieces.
-		piececounts:	array of int;  # for each piece, count of peers that have it
+		pieces:		ref Pieces;
 	};
 
 	randomize:	fn[T](a: array of T);
@@ -92,12 +87,62 @@ Bittorrentpeer: module
 		written:	ref Bitarray->Bits;
 		length:		int;
 		busy:		array of (int, int);  # peerid, peerid
+		nhalfbusy,
+		nfullbusy:	int;
 		done:		array of int;  # peerid
+		hash:		ref Keyring->DigestState;
+		hashoff:	int; 
 
 		new:	fn(index, length: int): ref Piece;
 		isdone:	fn(p: self ref Piece): int;
 		orphan:	fn(p: self ref Piece): int;
 		text:	fn(p: self ref Piece): string;
+	};
+
+	Pieces: adt {
+		have,
+		busy:	ref Bitarray->Bits;
+		active:	ref Tables->Table[ref Piece];  # has both busy & orphans
+		count:	array of int;
+		rare:	ref Rare;	# for inactive pieces we do not yet have
+
+		havepiece:	fn(ps: self ref Pieces, i: int);
+		delpeer:	fn(ps: self ref Pieces, p: ref Peer);
+		addpeerpiece:	fn(ps: self ref Pieces, p: ref Peer, index: int);
+		addpeerpieces:	fn(ps: self ref Pieces, p: ref Peer);
+	};
+
+	Rarenum: adt {
+		count:	int;
+		a:	array of int;	# sorted
+		na:	int;
+
+		new:	fn(count: int): ref Rarenum;
+		add,
+		del:	fn(r: self ref Rarenum, i: int);
+	};
+
+	Rareiter: adt {
+		i:	int;
+		n:	int;
+		index:	array of int;  # random indexes into Rarenum.a
+		r:	ref Rare;
+
+		next:	fn(r: self ref Rareiter): int;
+	};
+
+	Rare: adt {
+		pieces:	ref Table[ref Rarenum];
+		nums:	array of ref Rarenum;  # sparse, sorted by count for binary search
+		nnums:	int;
+
+		new:		fn(): ref Rare;
+		add,
+		del:		fn(r: self ref Rare, i: int);
+		delpiece:	fn(r: self ref Rare, index: int);
+		addmany,
+		delmany:	fn(r: self ref Rare, b: ref Bits);
+		iter:		fn(r: self ref Rare): ref Rareiter;
 	};
 
 
@@ -223,7 +268,6 @@ Bittorrentpeer: module
 		new:		fn(first, n: int, piece: ref Piece): ref Batch;
 		unused:		fn(b: self ref Batch): list of ref LReq;
 		usedpartial:	fn(b: self ref Batch, peer: ref Peer): list of ref LReq;
-		text:		fn(b: self ref Batch): string;
 	};
 
 

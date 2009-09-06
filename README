@@ -39,12 +39,9 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 # todo
 
-- remove the premature optimisations
-- explain the design better
-
-
 ## wm/torrent: 
 
+- make config options settable.  just put the value in a tk entry, and write+read the new value on return.
 - available bar is not smoothly filled
 - figure out how to fill the panel with the bars (and thus bars themselves) in x direction
 - catch resizes and recreate the bars with new width.
@@ -58,16 +55,17 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- do we need to flush lreqs when remote chokes us?
-- keep track of rareness of pieces
-- improve piece/peer scheduling.  it seems we are not looking at peer availability.  or at least nog enough...
+- improve piece/peer scheduling
 - it seems we can now get blocks for inactive pieces?
 
 - lots of testing
 - for unused peers from tracker, make difference between new ip's and known ip's (current peers, bad peers).
 - write manual page
+- make ctl for max peers, and ratio of dialed/listened peers, and (non)-seeders.
+- if we are fully connected, drop some peers once in a while, for better peers/peercloud
 
-- optim: Piece.hashstate, for keeping the hash of the piece up to date in case of sequentially fetching blocks (a common case).
+- verify hash in separate prog?
+- do not block on i/o in peermsg().  should perhaps do more in progs?
 - optim: use better data structures in eg Peerbox, so picking peers to unchoke etc doesn't require walking through all the peers and their pieces.
 - make the scheduler capable of taking abuse into account.  the more abuse from peers (bogus hashes), the fewer peers we schedule on a single peer?  or the harder we try to correct faulty blocks?  make sure it's all the same standard code path, to prevent obscure bugs only laid bare by abusive peers.
 - use numwant in tracker request, set it high

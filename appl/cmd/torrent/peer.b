@@ -38,7 +38,7 @@ include "bittorrent.m";
 	Bee, Msg, File, Torrent, Filex, Torrentx: import bt;
 include "../../lib/bittorrentpeer.m";
 	btp: Bittorrentpeer;
-	State, Pool, Traffic, Piece, Peer, Newpeer, Newpeers, Buf, LReq, LReqs, RReq, RReqs, Batch, List, Progress, Peerevent, Eventfid: import btp;
+	State, Pool, Traffic, Piece, Pieces, Rare, Peer, Newpeer, Newpeers, Buf, LReq, LReqs, RReq, RReqs, Batch, List, Progress, Peerevent, Eventfid: import btp;
 	Slocal, Sremote, Schoking, Sunchoking, Sinterested, Suninterested: import Bittorrentpeer;
 
 Torrentpeer: module {
@@ -80,6 +80,7 @@ faulty:		list of (string, int);  # ip, time
 islistening:	int;  # whether listener() is listening
 totalleft:	big;
 trackerevent:	string;
+trackkickpid := -1;
 trafficup,
 trafficdown,
 trafficmetaup,
@@ -262,11 +263,12 @@ init(nil: ref Draw->Context, args: list of string)
 	if(err != nil)
 		fail(err);
 
+	state.pieces = ref Pieces;
 	if(created) {
 		# all new files, we don't have pieces yet
 		trackerevent = "started";
 		say("no state file needed, all new files");
-		state.piecehave = Bits.new(state.t.piececount);
+		state.pieces.have = Bits.new(state.t.piececount);
 	} else {
 		# attempt to read state of pieces from .torrent.state file
 		state.tx.statefd = sys->open(state.tx.statepath, Sys->ORDWR);
@@ -275,19 +277,20 @@ init(nil: ref Draw->Context, args: list of string)
 			d := readfd(state.tx.statefd, 128*1024);
 			if(d == nil)
 				fail(sprint("%r"));
-			(state.piecehave, err) = Bits.mk(state.t.piececount, d);
+			(state.pieces.have, err) = Bits.mk(state.t.piececount, d);
 			if(err != nil)
 				fail(sprint("%s: invalid state", state.tx.statepath));
 		} else {
 			# otherwise, read through all data
 			say("starting to check all pieces in files...");
-			state.piecehave = Bits.new(state.t.piececount);
-			bt->torrenthash(state.tx, state.piecehave);
+			state.pieces.have = Bits.new(state.t.piececount);
+			bt->torrenthash(state.tx, state.pieces.have);
 		}
 	}
-	state.piecebusy = state.piecehave.clone();
-	state.piececounts = array[state.t.piececount] of {* => 0};
-	state.pieces = state.pieces.new(8, nil);
+	state.pieces.busy = state.pieces.have.clone();
+	state.pieces.active = state.pieces.active.new(8, nil);
+	state.pieces.count = array[state.t.piececount] of {* => 0};
+	state.pieces.rare = Rare.new();
 
 	peerbox = Peerbox.new();
 	newpeers = ref Newpeers;
@@ -304,8 +307,8 @@ init(nil: ref Draw->Context, args: list of string)
 			writestate();
 	}
 
-	totalhave := big state.piecehave.have*big state.t.piecelen;
-	if(state.piecehave.get(state.t.piececount-1)) {
+	totalhave := big state.pieces.have.have*big state.t.piecelen;
+	if(state.pieces.have.get(state.t.piececount-1)) {
 		totalhave -= big state.t.piecelen;
 		totalhave += big state.t.piecelength(state.t.piececount-1);
 	}
@@ -373,7 +376,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	time0 = daytime->now();
 	if(!stopped)
-		spawn trackkick(0);
+		trackkick(0);
 }
 
 dostyx(mm: ref Tmsg)
@@ -584,7 +587,7 @@ ctl(m: ref Tmsg.Write)
 			return replyerror(m, "no such peer");
 		peerdrop(p, 0, nil);
 	"track" =>
-		spawn trackkick(0);
+		trackkick(0);
 	"debug" =>
 		case hd l {
 		"peer" =>	dflag = !dflag;
@@ -659,7 +662,7 @@ putprogressstate(l: ref List[ref Progress])
 	if(done())
 		l = next(l, ref Progress.Done);
 	else {
-		it := state.piecehave.iter();
+		it := state.pieces.have.iter();
 		r: list of int;
 		i: int;
 		do {
@@ -695,10 +698,9 @@ putpeerstate(l: ref List[ref Peerevent])
 		l = next(l, ref Peerevent.New (p.np.addr, p.id, p.peeridhex, p.dialed));
 		if(p.isdone())
 			l = next(l, ref Peerevent.Done (p.id));
-		else if(p.rhave.have != 0) {
+		else
 			for(ll := peereventpieces(p.id, p.rhave); ll != nil; ll = tl ll)
 				l = next(l, hd ll);
-		}
 		if(p.localchoking())
 			l = next(l, ref Peerevent.State (p.id, Slocal|Schoking));
 		if(p.localinterested())
@@ -823,7 +825,7 @@ replyerror(m: ref Tmsg, s: string)
 
 done(): int
 {
-	return state.piecehave.n == state.piecehave.have;
+	return state.pieces.have.n == state.pieces.have.have;
 }
 
 stop()
@@ -849,13 +851,12 @@ start()
 	putprogress(ref Progress.Started);
 
 	spawn trackkick(0);
-	# xxx start dialing?
 	# when we have new peers, scheduling will begin as normal
 }
 
 writestate()
 {
-	d := state.piecehave.d;
+	d := state.pieces.have.d;
 	if(sys->pwrite(state.tx.statefd, d, len d, big 0) != len d)
 		warn(1, sprint("writing state: %r"));
 	else
@@ -869,22 +870,7 @@ peerdrop(p: ref Peer, faulty: int, err: string)
 	if(faulty)
 		setfaulty(p.np.ip);
 
-	n := 0;
-	for(i := 0; i < p.rhave.n && n < p.rhave.have; i++)
-		if(p.rhave.get(i)) {
-			state.piececounts[i]--;
-			n++;
-		}
-
-	for(l := tablist(state.pieces); l != nil; l = tl l) {
-		piece := hd l;
-		for(i = 0; i < len piece.busy; i++) {
-			if(piece.busy[i].t0 == p.id)
-				piece.busy[i].t0 = -1;
-			if(piece.busy[i].t1 == p.id)
-				piece.busy[i].t1 = -1;
-		}
-	}
+	state.pieces.delpeer(p);
 
 	if(p.dialed)
 		dialpeers();
@@ -1040,13 +1026,17 @@ request(p: ref Peer, pc: ref Piece, reqs: list of ref LReq)
 	msgs: list of ref Msg;
 	for(; reqs != nil; reqs = tl reqs) {
 		req := hd reqs;
-		busy := pc.busy[req.block];
-		if(busy.t0 < 0)
+		if(pc.busy[req.block].t0 < 0)
 			pc.busy[req.block].t0 = p.id;
-		else if(busy.t1 < 0)
+		else if(pc.busy[req.block].t1 < 0)
 			pc.busy[req.block].t1 = p.id;
 		else
 			raise "both slots busy";
+		if(pc.busy[req.block].t0 >= 0 && pc.busy[req.block].t1 >= 0) {
+			pc.nhalfbusy--;
+			pc.nfullbusy++;
+		} else
+			pc.nhalfbusy++;
 
 		if(dflag) say("requesting "+req.text());
 		p.lreqs.add(req);
@@ -1323,14 +1313,14 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		if(p.rhave.get(m.index))
 			return peerdrop(p, 1, sprint("peer already had piece %d", m.index));
 
-		state.piececounts[m.index]++;
 		putevent(ref Peerevent.Piece (p.id, m.index));
 		if(dflag) say(sprint("remote now has piece %d", m.index));
 		p.rhave.set(m.index);
-		if(!state.piecehave.get(m.index))
+		if(!state.pieces.have.get(m.index))
 			p.lwant.set(m.index);
 		if(p.isdone())
 			peerbox.nseeding++;
+		state.pieces.addpeerpiece(p, m.index);
 
 		interesting(p);
 		if(!p.remotechoking())
@@ -1344,14 +1334,9 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		(p.rhave, err) = Bits.mk(state.t.piececount, m.d);
 		if(err != nil)
 			return peerdrop(p, 1, sprint("%s sent bogus bitfield message: %s, disconnecting", p.text(), err));
-		p.lwant = Bits.nand(p.rhave, state.piecehave);
+		p.lwant = Bits.nand(p.rhave, state.pieces.have);
 
-		n := 0;
-		for(i := 0; i < p.rhave.n && n < p.rhave.have; i++)
-			if(p.rhave.get(i)) {
-				state.piececounts[i]++;
-				n++;
-			}
+		state.pieces.addpeerpieces(p);
 
 		if(p.isdone()) {
 			putevent(ref Peerevent.Done (p.id));
@@ -1369,7 +1354,7 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		if(blocksize(req) != len m.d)
 			return peerdrop(p, 1, sprint("%s sent bad size for block %s, disconnecting", p.text(), req.text()));
 
-		piece := state.pieces.find(m.index);
+		piece := state.pieces.active.find(m.index);
 		if(piece == nil)
 			return peerdrop(p, 1, sprint("got data for inactive piece %d", m.index));
 
@@ -1386,16 +1371,24 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 			return say("already have this block, skipping...");
 		}
 
-		# possibly send cancel to other peer
-		busy := piece.busy[block];
-		busypeer: ref Peer;
-		if(busy.t0 >= 0 && busy.t0 != p.id) {
-			busypeer = peerbox.findid(busy.t0);
-			piece.busy[block].t0 = -1;
-		} else if(busy.t1 >= 0 && busy.t1 != p.id) {
-			busypeer = peerbox.findid(busy.t1);
-			piece.busy[block].t1 = -1;
+		if(m.begin == piece.hashoff) {
+			piece.hash = kr->sha1(m.d, len m.d, nil, piece.hash);
+			piece.hashoff += len m.d;
 		}
+
+		# possibly send cancel to other peer
+		(b0, b1) := piece.busy[block];
+		busypeer: ref Peer;
+		if(b0 >= 0 && b0 != p.id) {
+			busypeer = peerbox.findid(b0);
+			piece.nfullbusy--;
+			piece.busy[block].t0 = -1;
+		} else if(b1 >= 0 && b1 != p.id) {
+			busypeer = peerbox.findid(b1);
+			piece.nfullbusy--;
+			piece.busy[block].t1 = -1;
+		} else
+			piece.nhalfbusy--;
 		if(busypeer != nil) {
 			p.lreqs.cancel(ref LReq (m.index, m.begin/btp->Blocksize, 0));
 			peersend(p, ref Msg.Cancel(m.index, m.begin, len m.d));
@@ -1500,6 +1493,7 @@ main0()
 		gen++;
 
 	<-trackkickc =>
+		trackkickpid = -1;
 		if(stopped)
 			return;
 		trackreqc <-= (trafficup.total(), trafficdown.total(), totalleft, listenport, trackerevent);
@@ -1519,7 +1513,7 @@ main0()
 			interval = Intervalneed;
 
 		say(sprint("next call to tracker will be in %d seconds", interval));
-		spawn trackkick(interval);
+		trackkick(interval);
 		nexttrack = now+interval;
 		trackereventlast = ref Progress.Tracker (interval, interval, len nps, trackerr);
 		putprogress(trackereventlast);
@@ -1572,10 +1566,10 @@ main0()
 
 		rotateips.pooladdunique(maskip(np.ip));
 
-		if(state.piecehave.have == 0)
+		if(state.pieces.have.have == 0)
 			peersend(p, ref Msg.Keepalive());
 		else
-			peersend(p, ref Msg.Bitfield(state.piecehave.bytes()));
+			peersend(p, ref Msg.Bitfield(state.pieces.have.bytes()));
 
 		if(peerbox.nactive() < Unchokedmax) {
 			say("unchoking rare new peer: "+p.text());
@@ -1606,7 +1600,7 @@ main0()
 		if(err != nil)
 			return warnstop(sprint("error writing piece %d, begin %d, length %d: %s", pieceindex, begin, length, err));
 
-		piece := state.pieces.find(pieceindex);
+		piece := state.pieces.active.find(pieceindex);
 		if(piece == nil)
 			raise sprint("data written for inactive piece %d", pieceindex);
 
@@ -1621,33 +1615,33 @@ main0()
 
 		say(sprint("last parts of piece %d have been written, verifying...", pieceindex));
 
+		need := state.t.piecelength(piece.index)-piece.hashoff;
+		if(need > 0) {
+			buf := array[need] of byte;
+			herr := state.tx.preadx(buf, len buf, big piece.index*big state.t.piecelen+big piece.hashoff);
+			if(herr != nil)
+				return warnstop("verifying hash: "+herr);
+			piece.hash = kr->sha1(buf, len buf, nil, piece.hash);
+		}
 		wanthash := hex(state.t.hashes[piece.index]);
-		(buf, herr) := state.tx.pieceread(piece.index);
-		if(herr != nil)
-			return warnstop("verifying hash: "+herr);
-		havehash := hex(sha1(buf));
+		kr->sha1(nil, 0, digest := array[kr->SHA1dlen] of byte, piece.hash);
+		havehash := hex(digest);
 		if(wanthash != havehash) {
 			# xxx blame peers
 			putprogress(ref Progress.Hashfail (piece.index));
 			warn(1, sprint("%s did not check out, want %s, have %s, disconnecting", piece.text(), wanthash, havehash));
 			piece.have.clearall();
-			if(dflag) {
-				for(i = 0; i < len piece.busy; i++)
-					if(piece.busy[i].t0 >= 0 || piece.busy[i].t1 >= 0)
-						raise sprint("piece %d should be complete, but block %d is busy", piece.index, i);
-			}
-			
+			for(i = 0; i < len piece.busy; i++)
+				if(piece.busy[i].t0 >= 0 || piece.busy[i].t1 >= 0)
+					raise sprint("piece %d should be complete, but block %d is busy", piece.index, i);
+
 			# xxx what do to with other peers?
 			return;
 		}
 
-		if(state.piecehave.get(piece.index))
-			raise sprint("bogus, already have piece %d", piece.index);
-
+		state.pieces.havepiece(piece.index);
 		totalleft -= big state.t.piecelength(piece.index);
-		state.piecehave.set(piece.index);
-		state.pieces.del(piece.index);
-		putprogress(ref Progress.Piece (piece.index, state.piecehave.have, state.piecehave.n));
+		putprogress(ref Progress.Piece (piece.index, state.pieces.have.have, state.pieces.have.n));
 		for(fl := filesdone(piece.index); fl != nil; fl = tl fl) {
 			f := hd fl;
 			putprogress(ref Progress.Filedone (f.index, f.path, f.f.path));
@@ -1670,7 +1664,7 @@ main0()
 
 		if(done()) {
 			trackerevent = "completed";
-			spawn trackkick(0);
+			trackkick(0);
 			npeers: list of ref Peer;
 			for(l = peerbox.peers; l != nil; l = tl l) {
 				p := hd l;
@@ -1736,8 +1730,23 @@ roundticker()
 	}
 }
 
+trackkicktime: int;
 trackkick(n: int)
 {
+	ntrackkicktime := daytime->now()+n;
+	if(trackkickpid >= 0) {
+		if(ntrackkicktime > trackkicktime)
+			return;
+		kill(trackkickpid);
+	}
+	spawn trackkick0(n, pidc := chan of int);
+	trackkickpid = <-pidc;
+	trackkicktime = ntrackkicktime;
+}
+
+trackkick0(n: int, pidc: chan of int)
+{
+	pidc <-= pid();
 	sys->sleep(n*1000);
 	trackkickc <-= 1;
 }
@@ -2146,7 +2155,7 @@ Peerbox.longestunchoked(b: self ref Peerbox): ref Peer
 filedone(f: ref Filex): int
 {
 	for(i := f.pfirst; i <= f.plast; i++)
-		if(!state.piecehave.get(i))
+		if(!state.pieces.have.get(i))
 			return 0;
 	return 1;
 }

@@ -30,6 +30,7 @@ Bitarray: module
 		b:	ref Bits;
 		last:	int;
 		inv:	int;
+		seen:	int;
 
 		next:	fn(b: self ref Bititer): int;
 	};

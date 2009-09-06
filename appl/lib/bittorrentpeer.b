@@ -18,7 +18,7 @@ include "tables.m";
 	Table: import tables;
 include "bitarray.m";
 	bitarray: Bitarray;
-	Bits: import bitarray;
+	Bits, Bititer: import bitarray;
 include "bittorrent.m";
 	bt: Bittorrent;
 	File, Torrent, Filex, Torrentx: import bt;
@@ -68,10 +68,19 @@ randomize[T](a: array of T)
 	}
 }
 
+randomizeint(a: array of int)
+{
+	for(i := 0; i < len a; i++) {
+		j := rand->rand(len a);
+		(a[i], a[j]) = (a[j], a[i]);
+	}
+}
+
+
 Piece.new(index, length: int): ref Piece
 {
 	nblocks := (length+Blocksize-1)/Blocksize;
-	return ref Piece(index, Bits.new(nblocks), Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, array[nblocks] of {* => 0});
+	return ref Piece(index, Bits.new(nblocks), Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, 0, 0, array[nblocks] of {* => 0}, nil, 0);
 }
 
 Piece.orphan(p: self ref Piece): int
@@ -87,10 +96,243 @@ Piece.isdone(p: self ref Piece): int
 	return p.have.n == p.have.have;
 }
 
-
 Piece.text(p: self ref Piece): string
 {
 	return sprint("Piece(index %d, nblocks %d, haveblocks %d)", p.index, p.have.n, p.have.have);
+}
+
+
+Pieces.havepiece(ps: self ref Pieces, index: int)
+{
+	if(ps.have.get(index))
+		raise "already have piece";
+	ps.have.set(index);
+	ps.active.del(index);
+	if(ps.rare.pieces.find(index) != nil)
+		raise "have piece, but it is still rare?";
+}
+
+Pieces.delpeer(ps: self ref Pieces, p: ref Peer)
+{
+	it := p.rhave.iter(); 
+	while((i := it.next()) >= 0)
+		ps.count[i]--;
+
+	for(l := tablist(ps.active); l != nil; l = tl l) {
+		pc := hd l;
+		for(i = 0; i < len pc.busy; i++) {
+			if(pc.busy[i].t0 == p.id)
+				pc.busy[i].t0 = -1;
+			else if(pc.busy[i].t1 == p.id)
+				pc.busy[i].t1 = -1;
+			else
+				continue;
+			if(pc.busy[i].t0 >= 0 || pc.busy[i].t1 >= 0) {
+				pc.nfullbusy--;
+				pc.nhalfbusy++;
+			} else
+				pc.nhalfbusy--;
+		}
+	}
+
+	b := Bits.nand(p.rhave, ps.busy);
+	state.pieces.rare.delmany(b);
+}
+
+Pieces.addpeerpiece(ps: self ref Pieces, nil: ref Peer, index: int)
+{
+	ps.count[index]++;
+	if(!ps.busy.get(index))
+		ps.rare.add(index);
+}
+
+Pieces.addpeerpieces(ps: self ref Pieces, p: ref Peer)
+{
+	it := p.rhave.iter();
+	while((i := it.next()) >= 0)
+		ps.count[i]++;
+	b := Bits.nand(p.rhave, ps.busy);
+say(sprint("addpeerpiecse, b.have %d", b.have));
+	ps.rare.addmany(b);
+}
+
+Rarenum.new(count: int): ref Rarenum
+{
+	return ref Rarenum (count, array[8] of int, 0);
+}
+
+Rarenum.add(r: self ref Rarenum, index: int)
+{
+	if(r.na >= len r.a)
+		r.a = growint(r.a, 8);
+
+	for(i := 0; i < r.na; i++)
+		if(r.a[i] >= index)
+			break;
+	if(i < r.na && r.a[i] == index)
+		raise "duplicate index";
+	r.a[i+1:] = r.a[i:r.na];
+	r.a[i] = index;
+	r.na++;
+}
+
+Rarenum.del(r: self ref Rarenum, index: int)
+{
+	for(i := 0; i < r.na; i++)
+		if(r.a[i] == index) {
+			r.a[i:] = r.a[i+1:];
+			r.na--;
+			return;
+		}
+	raise "missing index";
+}
+
+Rareiter.next(r: self ref Rareiter): int
+{
+	rr := r.r;
+	if(r.i >= rr.nnums)
+		return -1;
+	r.n++;
+	while(r.n >= rr.nums[r.i].na) {
+		r.n = 0;
+		r.i++;
+		if(r.i >= rr.nnums)
+			return -1;
+	}
+	n := rr.nums[r.i];
+	if(r.index == nil) {
+		r.index = array[n.na] of int;
+		for(i := 0; i < len r.index; i++)
+			r.index[i] = i;
+		randomizeint(r.index);
+	}
+	return n.a[r.index[r.n]];
+}
+
+Rare.new(): ref Rare
+{
+	r := ref Rare;
+	r.pieces = r.pieces.new(79, nil);
+	r.nums = array[0] of ref Rarenum;
+	r.nnums = 0;
+	return r;
+}
+
+rarefindnum0(r: ref Rare, count: int): int
+{
+	s := 0;
+	e := r.nnums;
+	while(s < e) {
+		m := (s+e)/2;
+		n := r.nums[m];
+		if(n.count == count)
+			return m;
+		if(n.count > count)
+			e = m;
+		else
+			s = m+1;
+	}
+	return -1;
+}
+
+rarefindnum(r: ref Rare, count: int): ref Rarenum
+{
+	i := rarefindnum0(r, count);
+	if(i >= 0)
+		n := r.nums[i];
+	return n;
+}
+
+rareaddnum(r: ref Rare, count: int): ref Rarenum
+{
+	n := Rarenum.new(count);
+	if(r.nnums >= len r.nums)
+		r.nums = grow(r.nums, 8);
+	for(i := 0; i < r.nnums; i++)
+		if(r.nums[i].count >= count)
+			break;
+	if(i < r.nnums && r.nums[i].count == count)
+		raise "duplicate nums";
+	r.nums[i+1:] = r.nums[i:r.nnums];
+	r.nums[i] = n;
+	r.nnums++;
+	return n;
+}
+
+raredelnum(r: ref Rare, o: ref Rarenum)
+{
+	i := rarefindnum0(r, o.count);
+	if(i < 0)
+		raise "missing nums";
+	r.nums[i:] = r.nums[i+1:];
+	r.nnums--;
+}
+
+raredeladd(r: ref Rare, index, del, add: int)
+{
+	if(del > 0) {
+		o := rarefindnum(r, del);
+		o.del(index);
+		r.pieces.del(index);
+		if(o.na == 0)
+			raredelnum(r, o);
+	}
+
+	if(add > 0) {
+		n := rarefindnum(r, add);
+		if(n == nil)
+			n = rareaddnum(r, add);
+		n.add(index);
+		r.pieces.add(index, n);
+	}
+}
+
+Rare.add(r: self ref Rare, index: int)
+{
+say(sprint("rare.add %d", index));
+	count := 0;
+	o := r.pieces.find(index);
+	if(o != nil)
+		count = o.count;
+	raredeladd(r, index, count, count+1);
+}
+
+Rare.del(r: self ref Rare, index: int)
+{
+say(sprint("rare.del %d", index));
+	o := r.pieces.find(index);
+	raredeladd(r, index, o.count, o.count-1);
+}
+
+Rare.delpiece(r: self ref Rare, index: int)
+{
+say(sprint("rare.delpiece %d", index));
+	n := r.pieces.find(index);
+	n.del(index);
+	if(n.na == 0)
+		raredelnum(r, n);
+	r.pieces.del(index);
+}
+
+Rare.addmany(r: self ref Rare, b: ref Bits)
+{
+say(sprint("rare.addmany, n %d", b.have));
+	it := b.iter();
+	while((i := it.next()) >= 0)
+		r.add(i);
+}
+
+Rare.delmany(r: self ref Rare, b: ref Bits)
+{
+say(sprint("rare.delmany, n %d", b.have));
+	it := b.iter();
+	while((i := it.next()) >= 0)
+		r.del(i);
+}
+
+Rare.iter(r: self ref Rare): ref Rareiter
+{
+	return ref Rareiter (0, -1, nil, r);
 }
 
 
@@ -409,13 +651,16 @@ schedbatches(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: re
 		request(reqc, b[i].piece, b[i].unused());
 }
 
-schedpieces(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer, a: array of ref Piece)
+schedpieces(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer, a: array of ref Piece): int
 {
-	for(i := 0; needblocks(p) && i < len a; i++)
+	for(i := 0; i < len a; i++)
 		if(p.rhave.get(a[i].index)) {
 			b := batches(a[i]);
 			schedbatches(reqc, p, b);
+			if(!needblocks(p))
+				return 0;
 		}
+	return 1;
 }
 
 batches(p: ref Piece): array of ref Batch
@@ -430,83 +675,22 @@ batches(p: ref Piece): array of ref Batch
 
 getrandompiece(): ref Piece
 {
-	# will succeed, this is only called when few pieces are busy
+	# will succeed quickly, this is only called when few pieces are busy
 	for(;;) {
-		i := rand->rand(state.piecebusy.n);
-		if(!state.piecebusy.get(i)) {
+		i := rand->rand(state.pieces.busy.n);
+		if(!state.pieces.busy.get(i)) {
 			p := Piece.new(i, state.t.piecelength(i));
-			state.pieces.add(i, p);
-			state.piecebusy.set(i);
+			state.pieces.active.add(i, p);
+			state.pieces.busy.set(i);
+			state.pieces.rare.delpiece(i);
 			return p;
 		}
 	}
 }
 
-getrarestpiece(b: ref Bits)
-{
-	# first, determine which pieces are the rarest
-	rarest: list of int;  # piece index
-	min := -1;
-	seen := 0;
-	for(i := 0; i < b.n && seen < b.have; i++) {
-		if(b.get(i)) {
-			seen++;
-			if(min < 0 || state.piececounts[i] < min) {
-				rarest = nil;
-				min = state.piececounts[i];
-			}
-			if(state.piececounts[i] <= min)
-				rarest = i::rarest;
-		}
-	}
-	if(rarest == nil)
-		return;
-
-	# next, pick a random element from the list
-	skip := rand->rand(b.have);
-	while(skip-- > 0)
-		rarest = tl rarest;
-	index := hd rarest;
-	if(dflag) say(sprint("choose rarest piece %d", index));
-}
-
 needblocks(p: ref Peer): int
 {
 	return p.lreqs.length == 0 || p.lreqs.length+Batchsize < Blockqueuesize;
-}
-
-inactiverare(): array of ref (int, int)
-{
-	a := array[state.piecebusy.n-state.piecebusy.have] of ref (int, int);
-	if(dflag) say(sprint("inactiverare: %d pieces, %d busy, finding %d", state.piecebusy.n, state.piecebusy.have, len a));
-	j := 0;
-	for(i := 0; j < len a && i < state.piecebusy.n; i++)
-		if(!state.piecebusy.get(i))
-			a[j++] = ref (i, 0);
-
-	randomize(a);
-	return a;
-}
-
-rarepiececmp(p1, p2: ref Piece): int
-{
-	return state.piececounts[p1.index]-state.piececounts[p2.index];
-}
-
-piecesrareorphan(orphan: int): array of ref Piece
-{
-	r: list of ref Piece;
-	for(l := tablist(state.pieces); l != nil; l = tl l) {
-		p := hd l;
-		if(p.orphan() && orphan)
-			r = p::r;
-		else if(!p.orphan() && !orphan)
-			r = p::r;
-	}
-
-	a := l2a(r);
-	inssort(a, rarepiececmp);
-	return a;
 }
 
 progresscmp(p1, p2: ref Piece): int
@@ -515,45 +699,70 @@ progresscmp(p1, p2: ref Piece): int
 }
 
 
+# returns active pieces, orphans and non-orphans separately
+activesplit(): (array of ref Piece, array of ref Piece)
+{
+	orph,
+	nonorph: list of ref Piece;
+	for(l := tablist(state.pieces.active); l != nil; l = tl l)
+		if((hd l).orphan())
+			orph = hd l::orph;
+		else
+			nonorph = hd l::nonorph;
+	return (l2a(orph), l2a(nonorph));
+}
+
+pieceorphange(a, b: ref Piece): int
+{
+	return a.have.have < b.have.have;
+}
+
+piecenonorphange(a, b: ref Piece): int
+{
+	if(a.nfullbusy != b.nfullbusy)
+		return a.nfullbusy >= b.nfullbusy;
+	return a.nhalfbusy >= b.nhalfbusy;
+}
+
 rarestfirst(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
 {
 	if(dflag) say("schedule: doing rarest first");
 
 	# attempt to work on last piece this peer was working on
-	if(dflag) say("schedule: trying previous piece peer was working on");  # xxx should check if no other peer has taken over the piece?
+	if(dflag) say("schedule: trying previous piece peer was working on");
 	if(p.lreqs.length > 0) {
-		piece := state.pieces.find(p.lreqs.last.e.piece);
-		if(piece != nil)
-			schedpieces(reqc, p, array[] of {piece});
-	}
-
-	# find rarest orphan pieces to work on
-	if(dflag) say("schedule: trying rarest orphans");
-	a := piecesrareorphan(1);
-	schedpieces(reqc, p, a);
-	if(!needblocks(p))
-		return;
-
-	# find rarest inactive piece to work on
-	if(dflag) say("schedule: trying inactive pieces");
-	rare := inactiverare();
-	for(i := 0; i < len rare; i++) {
-		v := rare[i].t0;
-		if(dflag) say(sprint("using new rare piece %d", v));
-		pc := Piece.new(v, state.t.piecelength(v));
-		state.pieces.add(v, pc);
-		state.piecebusy.set(v);
-		schedpieces(reqc, p, array[] of {pc});
-		if(!needblocks(p))
+		# xxx and check that other peer is not working on this
+		pc := state.pieces.active.find(p.lreqs.last.e.piece);
+		if(pc != nil && !schedpieces(reqc, p, array[] of {pc}))
 			return;
 	}
 
-	# find rarest active non-orphan piece to work on
-	if(dflag) say("schedule: trying rarest non-orphans");
-	a = piecesrareorphan(0);
-	schedpieces(reqc, p, a);
-	if(!needblocks(p))
+	# rarest orphan pieces
+	if(dflag) say("schedule: orphans");
+	(orphs, nonorphs) := activesplit();
+	inssort(orphs, pieceorphange);
+	if(!schedpieces(reqc, p, orphs))
 		return;
+
+	# rarest inactive piece that peer has
+	if(dflag) say("schedule: trying inactive pieces, rarest first");
+	done := p.isdone();
+	it := state.pieces.rare.iter();
+	while((i := it.next()) >= 0)
+		if(done || p.rhave.get(i)) {
+			if(dflag) say(sprint("using new rare piece %d", i));
+			pc := Piece.new(i, state.t.piecelength(i));
+			state.pieces.active.add(i, pc);
+			state.pieces.busy.set(i);
+			state.pieces.rare.delpiece(i);
+			if(!schedpieces(reqc, p, array[] of {pc}))
+				return;
+		}
+
+	# busy pieces
+	if(dflag) say("schedule: trying non-orphans");
+	inssort(nonorphs, piecenonorphange);
+	schedpieces(reqc, p, nonorphs);
 }
 
 random(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
@@ -561,7 +770,7 @@ random(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer
 	if(dflag) say("schedule: doing random");
 
 	# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-	a := l2a(tablist(state.pieces));
+	a := l2a(tablist(state.pieces.active));
 	inssort(a, progresscmp);
 	for(i := 0; i < len a; i++) {
 		piece := a[i];
@@ -591,7 +800,7 @@ random(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer
 
 	# otherwise, get new random pieces to work on
 	if(dflag) say("schedule: trying random pieces");
-	while(needblocks(p) && state.piecebusy.have < state.piecebusy.n) {
+	while(needblocks(p) && state.pieces.busy.have < state.pieces.busy.n) {
 		if(dflag) say("schedule: getting another random piece...");
 		piece := getrandompiece();
 		b := batches(piece);
@@ -601,7 +810,7 @@ random(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer
 
 schedule(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
 {
-	if(state.piecehave.have >= Piecesrandom)
+	if(state.pieces.have.have >= Piecesrandom)
 		rarestfirst(reqc, p);
 	else
 		random(reqc, p);
@@ -701,8 +910,8 @@ Batch.unused(b: self ref Batch): list of ref LReq
 {
 	reqs: list of ref LReq;
 	for(i := len b.blocks-1; i >= 0; i--) {
-		busy := b.piece.busy[b.blocks[i]];
-		if(busy.t0 < 0 && busy.t1 < 0)
+		(b0, b1) := b.piece.busy[b.blocks[i]];
+		if(b0 < 0 && b1 < 0)
 			reqs = ref LReq (b.piece.index, b.blocks[i], 0)::reqs;
 	}
 	return reqs;
@@ -712,17 +921,13 @@ Batch.usedpartial(b: self ref Batch, p: ref Peer): list of ref LReq
 {
 	reqs: list of ref LReq;
 	for(i := len b.blocks-1; i >= 0; i--) {
-		busy := b.piece.busy[b.blocks[i]];
-		if(busy.t0 != p.id && busy.t1 != p.id && (busy.t0 < 0 || busy.t1 < 0))
+		(b0, b1) := b.piece.busy[b.blocks[i]];
+		if(b0 != p.id && b1 != p.id && (b0 < 0 || b1 < 0))
 			reqs = ref LReq (b.piece.index, b.blocks[i], 0)::reqs;
 	}
 	return reqs;
 }
 
-Batch.text(nil: self ref Batch): string
-{
-	return "<batch ...>";
-}
 
 
 Traffic.new(): ref Traffic
@@ -981,6 +1186,21 @@ tablist[T](t: ref Table[T]): list of T
 			r = (hd l).t1::r;
 	return r;
 }
+
+grow[T](a: array of T, n: int): array of T
+{
+	na := array[len a+n] of T;
+	na[:] = a;
+	return na;
+}
+
+growint(a: array of int, n: int): array of int
+{
+	na := array[len a+n] of int;
+	na[:] = a;
+	return na;
+}
+
 
 say(s: string)
 {
