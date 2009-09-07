@@ -152,7 +152,7 @@ Pieces.addpeerpieces(ps: self ref Pieces, p: ref Peer)
 	while((i := it.next()) >= 0)
 		ps.count[i]++;
 	b := Bits.nand(p.rhave, ps.busy);
-say(sprint("addpeerpiecse, b.have %d", b.have));
+say(sprint("addpeerpieces, b.have %d", b.have));
 	ps.rare.addmany(b);
 }
 
@@ -196,6 +196,7 @@ Rareiter.next(r: self ref Rareiter): int
 	while(r.n >= rr.nums[r.i].na) {
 		r.n = 0;
 		r.i++;
+		r.index = nil;
 		if(r.i >= rr.nnums)
 			return -1;
 	}
@@ -289,7 +290,7 @@ raredeladd(r: ref Rare, index, del, add: int)
 
 Rare.add(r: self ref Rare, index: int)
 {
-say(sprint("rare.add %d", index));
+#say(sprint("rare.add %d", index));
 	count := 0;
 	o := r.pieces.find(index);
 	if(o != nil)
@@ -299,7 +300,7 @@ say(sprint("rare.add %d", index));
 
 Rare.del(r: self ref Rare, index: int)
 {
-say(sprint("rare.del %d", index));
+#say(sprint("rare.del %d", index));
 	o := r.pieces.find(index);
 	raredeladd(r, index, o.count, o.count-1);
 }
@@ -423,6 +424,8 @@ RReqs.del(rr: self ref RReqs, r: ref RReq): int
 
 	if(rr.first == l) {
 		rr.first = rr.first.next;
+		if(rr.first != nil)
+			rr.first.prev = nil;
 	} else {
 		l.prev.next = l.next;
 		if(l.next != nil)
@@ -436,9 +439,14 @@ RReqs.del(rr: self ref RReqs, r: ref RReq): int
 
 RReqs.dropfirst(rr: self ref RReqs)
 {
-	rr.first.next.prev = nil;
 	rr.first.e = nil;
-	rr.first = rr.first.next;
+	if(rr.last == rr.first) {
+		rr.first = rr.last = nil;
+	} else {
+		rr.first = rr.first.next;
+		if(rr.first != nil)
+			rr.first.prev = nil;
+	}
 	rr.length--;
 }
 
@@ -673,21 +681,6 @@ batches(p: ref Piece): array of ref Batch
 	return b;
 }
 
-getrandompiece(): ref Piece
-{
-	# will succeed quickly, this is only called when few pieces are busy
-	for(;;) {
-		i := rand->rand(state.pieces.busy.n);
-		if(!state.pieces.busy.get(i)) {
-			p := Piece.new(i, state.t.piecelength(i));
-			state.pieces.active.add(i, p);
-			state.pieces.busy.set(i);
-			state.pieces.rare.delpiece(i);
-			return p;
-		}
-	}
-}
-
 needblocks(p: ref Peer): int
 {
 	return p.lreqs.length == 0 || p.lreqs.length+Batchsize < Blockqueuesize;
@@ -748,16 +741,21 @@ rarestfirst(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref
 	if(dflag) say("schedule: trying inactive pieces, rarest first");
 	done := p.isdone();
 	it := state.pieces.rare.iter();
+	li: list of int;
 	while((i := it.next()) >= 0)
 		if(done || p.rhave.get(i)) {
 			if(dflag) say(sprint("using new rare piece %d", i));
 			pc := Piece.new(i, state.t.piecelength(i));
 			state.pieces.active.add(i, pc);
 			state.pieces.busy.set(i);
-			state.pieces.rare.delpiece(i);
+			li = i::li;
 			if(!schedpieces(reqc, p, array[] of {pc}))
-				return;
+				break;
 		}
+	for(; li != nil; li = tl li)
+		state.pieces.rare.delpiece(hd li);
+	if(!needblocks(p))
+		return;
 
 	# busy pieces
 	if(dflag) say("schedule: trying non-orphans");
@@ -800,16 +798,27 @@ random(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer
 
 	# otherwise, get new random pieces to work on
 	if(dflag) say("schedule: trying random pieces");
-	while(needblocks(p) && state.pieces.busy.have < state.pieces.busy.n) {
+	b := Bits.nand(p.rhave, state.pieces.busy);
+	while(!b.isempty()) {
 		if(dflag) say("schedule: getting another random piece...");
-		piece := getrandompiece();
-		b := batches(piece);
-		schedbatches(reqc, p, b);
+		i = b.nth(rand->rand(b.have));
+		pc := Piece.new(i, state.t.piecelength(i));
+		state.pieces.active.add(i, pc);
+		state.pieces.busy.set(i);
+		state.pieces.rare.delpiece(i);
+		b.clear(i);
+		if(!schedpieces(reqc, p, array[] of {pc}))
+			return;
 	}
 }
 
 schedule(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
 {
+	if(!p.localinterested())
+		raise "schedule on peer we are not interested in";
+	if(p.remotechoking())
+		raise "schedule on peer that is choking us";
+
 	if(state.pieces.have.have >= Piecesrandom)
 		rarestfirst(reqc, p);
 	else
@@ -1117,7 +1126,7 @@ Peerevent.text(pp: self ref Peerevent): string
 	Tracker =>	s += sprint(" %q", p.addr);
 	New =>		s += sprint(" %q %d %s %d", p.addr, p.id, p.peeridhex, p.dialed);
 	Gone =>		s += sprint(" %d", p.id);
-	Bad =>		s += sprint(" %q %d", p.addr, p.mtime);
+	Bad =>		s += sprint(" %q %d %q", p.ip, p.mtime, p.err);
 	State =>	s += sprint(" %d %s %s", p.id, eventstatestr0[p.s>>2], eventstatestr1[p.s&3]);
 	Piece => 	s += sprint(" %d %d", p.id, p.piece);
 	Pieces =>	s += sprint(" %d", p.id);

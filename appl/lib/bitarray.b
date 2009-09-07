@@ -125,6 +125,15 @@ Bits.bytes(b: self ref Bits): array of byte
 	return d;
 }
 
+Bits.nth(b: self ref Bits, n: int): int
+{
+	it := b.iter();
+	n--;
+	for(i := 0; i < n; i++)
+		it.next();
+	return it.next();
+}
+
 Bits.all(b: self ref Bits): list of int
 {
 	l: list of int;

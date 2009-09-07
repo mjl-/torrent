@@ -7,7 +7,7 @@ Bittorrentpeer: module
 
 	Piecesrandom:	con 4;
 	Blocksize:	con 16*1024;
-	Blockqueuesize:	con 50;  # number of pending blocks to request to peer
+	Blockqueuesize:	con 30;  # number of pending blocks to request to peer
 	Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
 	Batchsize:	con Diskchunksize/Blocksize;
 
@@ -271,11 +271,6 @@ Bittorrentpeer: module
 	};
 
 
-	List: adt[T] {
-		next:	cyclic ref List[T];
-		e:	T;
-	};
-
 	Progress: adt {
 		pick {
 		Endofstate or
@@ -332,8 +327,9 @@ Bittorrentpeer: module
 		Gone =>
 			id:	int;
 		Bad =>
-			addr:	string;
+			ip:	string;
 			mtime:	int;
+			err:	string;
 		State =>
 			id:	int;
 			s:	int;
@@ -348,6 +344,11 @@ Bittorrentpeer: module
 		}
 
 		text:	fn(pp: self ref Peerevent): string;
+	};
+
+	List: adt[T] {
+		next:	cyclic ref List[T];
+		e:	T;
 	};
 
 	Eventfid: adt[T]

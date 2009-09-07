@@ -74,10 +74,11 @@ state:		ref State;
 newpeers:	ref Newpeers;  # peers we are not connected to
 peerbox:	ref Peerbox;
 stopped:	int;
-ndialers:	int;  # number of active dialers
+ndialers:	int;	# number of active dialers
 rotateips:	ref Pool[string];  # masked ip address
-faulty:		list of (string, int);  # ip, time
-islistening:	int;  # whether listener() is listening
+faulty:		list of (string, int, string);  # ip, time, error
+selfips:	ref Strhash[string];
+islistening := 1;	# whether listener() is listening
 totalleft:	big;
 trackerevent:	string;
 trackkickpid := -1;
@@ -211,6 +212,8 @@ init(nil: ref Draw->Context, args: list of string)
 	(ok, ip6mask) = IPaddr.parsemask("/48");
 	if(ok != 0)
 		fail("bad ip6 mask");
+
+	selfips = selfips.new(4, nil);
 
 	# note that noone has any business with *last.e
 	progressfids = progressfids.new(4, nil);
@@ -495,7 +498,7 @@ dostyx(mm: ref Tmsg)
 			if(m.offset == big 0) {
 				s := "";
 				for(l := faulty; l != nil; l = tl l)
-					s += sprint("%q %d\n", (hd l).t0, (hd l).t1);
+					s += sprint("%q %d %q\n", (hd l).t0, (hd l).t1, (hd l).t2);
 				fid.data = array of byte s;
 			}
 			srv.reply(styxservers->readbytes(m, fid.data));
@@ -690,7 +693,7 @@ putprogressstate(l: ref List[ref Progress])
 putpeerstate(l: ref List[ref Peerevent])
 {
 	for(f := faulty; f != nil; f = tl f)
-		l = next(l, ref Peerevent.Bad ((hd f).t0, (hd f).t1));
+		l = next(l, ref Peerevent.Bad ((hd f).t0, (hd f).t1, (hd f).t2));
 	for(t := newpeers.all(); t != nil; t = tl t)
 		l = next(l, ref Peerevent.Tracker ((hd t).addr));
 	for(pl := peerbox.peers; pl != nil; pl = tl pl) {
@@ -868,7 +871,7 @@ peerdrop(p: ref Peer, faulty: int, err: string)
 	if(err != nil)
 		warn(1, err);
 	if(faulty)
-		setfaulty(p.np.ip);
+		setfaulty(p.np.ip, err);
 
 	state.pieces.delpeer(p);
 
@@ -901,6 +904,8 @@ dialpeers()
 	say(sprint("dialpeers, %d newpeers %d peers", len newpeers.all(), len peerbox.peers));
 	while(!newpeers.empty() && ndialers < Dialersmax && len peerbox.peers < Peersmax && peerbox.ndialed < Peersdialedmax) {
 		np := newpeers.take();
+		if(selfips.find(np.ip) != nil)
+			continue;
 		if(peerbox.findip(np.ip) != nil)
 			continue;
 		if(isfaulty(np.ip))
@@ -916,8 +921,9 @@ dialpeers()
 awaitpeer()
 {
 	if(peerbox.ndialed < Peersmax-Peersdialedmax && !islistening) {
+say("awaitpeer, kicking listener");
 		islistening = 1;
-		spawn kicklistener();
+		canlistenc <-= 1;
 	}
 }
 
@@ -946,7 +952,6 @@ account(p: ref Peer, l: list of ref Msg)
 {
 	for(; l != nil; l = tl l) {
 		mm := hd l;
-		if(dflag) say(sprint("sending message: %s", mm.text()));
 		msize := mm.packedsize();
 		pick m := mm {
 		Piece =>
@@ -1007,20 +1012,6 @@ readrreq(p: ref Peer)
 	}
 }
 
-peerratecmp(a1, a2: ref (ref Peer, int)): int
-{
-	(p1, r1) := *a1;
-	(p2, r2) := *a2;
-	n := r2-r1;
-	if(n != 0)
-		return n;
-	if(p1.remoteinterested() == p2.remoteinterested())
-		return 0;
-	if(p1.remoteinterested())
-		return -1;
-	return 1;
-}
-
 request(p: ref Peer, pc: ref Piece, reqs: list of ref LReq)
 {
 	msgs: list of ref Msg;
@@ -1038,7 +1029,7 @@ request(p: ref Peer, pc: ref Piece, reqs: list of ref LReq)
 		} else
 			pc.nhalfbusy++;
 
-		if(dflag) say("requesting "+req.text());
+		if(dflag) say(sprint("peer %d: %s", p.id, req.text()));
 		p.lreqs.add(req);
 		msgs = ref Msg.Request(req.piece, req.block*btp->Blocksize, blocksize(req))::msgs;
 	}
@@ -1048,7 +1039,7 @@ request(p: ref Peer, pc: ref Piece, reqs: list of ref LReq)
 
 schedule(p: ref Peer)
 {
-	if(!btp->needblocks(p))
+	if(!p.localinterested() || p.remotechoking() || !btp->needblocks(p))
 		return;
 
 	reqc := chan of ref (ref Piece, list of ref LReq, chan of int);
@@ -1111,18 +1102,18 @@ isfaulty(ip: string): int
 	return 0;
 }
 
-setfaulty(ip: string)
+setfaulty(ip, err: string)
 {
 	clearfaulty(nil);
 	now := daytime->now();
-	faulty = (ip, now)::faulty;
-	putevent(ref Peerevent.Bad (ip, now));
+	faulty = (ip, now, err)::faulty;
+	putevent(ref Peerevent.Bad (ip, now, err));
 }
 
 clearfaulty(ip: string)
 {
 	now := daytime->now();
-	new: list of (string, int);
+	new: list of (string, int, string);
 	for(l := faulty; l != nil; l = tl l)
 		if((hd l).t0 != ip && (hd l).t1+Ignorefaultyperiod < now)
 			new = hd l::new;
@@ -1200,6 +1191,20 @@ chokingupload(gen: int)
 		unchoke(othersa[i]);
 }
 
+peerratecmp(a1, a2: ref (ref Peer, int)): int
+{
+	(p1, r1) := *a1;
+	(p2, r2) := *a2;
+	n := r2-r1;
+	if(n != 0)
+		return n;
+	if(p1.remoteinterested() == p2.remoteinterested())
+		return 0;
+	if(p1.remoteinterested())
+		return -1;
+	return 1;
+}
+
 chokingdownload(gen: int)
 {
 	# new optimistic unchoke?
@@ -1246,6 +1251,7 @@ chokingdownload(gen: int)
 peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, array of byte))
 {
 	p.msgseq++;
+if(dflag) say(sprint("<- %s: %s", p.np.ip, mm.text()));
 
 	msize := mm.packedsize();
 	pick m := mm {
@@ -1272,6 +1278,8 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		say(sprint("%s choked us...", p.text()));
 		p.state |= btp->RemoteChoking;
 		putevent(ref Peerevent.State (p.id, Sremote|Schoking));
+		# xxx clear any pending requests
+		
 
 	Unchoke =>
 		if(!p.remotechoking())
@@ -1280,11 +1288,10 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		say(sprint("%s unchoked us", p.text()));
 		p.state &= ~btp->RemoteChoking;
 		putevent(ref Peerevent.State (p.id, Sremote|Sunchoking));
-
 		schedule(p);
 
 	Interested =>
-		if(p.remoteinterested())
+		if(0 && p.remoteinterested())
 			return peerdrop(p, 1, "double interested");
 
 		say(sprint("%s is interested", p.text()));
@@ -1303,15 +1310,15 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		p.state &= ~btp->RemoteInterested;
 		putevent(ref Peerevent.State (p.id, Sremote|Suninterested));
 		p.rreqs.clear();
-
 		# if peer was unchoked, we'll unchoke another during next round
 
 	Have =>
 		if(m.index >= state.t.piececount)
 			return peerdrop(p, 1, sprint("%s sent 'have' for invalid piece %d, disconnecting", p.text(), m.index));
 
-		if(p.rhave.get(m.index))
-			return peerdrop(p, 1, sprint("peer already had piece %d", m.index));
+		# xxx it seems some clients (rtorrent) send "have" for pieces that were in the bitfield message.
+		if(0 && p.rhave.get(m.index))
+			return peerdrop(p, 1, sprint("peer already had piece %d (has %d/%d)", m.index, p.rhave.have, p.rhave.n));
 
 		putevent(ref Peerevent.Piece (p.id, m.index));
 		if(dflag) say(sprint("remote now has piece %d", m.index));
@@ -1323,8 +1330,7 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		state.pieces.addpeerpiece(p, m.index);
 
 		interesting(p);
-		if(!p.remotechoking())
-			schedule(p);
+		schedule(p);
 
 	Bitfield =>
 		if(p.msgseq != 1)
@@ -1350,7 +1356,8 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 	Piece =>
 		if(dflag) say(sprint("peer %d sent block piece=%d begin=%d length=%d", p.id, m.index, m.begin, len m.d));
 
-		req := ref LReq (m.index, m.begin/btp->Blocksize, 0);
+		block := m.begin/btp->Blocksize;
+		req := ref LReq (m.index, block, 0);
 		if(blocksize(req) != len m.d)
 			return peerdrop(p, 1, sprint("%s sent bad size for block %s, disconnecting", p.text(), req.text()));
 
@@ -1365,7 +1372,6 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 			return peerdrop(p, 1, sprint("%s sent block %s, expected %s, disconnecting", p.text(), req.text(), exp));
 		}
 
-		block := m.begin/btp->Blocksize;
 		if(piece.have.get(block)) {
 			needwritec <-= nil;
 			return say("already have this block, skipping...");
@@ -1390,7 +1396,7 @@ peermsg(p: ref Peer, mm: ref Msg, needwritec: chan of list of ref (int, int, arr
 		} else
 			piece.nhalfbusy--;
 		if(busypeer != nil) {
-			p.lreqs.cancel(ref LReq (m.index, m.begin/btp->Blocksize, 0));
+			p.lreqs.cancel(ref LReq (m.index, block, 0));
 			peersend(p, ref Msg.Cancel(m.index, m.begin, len m.d));
 		}
 
@@ -1543,39 +1549,44 @@ main0()
 		if(stopped)
 			return;
 
-		if(err != nil)
-			return warn(1, sprint("%s: %s", np.text(), err));
-		if(hex(peerid) == localpeeridhex)
-			return say("connected to self, dropping connection...");
-		if(peerbox.findip(np.ip) != nil)
-			return say("new connection from known ip address, dropping new connection...");
-		if(isfaulty(np.ip))
-			return say(sprint("connected to faulty ip %s, dropping connection...", np.ip));
+		if(err != nil) {
+			warn(1, sprint("%s: %s", np.text(), err));
+		} else if(hex(peerid) == localpeeridhex) {
+			say("connected to self, dropping connection...");
+			tcpdir := str->splitstrr(sys->fd2path(peerfd), "/").t0;
+			localip := readip(tcpdir+"local");
+			remoteip := readip(tcpdir+"remote");
+			if(localip == remoteip && localip != nil && selfips.find(localip) == nil)
+				selfips.add(localip, localip);
+		} else if(peerbox.findip(np.ip) != nil) {
+			say("new connection from known ip address, dropping new connection...");
+		} else if(isfaulty(np.ip)) {
+			say(sprint("connected to faulty ip %s, dropping connection...", np.ip));
+		} else {
+			p := Peer.new(np, peerfd, extensions, peerid, dialed, state.t.piececount);
+			pidc := chan of int;
+			spawn peernetreader(pidc, p);
+			spawn peernetwriter(pidc, p);
+			spawn diskwriter(p.writec);
+			spawn diskreader(p);
+			p.pids = <-pidc::<-pidc::p.pids;
 
-		p := Peer.new(np, peerfd, extensions, peerid, dialed, state.t.piececount);
-		pidc := chan of int;
-		spawn peernetreader(pidc, p);
-		spawn peernetwriter(pidc, p);
-		spawn diskwriter(p.writec);
-		spawn diskreader(p);
-		p.pids = <-pidc::<-pidc::p.pids;
+			peerbox.add(p);
+			say("new peer "+p.fulltext());
+			putevent(ref Peerevent.New (p.np.addr, p.id, p.peeridhex, p.dialed));
 
-		peerbox.add(p);
-		say("new peer "+p.fulltext());
-		putevent(ref Peerevent.New (p.np.addr, p.id, p.peeridhex, p.dialed));
+			rotateips.pooladdunique(maskip(np.ip));
 
-		rotateips.pooladdunique(maskip(np.ip));
+			if(state.pieces.have.have == 0)
+				peersend(p, ref Msg.Keepalive);
+			else
+				peersend(p, ref Msg.Bitfield(state.pieces.have.bytes()));
 
-		if(state.pieces.have.have == 0)
-			peersend(p, ref Msg.Keepalive());
-		else
-			peersend(p, ref Msg.Bitfield(state.pieces.have.bytes()));
-
-		if(peerbox.nactive() < Unchokedmax) {
-			say("unchoking rare new peer: "+p.text());
-			unchoke(p);
+			if(peerbox.nactive() < Unchokedmax) {
+				say("unchoking rare new peer: "+p.text());
+				unchoke(p);
+			}
 		}
-
 		if(dialed) {
 			ndialers--;
 			dialpeers();
@@ -1617,6 +1628,7 @@ main0()
 
 		need := state.t.piecelength(piece.index)-piece.hashoff;
 		if(need > 0) {
+			# xxx should do this in separate prog?
 			buf := array[need] of byte;
 			herr := state.tx.preadx(buf, len buf, big piece.index*big state.t.piecelen+big piece.hashoff);
 			if(herr != nil)
@@ -1707,9 +1719,9 @@ main0()
 			return;
 		if(err != nil)
 			return warnstop(sprint("error writing piece %d, begin %d, length %d: %s", piece, begin, len buf, err));
-
+		if(peerbox.findid(p.id) == nil)
+			return;
 		peersend(p, ref Msg.Piece(piece, begin, buf));
-		# xxx calculate if we need to request another block already
 	}
 }
 
@@ -1767,14 +1779,8 @@ track()
 }
 
 
-kicklistener()
-{
-	canlistenc <-= 1;
-}
-
 listener(aconn: Sys->Connection)
 {
-	<-canlistenc;
 	for(;;) {
 		(ok, conn) := sys->listen(aconn);
 		if(ok != 0) {
@@ -1998,6 +2004,7 @@ peernetwriter(pidc: chan of int, p: ref Peer)
 			size := m.packedsize();
 			m.packbuf(d[o:o+size]);
 			o += size;
+if(dflag) say(sprint("-> %s: %s", p.np.ip, m.text()));
 		}
 		n := netwrite(p.fd, d, len d);
 		if(n != len d) {
@@ -2204,6 +2211,18 @@ eta(): int
 		preveta = ms;
 	}
 	return lasteta;
+}
+
+readip(f: string): string
+{
+	d := readfile(f, 128);
+	if(d == nil)
+		return nil;
+	ipstr := str->splitstrl(string d, "!").t0;
+	(ok, ipa) := IPaddr.parse(ipstr);
+	if(ok != 0)
+		return nil;
+	return ipa.text();
 }
 
 chokestr(choked: int): string

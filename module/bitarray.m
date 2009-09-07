@@ -20,6 +20,7 @@ Bitarray: module
 		isempty:	fn(b: self ref Bits): int;
 		isfull:		fn(b: self ref Bits): int;
 		bytes:		fn(b: self ref Bits): array of byte;
+		nth:		fn(b: self ref Bits, n: int): int;
 		all:		fn(b: self ref Bits): list of int;
 		iter:		fn(b: self ref Bits): ref Bititer;
 		inviter:	fn(b: self ref Bits): ref Bititer;

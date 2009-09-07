@@ -107,8 +107,9 @@ Peer: adt {
 };
 
 Badpeer: adt {
-	addr:	string;
+	ip:	string;
 	mtime:	int;
+	err:	string;
 };
 
 Tracker: adt {
@@ -643,7 +644,7 @@ peerwords := array[] of {
 ("tracker",	1),
 ("new",		4),
 ("gone",	1),
-("bad",		2),
+("bad",		3),
 ("state",	3),
 ("piece",	2),
 ("pieces",	-2),
@@ -677,7 +678,7 @@ peerword(t: array of string): int
 		barflush(availbar);
 		return 1;
 	"bad" =>
-		badpeers = ref Badpeer (t[1], getint(t[2]))::badpeers;
+		badpeers = ref Badpeer (t[1], getint(t[2]), t[3])::badpeers;
 		setbadpeers();
 		return 1;
 	"state" =>
@@ -1061,10 +1062,10 @@ setbadpeers()
 	if(view != Vbadpeers)
 		return;
 
-	badpeergrid := l2("addr", "mtime")::nil;
+	badpeergrid := l3("ip", "mtime", "error")::nil;
 	for(l := badpeers; l != nil; l = tl l) {
 		b := hd l;
-		badpeergrid = l2(b.addr, string b.mtime)::badpeergrid;
+		badpeergrid = l3(b.ip, string b.mtime, b.err)::badpeergrid;
 	}
 	tkgrid(".v.b.c.g", rev(badpeergrid));
 	setscrollregion(".v.b.c", ".v.b.c.g");
