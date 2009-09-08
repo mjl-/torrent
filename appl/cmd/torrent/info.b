@@ -2,17 +2,17 @@ implement Torrentinfo;
 
 include "sys.m";
 	sys: Sys;
-	sprint: import sys;
+	print, sprint: import sys;
 include "draw.m";
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "arg.m";
+include "daytime.m";
+	daytime: Daytime;
 include "keyring.m";
 	kr: Keyring;
 include "bitarray.m";
-	bitarray: Bitarray;
-	Bits: import bitarray;
 include "bittorrent.m";
 	bt: Bittorrent;
 	Bee, Msg, Torrent: import bt;
@@ -24,25 +24,28 @@ Torrentinfo: module {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
+
 dflag: int;
+vflag: int;
 
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
+	daytime = load Daytime Daytime->PATH;
 	kr = load Keyring Keyring->PATH;
-	bitarray = load Bitarray Bitarray->PATH;
 	bt = load Bittorrent Bittorrent->PATH;
 	bt->init();
 	util = load Util0 Util0->PATH;
 	util->init();
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-d] torrentfile");
+	arg->setusage(arg->progname()+" [-dv] torrentfile");
 	while((c := arg->opt()) != 0)
 		case c {
 		'd' =>	dflag++;
+		'v' =>	vflag++;
 		* =>	arg->usage();
 		}
 
@@ -54,14 +57,21 @@ init(nil: ref Draw->Context, args: list of string)
 	if(err != nil)
 		fail(sprint("%s: %s", hd args, err));
 
-	sys->print("announce url:   %s\n", t.announce);
-	sys->print("piece length:   %s (%d bytes)\n", sizefmt(big t.piecelen), t.piecelen);
-	sys->print("pieces:         %d\n", t.piececount);
-	sys->print("total length:   %s (%bd bytes)\n", sizefmt(t.length), t.length);
-	sys->print("files:\n");
+	print("announce url:   %s\n", t.announce);
+	print("piece length:   %s (%d bytes)\n", sizefmt(big t.piecelen), t.piecelen);
+	print("pieces:         %d\n", t.piececount);
+	print("total length:   %s (%bd bytes)\n", sizefmt(t.length), t.length);
+	if(vflag) {
+		print("private:        %d\n", t.private);
+		if(t.createdby != nil)
+		print("created by:     %s\n", t.createdby);
+		if(t.createtime != 0)
+		print("creation date:  %s\n", daytime->text(daytime->gmt(t.createtime)));
+	}
+	print("files:\n");
 	for(i := 0; i < len t.files; i++) {
 		f := t.files[i];
-		sys->print("%10s  %s\n", sizefmt(f.length), f.path);
+		print("%10s  %s\n", sizefmt(f.length), f.path);
 	}
 }
 

@@ -110,7 +110,7 @@ file:
 	}
 	hashes := l2a(rev(lhash));
 
-	t := ref Torrent (announce, piecelen, nil, len hashes, hashes, files, name, total);
+	t := ref Torrent (announce, piecelen, nil, len hashes, hashes, files, name, total, 0, nil, 0);
 	d := t.pack();
 	if(sys->write(sys->fildes(1), d, len d) != len d)
 		fail(sprint("write: %r"));

@@ -458,7 +458,7 @@ setstate()
 	l2("stopped",		string s.stopped),
 	l2("eta",		etastr(s.eta)),
 	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n)),
-	l2("total",		sprint("%5s   up, %5s   down", sizefmt(s.up), sizefmt(s.down))),
+	l2("total",		sprint("%5s   up, %5s   down, ratio: %s ", sizefmt(s.up), sizefmt(s.down), ratio(s.up, s.down))),
 	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
 	l2("peers",		sprint("%d peer%s, of which %d seed%s;  %d unused tracker address%s", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ntrackerpeers, trailes(s.ntrackerpeers))),
 	l2("tracker",		trackerstr()),
@@ -466,6 +466,15 @@ setstate()
 	};
 	tkgrid(".v.m.c.m.s.g", stategrid);
 	setscrollregion(".v.m.c", ".v.m.c.m");
+}
+
+ratio(a, b: big): string
+{
+	if(a == big 0)
+		return "0.00";
+	if(b == big 0)
+		return "∞";
+	return sprint("%.2f", real a/real b);
 }
 
 setconfig()

@@ -1,10 +1,21 @@
 implement Bitarray;
 
+include "sys.m";
+	sys: Sys;
+include "rand.m";
+	rand: Rand;
 include "bitarray.m";
 
 nibblebitcounts := array[16] of {
 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
 };
+
+init()
+{
+	sys = load Sys Sys->PATH;
+	rand = load Rand Rand->PATH;
+	rand->init(sys->millisec()^sys->pctl(0, nil));
+}
 
 nbits(b: byte): int
 {
@@ -125,8 +136,13 @@ Bits.bytes(b: self ref Bits): array of byte
 	return d;
 }
 
-Bits.nth(b: self ref Bits, n: int): int
+Bits.rand(b: self ref Bits): int
 {
+	if(b.have == 0)
+		raise "bits.rand, but no bits are set";
+	if(sys == nil)
+		init();
+	n := rand->rand(b.have);
 	it := b.iter();
 	n--;
 	for(i := 0; i < n; i++)

@@ -60,282 +60,6 @@ now(): big
 	return lastnow;
 }
 
-randomize[T](a: array of T)
-{
-	for(i := 0; i < len a; i++) {
-		j := rand->rand(len a);
-		(a[i], a[j]) = (a[j], a[i]);
-	}
-}
-
-randomizeint(a: array of int)
-{
-	for(i := 0; i < len a; i++) {
-		j := rand->rand(len a);
-		(a[i], a[j]) = (a[j], a[i]);
-	}
-}
-
-
-Piece.new(index, length: int): ref Piece
-{
-	nblocks := (length+Blocksize-1)/Blocksize;
-	return ref Piece(index, Bits.new(nblocks), Bits.new(nblocks), length, array[nblocks] of {* => (-1, -1)}, 0, 0, array[nblocks] of {* => 0}, nil, 0);
-}
-
-Piece.orphan(p: self ref Piece): int
-{
-	for(i := 0; i < len p.busy; i++)
-		if(p.busy[i].t0 >= 0 || p.busy[i].t1 >= 0)
-			return 0;
-	return 1;
-}
-
-Piece.isdone(p: self ref Piece): int
-{
-	return p.have.n == p.have.have;
-}
-
-Piece.text(p: self ref Piece): string
-{
-	return sprint("Piece(index %d, nblocks %d, haveblocks %d)", p.index, p.have.n, p.have.have);
-}
-
-
-Pieces.havepiece(ps: self ref Pieces, index: int)
-{
-	if(ps.have.get(index))
-		raise "already have piece";
-	ps.have.set(index);
-	ps.active.del(index);
-	if(ps.rare.pieces.find(index) != nil)
-		raise "have piece, but it is still rare?";
-}
-
-Pieces.delpeer(ps: self ref Pieces, p: ref Peer)
-{
-	it := p.rhave.iter(); 
-	while((i := it.next()) >= 0)
-		ps.count[i]--;
-
-	for(l := tablist(ps.active); l != nil; l = tl l) {
-		pc := hd l;
-		for(i = 0; i < len pc.busy; i++) {
-			if(pc.busy[i].t0 == p.id)
-				pc.busy[i].t0 = -1;
-			else if(pc.busy[i].t1 == p.id)
-				pc.busy[i].t1 = -1;
-			else
-				continue;
-			if(pc.busy[i].t0 >= 0 || pc.busy[i].t1 >= 0) {
-				pc.nfullbusy--;
-				pc.nhalfbusy++;
-			} else
-				pc.nhalfbusy--;
-		}
-	}
-
-	b := Bits.nand(p.rhave, ps.busy);
-	state.pieces.rare.delmany(b);
-}
-
-Pieces.addpeerpiece(ps: self ref Pieces, nil: ref Peer, index: int)
-{
-	ps.count[index]++;
-	if(!ps.busy.get(index))
-		ps.rare.add(index);
-}
-
-Pieces.addpeerpieces(ps: self ref Pieces, p: ref Peer)
-{
-	it := p.rhave.iter();
-	while((i := it.next()) >= 0)
-		ps.count[i]++;
-	b := Bits.nand(p.rhave, ps.busy);
-say(sprint("addpeerpieces, b.have %d", b.have));
-	ps.rare.addmany(b);
-}
-
-Rarenum.new(count: int): ref Rarenum
-{
-	return ref Rarenum (count, array[8] of int, 0);
-}
-
-Rarenum.add(r: self ref Rarenum, index: int)
-{
-	if(r.na >= len r.a)
-		r.a = growint(r.a, 8);
-
-	for(i := 0; i < r.na; i++)
-		if(r.a[i] >= index)
-			break;
-	if(i < r.na && r.a[i] == index)
-		raise "duplicate index";
-	r.a[i+1:] = r.a[i:r.na];
-	r.a[i] = index;
-	r.na++;
-}
-
-Rarenum.del(r: self ref Rarenum, index: int)
-{
-	for(i := 0; i < r.na; i++)
-		if(r.a[i] == index) {
-			r.a[i:] = r.a[i+1:];
-			r.na--;
-			return;
-		}
-	raise "missing index";
-}
-
-Rareiter.next(r: self ref Rareiter): int
-{
-	rr := r.r;
-	if(r.i >= rr.nnums)
-		return -1;
-	r.n++;
-	while(r.n >= rr.nums[r.i].na) {
-		r.n = 0;
-		r.i++;
-		r.index = nil;
-		if(r.i >= rr.nnums)
-			return -1;
-	}
-	n := rr.nums[r.i];
-	if(r.index == nil) {
-		r.index = array[n.na] of int;
-		for(i := 0; i < len r.index; i++)
-			r.index[i] = i;
-		randomizeint(r.index);
-	}
-	return n.a[r.index[r.n]];
-}
-
-Rare.new(): ref Rare
-{
-	r := ref Rare;
-	r.pieces = r.pieces.new(79, nil);
-	r.nums = array[0] of ref Rarenum;
-	r.nnums = 0;
-	return r;
-}
-
-rarefindnum0(r: ref Rare, count: int): int
-{
-	s := 0;
-	e := r.nnums;
-	while(s < e) {
-		m := (s+e)/2;
-		n := r.nums[m];
-		if(n.count == count)
-			return m;
-		if(n.count > count)
-			e = m;
-		else
-			s = m+1;
-	}
-	return -1;
-}
-
-rarefindnum(r: ref Rare, count: int): ref Rarenum
-{
-	i := rarefindnum0(r, count);
-	if(i >= 0)
-		n := r.nums[i];
-	return n;
-}
-
-rareaddnum(r: ref Rare, count: int): ref Rarenum
-{
-	n := Rarenum.new(count);
-	if(r.nnums >= len r.nums)
-		r.nums = grow(r.nums, 8);
-	for(i := 0; i < r.nnums; i++)
-		if(r.nums[i].count >= count)
-			break;
-	if(i < r.nnums && r.nums[i].count == count)
-		raise "duplicate nums";
-	r.nums[i+1:] = r.nums[i:r.nnums];
-	r.nums[i] = n;
-	r.nnums++;
-	return n;
-}
-
-raredelnum(r: ref Rare, o: ref Rarenum)
-{
-	i := rarefindnum0(r, o.count);
-	if(i < 0)
-		raise "missing nums";
-	r.nums[i:] = r.nums[i+1:];
-	r.nnums--;
-}
-
-raredeladd(r: ref Rare, index, del, add: int)
-{
-	if(del > 0) {
-		o := rarefindnum(r, del);
-		o.del(index);
-		r.pieces.del(index);
-		if(o.na == 0)
-			raredelnum(r, o);
-	}
-
-	if(add > 0) {
-		n := rarefindnum(r, add);
-		if(n == nil)
-			n = rareaddnum(r, add);
-		n.add(index);
-		r.pieces.add(index, n);
-	}
-}
-
-Rare.add(r: self ref Rare, index: int)
-{
-#say(sprint("rare.add %d", index));
-	count := 0;
-	o := r.pieces.find(index);
-	if(o != nil)
-		count = o.count;
-	raredeladd(r, index, count, count+1);
-}
-
-Rare.del(r: self ref Rare, index: int)
-{
-#say(sprint("rare.del %d", index));
-	o := r.pieces.find(index);
-	raredeladd(r, index, o.count, o.count-1);
-}
-
-Rare.delpiece(r: self ref Rare, index: int)
-{
-say(sprint("rare.delpiece %d", index));
-	n := r.pieces.find(index);
-	n.del(index);
-	if(n.na == 0)
-		raredelnum(r, n);
-	r.pieces.del(index);
-}
-
-Rare.addmany(r: self ref Rare, b: ref Bits)
-{
-say(sprint("rare.addmany, n %d", b.have));
-	it := b.iter();
-	while((i := it.next()) >= 0)
-		r.add(i);
-}
-
-Rare.delmany(r: self ref Rare, b: ref Bits)
-{
-say(sprint("rare.delmany, n %d", b.have));
-	it := b.iter();
-	while((i := it.next()) >= 0)
-		r.del(i);
-}
-
-Rare.iter(r: self ref Rare): ref Rareiter
-{
-	return ref Rareiter (0, -1, nil, r);
-}
-
 
 RReq.eq(r1, r2: ref RReq): int
 {
@@ -352,13 +76,19 @@ RReq.text(r: self ref RReq): string
 
 Bigtab[T].new(n: int): ref Bigtab
 {
-	return ref Bigtab[T] (array[n] of list of (big, T));
+	return ref Bigtab[T] (array[n] of list of (big, T), 0);
+}
+
+Bigtab[T].clear(t: self ref Bigtab)
+{
+	*t = *Bigtab.new(len t.items);
 }
 
 Bigtab[T].add(t: self ref Bigtab, k: big, v: T)
 {
 	i := int (k % big len t.items);
 	t.items[i] = (k, v)::t.items[i];
+	t.nelems++;
 }
 
 Bigtab[T].del(t: self ref Bigtab, k: big): T
@@ -367,10 +97,12 @@ Bigtab[T].del(t: self ref Bigtab, k: big): T
 	i := int (k % big len t.items);
 	v: T;
 	for(l := t.items[i]; l != nil; l = tl l)
-		if((hd l).t0 != k)
-			r = hd l::r;
-		else
+		if((hd l).t0 == k && v == nil) {
 			v = (hd l).t1;
+			t.nelems--;
+		} else
+			r = hd l::r;
+	t.items[i] = r;
 	return v;
 }
 
@@ -382,6 +114,16 @@ Bigtab[T].find(t: self ref Bigtab, k: big): T
 			return (hd l).t1;
 	return nil;
 }
+
+Bigtab[T].all(t: self ref Bigtab): list of T
+{
+	r: list of T;
+	for(i := 0; i < len t.items; i++)
+		for(l := t.items[i]; l != nil; l = tl l)
+			r = (hd l).t1::r;
+	return r;
+}
+
 
 RReqs.new(): ref RReqs
 {
@@ -467,51 +209,80 @@ peeridfmt(d: array of byte): string
 }
 
 
-peerstatestrs := array[] of {
-"remotechoking",
-"remoteinterested",
-"localchoking",
-"localinterested",
-};
-peerstatestr(state: int): string
+Queue[T].new(): ref Queue[T]
 {
-	s := "";
-	for(i := 0; i < 4; i++)
-		if(state & (1<<i))
-			s += ","+peerstatestrs[i];
-	if(s != nil)
-		s = s[1:];
-	return s;
+	return ref Queue[T];
 }
 
-
-Newpeer.text(np: self Newpeer): string
+Queue[T].take(q: self ref Queue): T
 {
-	peerid := "nil";
-	if(np.peerid != nil)
-		peerid = peeridfmt(np.peerid);
-	return sprint("Newpeer(addr %s, peerid %s)", np.addr, peerid);
+	if(q.first == nil)
+		raise "take on empty queue";
+	n := q.first;
+	e := n.e;
+	n.e = nil;
+	if(q.first == q.last)
+		q.first = q.last = nil;
+	else
+		q.first = q.first.next;
+	return e;
+}
+
+Queue[T].takeq(q: self ref Queue): ref Queue[T]
+{
+	e := q.take();
+	nq := q.new();
+	nq.add(e);
+	return nq;
+}
+
+Queue[T].prepend(q: self ref Queue, e: T)
+{
+	n := ref List[T];
+	n.e = e;
+	n.next = q.first;
+	q.first = n;
+	if(q.last == nil)
+		q.last = n;
+}
+
+Queue[T].add(q: self ref Queue, e: T)
+{
+	n := ref List[T];
+	n.e = e;
+	if(q.first == nil) {
+		q.first = q.last = n;
+	} else {
+		q.last.next = n;
+		q.last = n;
+	}
+}
+
+Queue[T].empty(q: self ref Queue): int
+{
+	return q.first == nil;
 }
 
 
 Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
 {
-	getmsgc := chan of list of ref Bittorrent->Msg;
+	getmsgc := chan of ref Queue[ref Bittorrent->Msg];
 	msgseq := 0;
-	writec := chan[4] of ref (int, int, array of byte);
+	writec := chan[4] of ref Chunkwrite;
 	readc := chan of ref RReq;
-	return ref Peer(
+	return ref Peer (
 		peergen++,
 		np, fd, extensions, peerid, hex(peerid),
-		0, getmsgc, nil, nil,
+		0, 0, 0,
+		getmsgc, Queue[ref Bittorrent->Msg].new(), Queue[ref Bittorrent->Msg].new(),
 		Bits.new(npieces),
 		Bits.new(npieces),
 		RemoteChoking|LocalChoking,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		LReqs.new(),
+		Bigtab[ref LReq].new(17),
 		RReqs.new(),
-		0, dialed, Buf.new(), writec, readc, nil);
+		0, dialed, Chunk.new(), writec, readc, -1);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -544,75 +315,71 @@ Peer.text(p: self ref Peer): string
 	return sprint("Peer(id %d, addr %s)", p.id, p.np.addr);
 }
 
-Peer.fulltext(p: self ref Peer): string
+
+Chunk.new(): ref Chunk
 {
-	return sprint("Peer(id %d, addr %s, len rreqs %d, peerid %s>", p.id, p.np.addr, p.rreqs.length, peeridfmt(p.peerid));
+	return ref Chunk (Queue[array of byte].new(), -1, 0, 0, 0);
 }
 
-
-Buf.new(): ref Buf
+Chunk.tryadd(c: self ref Chunk, piece: ref Piece, begin: int, buf: array of byte): int
 {
-	return ref Buf(array[0] of byte, -1, 0, 0);
-}
-
-Buf.tryadd(b: self ref Buf, piece: ref Piece, begin: int, buf: array of byte): int
-{
-	if(b.piece < 0) {
-		b.data = array[len buf] of byte;
-		b.data[:] = buf;
-		b.piece = piece.index;
-		b.pieceoff = begin;
-		b.piecelength = piece.length;
+	if(c.piece < 0) {
+		c.bufs.add(buf);
+		c.piece = piece.index;
+		c.begin = begin;
+		c.piecelength = piece.length;
+		c.nbytes += len buf;
 		return 1;
 	}
 
-	if(piece.index != b.piece)
+	if(c.piece != piece.index || c.isfull())
 		return 0;
 
-	if(b.isfull())
+	if(begin % Diskchunksize != 0 && begin == c.begin+c.nbytes) {
+		c.bufs.add(buf);
+	} else if(c.begin % Diskchunksize != 0 && begin == c.begin-len buf) {
+		c.bufs.prepend(buf);
+		c.begin = begin;
+	} else
 		return 0;
-
-	# append data to buf, only if it won't cross disk chunk
-	if(begin % Diskchunksize != 0 && begin == b.pieceoff+len b.data) {
-		ndata := array[len b.data+len buf] of byte;
-		ndata[:] = b.data;
-		ndata[len b.data:] = buf;
-		b.data = ndata;
-		return 1;
-	}
-
-	# prepend data to buf, only if it won't cross disk chunk
-	if(b.pieceoff % Diskchunksize != 0 && begin == b.pieceoff-len buf) {
-		ndata := array[len buf+len b.data] of byte;
-		ndata[:] = buf;
-		ndata[len buf:] = b.data;
-		b.data = ndata;
-		b.pieceoff = begin;
-		return 1;
-	}
-
-	return 0;
+	c.nbytes += len buf;
+	return 1;
 }
 
-Buf.isfull(b: self ref Buf): int
+Chunk.isempty(c: self ref Chunk): int
 {
-	return len b.data >= Diskchunksize || b.pieceoff+len b.data == b.piecelength;
+	return c.nbytes == 0;
 }
 
-Buf.clear(b: self ref Buf)
+Chunk.isfull(c: self ref Chunk): int
 {
-	b.data = array[0] of byte;
-	b.piece = -1;
-	b.pieceoff = 0;
+	return c.nbytes >= Diskchunksize || c.begin+c.nbytes == c.piecelength;
 }
 
-Buf.overlaps(b: self ref Buf, piece, begin, end: int): int
+Chunk.overlaps(c: self ref Chunk, piece, begin, end: int): int
 {
-	bufstart := b.pieceoff;
-	bufend := b.pieceoff+len b.data;
-	return b.piece == piece && (bufstart >= begin && bufstart <= end || bufend >= begin && bufend <= end);
+	bufstart := c.begin;
+	bufend := c.begin+c.nbytes;
+	return c.piece == piece && (bufstart >= begin && bufstart <= end || bufend >= begin && bufend <= end);
 }
 
+Chunk.flush(c: self ref Chunk): ref Chunkwrite
+{
+	bw := ref Chunkwrite (c.piece, c.begin, c.bufs);
+	c.bufs = c.bufs.new();
+	c.piece = c.begin = -1;
+	c.nbytes = 0;
+	return bw;
+}
+
+
+Newpeer.text(np: self Newpeer): string
+{
+	peerid := "nil";
+	if(np.peerid != nil)
+		peerid = peeridfmt(np.peerid);
+	return sprint("Newpeer(addr %s, peerid %s)", np.addr, peerid);
+}
 
 Newpeers.del(n: self ref Newpeers, np: Newpeer)
 {
@@ -646,186 +413,12 @@ Newpeers.empty(n: self ref Newpeers): int
 }
 
 
-request(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Piece, reqs: list of ref LReq)
+LReq.key(r: self ref LReq): big
 {
-	donec := chan of int;
-	reqc <-= ref (p, reqs, donec);
-	<-donec;
+	v := (big r.piece)<<32;
+	v |= big r.block;
+	return v;
 }
-
-schedbatches(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer, b: array of ref Batch)
-{
-	for(i := 0; needblocks(p) && i < len b; i++)
-		request(reqc, b[i].piece, b[i].unused());
-}
-
-schedpieces(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer, a: array of ref Piece): int
-{
-	for(i := 0; i < len a; i++)
-		if(p.rhave.get(a[i].index)) {
-			b := batches(a[i]);
-			schedbatches(reqc, p, b);
-			if(!needblocks(p))
-				return 0;
-		}
-	return 1;
-}
-
-batches(p: ref Piece): array of ref Batch
-{
-	nblocks := p.have.n;
-	nbatches := (nblocks+Batchsize-1)/Batchsize;
-	b := array[nbatches] of ref Batch;
-	for(i := 0; i < len b; i++)
-		b[i] = Batch.new(i*Batchsize, min(Batchsize, nblocks-i*Batchsize), p);
-	return b;
-}
-
-needblocks(p: ref Peer): int
-{
-	return p.lreqs.length == 0 || p.lreqs.length+Batchsize < Blockqueuesize;
-}
-
-progresscmp(p1, p2: ref Piece): int
-{
-	return p2.have.n-p1.have.n;
-}
-
-
-# returns active pieces, orphans and non-orphans separately
-activesplit(): (array of ref Piece, array of ref Piece)
-{
-	orph,
-	nonorph: list of ref Piece;
-	for(l := tablist(state.pieces.active); l != nil; l = tl l)
-		if((hd l).orphan())
-			orph = hd l::orph;
-		else
-			nonorph = hd l::nonorph;
-	return (l2a(orph), l2a(nonorph));
-}
-
-pieceorphange(a, b: ref Piece): int
-{
-	return a.have.have < b.have.have;
-}
-
-piecenonorphange(a, b: ref Piece): int
-{
-	if(a.nfullbusy != b.nfullbusy)
-		return a.nfullbusy >= b.nfullbusy;
-	return a.nhalfbusy >= b.nhalfbusy;
-}
-
-rarestfirst(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
-{
-	if(dflag) say("schedule: doing rarest first");
-
-	# attempt to work on last piece this peer was working on
-	if(dflag) say("schedule: trying previous piece peer was working on");
-	if(p.lreqs.length > 0) {
-		# xxx and check that other peer is not working on this
-		pc := state.pieces.active.find(p.lreqs.last.e.piece);
-		if(pc != nil && !schedpieces(reqc, p, array[] of {pc}))
-			return;
-	}
-
-	# rarest orphan pieces
-	if(dflag) say("schedule: orphans");
-	(orphs, nonorphs) := activesplit();
-	inssort(orphs, pieceorphange);
-	if(!schedpieces(reqc, p, orphs))
-		return;
-
-	# rarest inactive piece that peer has
-	if(dflag) say("schedule: trying inactive pieces, rarest first");
-	done := p.isdone();
-	it := state.pieces.rare.iter();
-	li: list of int;
-	while((i := it.next()) >= 0)
-		if(done || p.rhave.get(i)) {
-			if(dflag) say(sprint("using new rare piece %d", i));
-			pc := Piece.new(i, state.t.piecelength(i));
-			state.pieces.active.add(i, pc);
-			state.pieces.busy.set(i);
-			li = i::li;
-			if(!schedpieces(reqc, p, array[] of {pc}))
-				break;
-		}
-	for(; li != nil; li = tl li)
-		state.pieces.rare.delpiece(hd li);
-	if(!needblocks(p))
-		return;
-
-	# busy pieces
-	if(dflag) say("schedule: trying non-orphans");
-	inssort(nonorphs, piecenonorphange);
-	schedpieces(reqc, p, nonorphs);
-}
-
-random(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
-{
-	if(dflag) say("schedule: doing random");
-
-	# schedule requests for blocks of active pieces, most completed first:  we want whole pieces fast
-	a := l2a(tablist(state.pieces.active));
-	inssort(a, progresscmp);
-	for(i := 0; i < len a; i++) {
-		piece := a[i];
-		if(dflag) say(sprint("schedule: looking at piece %d", piece.index));
-
-		# skip piece if this peer doesn't have it
-		if(!p.rhave.get(piece.index))
-			continue;
-
-		# divide piece into batches
-		b := batches(piece);
-
-		# request blocks from unused batches first
-		if(dflag) say("schedule: trying unused batches from piece");
-		schedbatches(reqc, p, b);
-		if(!needblocks(p))
-			return;
-
-		# if more requests needed, start on partially used batches too, in reverse order (for fewer duplicate data)
-		if(dflag) say("schedule: trying partially used batches from piece");
-		for(k := len b-1; k >= 0; k--) {
-			request(reqc, piece, b[k].usedpartial(p));
-			if(!needblocks(p))
-				return;
-		}
-	}
-
-	# otherwise, get new random pieces to work on
-	if(dflag) say("schedule: trying random pieces");
-	b := Bits.nand(p.rhave, state.pieces.busy);
-	while(!b.isempty()) {
-		if(dflag) say("schedule: getting another random piece...");
-		i = b.nth(rand->rand(b.have));
-		pc := Piece.new(i, state.t.piecelength(i));
-		state.pieces.active.add(i, pc);
-		state.pieces.busy.set(i);
-		state.pieces.rare.delpiece(i);
-		b.clear(i);
-		if(!schedpieces(reqc, p, array[] of {pc}))
-			return;
-	}
-}
-
-schedule(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer)
-{
-	if(!p.localinterested())
-		raise "schedule on peer we are not interested in";
-	if(p.remotechoking())
-		raise "schedule on peer that is choking us";
-
-	if(state.pieces.have.have >= Piecesrandom)
-		rarestfirst(reqc, p);
-	else
-		random(reqc, p);
-	reqc <-= nil;
-}
-
 
 LReq.eq(r1, r2: ref LReq): int
 {
@@ -836,107 +429,6 @@ LReq.text(r: self ref LReq): string
 {
 	return sprint("LReq(piece %d, block %d)", r.piece, r.block);
 }
-
-
-LReqs.new(): ref LReqs
-{
-	r := ref LReqs;
-	r.tab = r.tab.new(17);
-	r.length = 0;
-	return r;
-}
-
-lrkey(r: ref LReq): big
-{
-	v := (big r.piece)<<32;
-	v |= big r.block;
-	return v;
-}
-
-LReqs.add(r: self ref LReqs, lr: ref LReq)
-{
-	l := ref Link[ref LReq](r.last, nil, lr);
-	if(r.first == nil) {
-		r.first = r.last = l;
-	} else {
-		r.last.next = l;
-		r.last = l;
-	}
-	r.tab.add(lrkey(lr), l);
-	r.length++;
-}
-
-LReqs.take(r: self ref LReqs, lr: ref LReq): int
-{
-	# drop leading non-matching cancelled pieces
-	while(r.first != nil && !LReq.eq(r.first.e, lr) && r.first.e.cancelled) {
-		r.tab.del(lrkey(lr));
-		if(r.last == r.first)
-			r.last = nil;
-		r.first.e = nil;
-		r.first = r.first.next;
-		if(r.first != nil)
-			r.first.prev = nil;
-	}
-	if(r.first == nil || !LReq.eq(r.first.e, lr))
-		return 0;
-	r.tab.del(lrkey(lr));
-	if(r.first == r.last) {
-		r.first = r.last = nil;
-	} else {
-		r.first = r.first.next;
-		r.first.prev = nil;
-	}
-	r.length--;
-	return 1;
-}
-
-LReqs.cancel(r: self ref LReqs, lr: ref LReq): int
-{
-	v := r.tab.find(lrkey(lr));
-	if(v == nil)
-		return 0;
-	v.e.cancelled = 1;
-	r.length--;
-	return 1;
-}
-
-LReqs.text(r: self ref LReqs): string
-{
-	return sprint("LReqs(length %d)", r.length);
-}
-
-
-Batch.new(first, n: int, piece: ref Piece): ref Batch
-{
-	blocks := array[n] of int;
-	for(i := 0; i < n; i++)
-		blocks[i] = first+i;
-	return ref Batch(blocks, piece);
-}
-
-Batch.unused(b: self ref Batch): list of ref LReq
-{
-	reqs: list of ref LReq;
-	for(i := len b.blocks-1; i >= 0; i--) {
-		(b0, b1) := b.piece.busy[b.blocks[i]];
-		if(b0 < 0 && b1 < 0)
-			reqs = ref LReq (b.piece.index, b.blocks[i], 0)::reqs;
-	}
-	return reqs;
-}
-
-Batch.usedpartial(b: self ref Batch, p: ref Peer): list of ref LReq
-{
-	reqs: list of ref LReq;
-	for(i := len b.blocks-1; i >= 0; i--) {
-		(b0, b1) := b.piece.busy[b.blocks[i]];
-		if(b0 != p.id && b1 != p.id && (b0 < 0 || b1 < 0))
-			reqs = ref LReq (b.piece.index, b.blocks[i], 0)::reqs;
-	}
-	return reqs;
-}
-
 
 
 Traffic.new(): ref Traffic
@@ -1187,29 +679,13 @@ Eventfid[T].flushtag(ef: self ref Eventfid, tag: int): int
 	return 1;
 }
 
-tablist[T](t: ref Table[T]): list of T
+randomize[T](a: array of T)
 {
-	r: list of T;
-	for(i := 0; i < len t.items; i++)
-		for(l := t.items[i]; l != nil; l = tl l)
-			r = (hd l).t1::r;
-	return r;
+	for(i := 0; i < len a; i++) {
+		j := rand->rand(len a);
+		(a[i], a[j]) = (a[j], a[i]);
+	}
 }
-
-grow[T](a: array of T, n: int): array of T
-{
-	na := array[len a+n] of T;
-	na[:] = a;
-	return na;
-}
-
-growint(a: array of int, n: int): array of int
-{
-	na := array[len a+n] of int;
-	na[:] = a;
-	return na;
-}
-
 
 say(s: string)
 {

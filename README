@@ -55,22 +55,34 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- improve piece/peer scheduling
-- it seems we can now get blocks for inactive pieces?
+- we need an end-game: request blocks from one piece from multiple peers
+- the choking algorithm for uploading should probably use ip pools too?
+- for rounds while downloading, shouldn't we ignore seeders when choosing peers to unchoke?
+- stopping & starting does not fix up all the state.
 
 - lots of testing
 - for unused peers from tracker, make difference between new ip's and known ip's (current peers, bad peers).
 - write manual page
 - make ctl for max peers, and ratio of dialed/listened peers, and (non)-seeders.
 - if we are fully connected, drop some peers once in a while, for better peers/peercloud
+- should we set a receive timeout for peers?  in case we expect something (e.g. when we sent requests and are unchoked by remote, but not getting any data for a long time).  probably not worth the trouble.
+- should we send keepalives to peers?
+- when reading data from local disk for a peer, see if we have to (can) read the entire piece?  not just one block.
+- don't try dialing the same peers over and over again.  do some exponential backoff.
 
 - verify hash in separate prog?
 - do not block on i/o in peermsg().  should perhaps do more in progs?
 - optim: use better data structures in eg Peerbox, so picking peers to unchoke etc doesn't require walking through all the peers and their pieces.
-- make the scheduler capable of taking abuse into account.  the more abuse from peers (bogus hashes), the fewer peers we schedule on a single peer?  or the harder we try to correct faulty blocks?  make sure it's all the same standard code path, to prevent obscure bugs only laid bare by abusive peers.
 - use numwant in tracker request, set it high
 - after having had a peer/seed, but no longer, do a tracker request before interval.  not too often though.
 - set max number of peers connected, and max number of seeds among those?
+- send keep-alive messages?
+
+- support magnet uri's? (bep 9)
+- support fast extensions?  perhaps have all/none messages. (bep 6)
+- udp tracker support (bep 15)
+- multiple tracker support (bep 12)
+- http seeding (bep 17 and/or bep 19)
 
 ## torrent/track
 

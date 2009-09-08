@@ -79,6 +79,9 @@ Bittorrent: module
 		files:		array of ref File;
 		name:		string;
 		length:		big;
+		private:	int;
+		createdby:	string;
+		createtime:	int;
 
 		open:		fn(path: string): (ref Torrent, string);
 		piecelength:	fn(t: self ref Torrent, index: int): int;

@@ -5,25 +5,17 @@ Bittorrentpeer: module
 	dflag:	int;
 	init:	fn(st: ref State);
 
-	Piecesrandom:	con 4;
-	Blocksize:	con 16*1024;
-	Blockqueuesize:	con 30;  # number of pending blocks to request to peer
-	Diskchunksize:	con 128*1024;  # do initial write to disk for any block/piece of this size, to prevent fragmenting the file system
-	Batchsize:	con Diskchunksize/Blocksize;
+	Diskchunksize:	con 128*1024;  # opportunisticly gather buffer of max this size before flushing to disk, keeps data on disk contiguously
 
+	peeridfmt:	fn(d: array of byte): string;
 
 	State: adt {
 		t:		ref Bittorrent->Torrent;
 		tx:		ref Bittorrent->Torrentx;
-		pieces:		ref Pieces;
+		have:		ref Bitarray->Bits;
+		active,	
+		orphans:	ref Tables->Table[ref Piece];
 	};
-
-	randomize:	fn[T](a: array of T);
-
-	batches:	fn(p: ref Piece): array of ref Batch;
-	needblocks:	fn(p: ref Peer): int;
-	schedule:	fn(reqc: chan of ref (ref Piece, list of ref LReq, chan of int), p: ref Peer);
-
 
 	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # Pool.mode
 	Pool: adt[T] {
@@ -83,66 +75,33 @@ Bittorrentpeer: module
 
 	Piece: adt {
 		index:		int;
-		have:		ref Bitarray->Bits;
-		written:	ref Bitarray->Bits;
+		have,
+		written,
+		requested:	ref Bitarray->Bits;
 		length:		int;
-		busy:		array of (int, int);  # peerid, peerid
-		nhalfbusy,
-		nfullbusy:	int;
-		done:		array of int;  # peerid
+		peer:		int;	# current peer working on this piece
+		peers:		list of int;	# peers that contributed
 		hash:		ref Keyring->DigestState;
 		hashoff:	int; 
-
-		new:	fn(index, length: int): ref Piece;
-		isdone:	fn(p: self ref Piece): int;
-		orphan:	fn(p: self ref Piece): int;
-		text:	fn(p: self ref Piece): string;
 	};
 
-	Pieces: adt {
-		have,
-		busy:	ref Bitarray->Bits;
-		active:	ref Tables->Table[ref Piece];  # has both busy & orphans
-		count:	array of int;
-		rare:	ref Rare;	# for inactive pieces we do not yet have
 
-		havepiece:	fn(ps: self ref Pieces, i: int);
-		delpeer:	fn(ps: self ref Pieces, p: ref Peer);
-		addpeerpiece:	fn(ps: self ref Pieces, p: ref Peer, index: int);
-		addpeerpieces:	fn(ps: self ref Pieces, p: ref Peer);
+	LReq: adt {
+		piece,
+		block:	int;
+
+		key:	fn(r: self ref LReq): big;
+		eq:	fn(r1, r2: ref LReq): int;
+		text:	fn(r: self ref LReq): string;
 	};
 
-	Rarenum: adt {
-		count:	int;
-		a:	array of int;	# sorted
-		na:	int;
+	RReq: adt {
+		piece,
+		begin,
+		length:	int;
 
-		new:	fn(count: int): ref Rarenum;
-		add,
-		del:	fn(r: self ref Rarenum, i: int);
-	};
-
-	Rareiter: adt {
-		i:	int;
-		n:	int;
-		index:	array of int;  # random indexes into Rarenum.a
-		r:	ref Rare;
-
-		next:	fn(r: self ref Rareiter): int;
-	};
-
-	Rare: adt {
-		pieces:	ref Table[ref Rarenum];
-		nums:	array of ref Rarenum;  # sparse, sorted by count for binary search
-		nnums:	int;
-
-		new:		fn(): ref Rare;
-		add,
-		del:		fn(r: self ref Rare, i: int);
-		delpiece:	fn(r: self ref Rare, index: int);
-		addmany,
-		delmany:	fn(r: self ref Rare, b: ref Bits);
-		iter:		fn(r: self ref Rare): ref Rareiter;
+		eq:	fn(r1, r2: ref RReq): int;
+		text:	fn(rr: self ref RReq): string;
 	};
 
 
@@ -154,20 +113,14 @@ Bittorrentpeer: module
 
 	Bigtab: adt[T] {
 		items:	array of list of (big, T);
+		nelems:	int;
 
 		new:	fn(n: int): ref Bigtab;
+		clear:	fn(t: self ref Bigtab);
 		add:	fn(t: self ref Bigtab, k: big, v: T);
 		del:	fn(t: self ref Bigtab, k: big): T;
 		find:	fn(t: self ref Bigtab, k: big): T;
-	};
-
-	RReq: adt {
-		piece,
-		begin,
-		length:	int;
-
-		eq:	fn(r1, r2: ref RReq): int;
-		text:	fn(rr: self ref RReq): string;
+		all:	fn(t: self ref Bigtab): list of T;
 	};
 
 	RReqs: adt {
@@ -183,10 +136,21 @@ Bittorrentpeer: module
 		dropfirst:	fn(rr: self ref RReqs);
 	};
 
+	Queue: adt[T] {
+		first,
+		last:	ref List[T];
+
+		new:		fn(): ref Queue[T];
+		take:		fn(q: self ref Queue): T;
+		takeq:		fn(q: self ref Queue): ref Queue[T];
+		prepend:	fn(q: self ref Queue, e: T);
+		add:		fn(q: self ref Queue, e: T);
+		empty:		fn(q: self ref Queue): int;
+	};
+
 
 	# Peer.state
 	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
-	peerstatestr:	fn(state: int): string;
 	Peer: adt {
 		id:		int;
 		np:		Newpeer;
@@ -194,26 +158,28 @@ Bittorrentpeer: module
 		extensions,
 		peerid:		array of byte;
 		peeridhex:	string;
+		good:		int;	# whether it has sent full, verified piece to us, all by itself
+		lastpiece:	int;
 		getmsg:		int;
-		getmsgc:	chan of list of ref Bittorrent->Msg;
+		getmsgc:	chan of ref Queue[ref Bittorrent->Msg];
 		metamsgs,
-		datamsgs: 	list of ref Bittorrent->Msg;
+		datamsgs: 	ref Queue[ref Bittorrent->Msg];
 		rhave,					# pieces remote has
-		lwant:		ref Bitarray->Bits;	# pieces remote has and we do not
+		lwantinact:	ref Bitarray->Bits;	# pieces remote has, we do not, and are not active or orphan
 		state:		int;  # interested/choked
 		msgseq:		int;
 		up,
 		down,
 		metaup,
 		metadown: 	ref Traffic;
-		lreqs:		ref LReqs;  # we want from remote
+		lreqs:		ref Bigtab[ref LReq];  # we want from remote
 		rreqs:		ref RReqs;  # remote wants from us
 		lastunchoke:	int;
 		dialed:		int;  # whether we initiated connection
-		buf:		ref Buf;  # unwritten part of piece
-		writec:		chan of ref (int, int, array of byte);
+		chunk:		ref Chunk;  # unwritten part of piece
+		writec:		chan of ref Chunkwrite;
 		readc:		chan of ref RReq;
-		pids:		list of int;  # pids of net reader/writer to kill for cleaning up
+		netwritepid:	int;
 
 		new:			fn(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
 		remotechoking:		fn(p: self ref Peer): int;
@@ -222,52 +188,27 @@ Bittorrentpeer: module
 		localinterested:	fn(p: self ref Peer): int;
 		isdone:			fn(p: self ref Peer): int;
 		text:			fn(p: self ref Peer): string;
-		fulltext:		fn(p: self ref Peer): string;
 	};
 
-	Buf: adt {
-		data:		array of byte;
-		piece:		int;
-		pieceoff:	int;
-		piecelength:	int;
-
-		new:		fn(): ref Buf;
-		tryadd:		fn(b: self ref Buf, piece: ref Piece, begin: int, buf: array of byte): int;
-		isfull:		fn(b: self ref Buf): int;
-		clear:		fn(b: self ref Buf);
-		overlaps:	fn(b: self ref Buf, piece, begin, end: int): int;
-	};
-
-
-	LReq: adt {
+	Chunk: adt {
+		bufs:		ref Queue[array of byte];
 		piece,
-		block,
-		cancelled:	int;
+		begin,	
+		piecelength,
+		nbytes:		int;
 
-		eq:	fn(r1, r2: ref LReq): int;
-		text:	fn(r: self ref LReq): string;
+		new:		fn(): ref Chunk;
+		tryadd:		fn(c: self ref Chunk, piece: ref Piece, begin: int, buf: array of byte): int;
+		isempty:	fn(c: self ref Chunk): int;
+		isfull:		fn(c: self ref Chunk): int;
+		overlaps:	fn(c: self ref Chunk, piece, begin, end: int): int;
+		flush:		fn(c: self ref Chunk): ref Chunkwrite;
 	};
 
-	LReqs: adt {
-		first,
-		last:	ref Link[ref LReq];
-		tab:	ref Bigtab[ref Link[ref LReq]];
-		length:	int;	# number of non-cancelled lreq's
-
-		new:		fn(): ref LReqs;
-		add:		fn(rr: self ref LReqs, r: ref LReq);
-		take:		fn(rr: self ref LReqs, r: ref LReq): int;
-		cancel:		fn(rr: self ref LReqs, r: ref LReq): int;
-		text:		fn(rr: self ref LReqs): string;
-	};
-
-	Batch: adt {
-		blocks:		array of int;
-		piece:		ref Piece;
-
-		new:		fn(first, n: int, piece: ref Piece): ref Batch;
-		unused:		fn(b: self ref Batch): list of ref LReq;
-		usedpartial:	fn(b: self ref Batch, peer: ref Peer): list of ref LReq;
+	Chunkwrite: adt {
+		piece,
+		begin:	int;
+		bufs:	ref Queue[array of byte];
 	};
 
 

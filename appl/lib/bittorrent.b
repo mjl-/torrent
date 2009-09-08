@@ -548,6 +548,22 @@ foldpath(l: list of string): string
 	return path[1:];
 }
 
+getint(b: ref Bee, k: string, def: int): int
+{
+	bb := b.geti(k::nil);
+	if(bb == nil)
+		return def;
+	return int bb.i;
+}
+
+getstr(b: ref Bee, k: string, def: string): string
+{
+	bb := b.gets(k::nil);
+	if(bb == nil)
+		return def;
+	return string bb.a;
+}
+
 Torrent.open(path: string): (ref Torrent, string)
 {
 	d := readfile(path, -1);
@@ -593,7 +609,7 @@ Torrent.open(path: string): (ref Torrent, string)
 		return (nil, "missing destination file name");
 	name := sanitizepath(string bname.a);
 	if(name == nil)
-		return (nil, sprint("weird path, refusing to create: %#q", name));
+		return (nil, sprint("weird path, refusing to create %#q", name));
 
 	# determine paths for files, and total length
 	length := big 0;
@@ -634,7 +650,11 @@ Torrent.open(path: string): (ref Torrent, string)
 			length += f.length;
 		}
 	}
-	return (ref Torrent(string bannoun.a, piecelen, infohash, len pieces, pieces, files, name, length), nil);
+	private := getint(b, "private", 0);
+	createdby := getstr(b, "created by", "");
+	createtime := getint(b, "creation date", 0);
+	t := ref Torrent (string bannoun.a, piecelen, infohash, len pieces, pieces, files, name, length, private, createdby, createtime);
+	return (t, nil);
 }
 
 Torrent.piecelength(t: self ref Torrent, index: int): int
@@ -702,7 +722,7 @@ mkdirs(elems: list of string): string
 				continue;
 			return sprint("existing %q should be a directory but it is not", path);
 		}
-		fd := sys->create(path, Sys->OREAD, 8r777);
+		fd := sys->create(path, Sys->OREAD, 8r777|Sys->DMDIR);
 		if(fd == nil)
 			return sprint("creating %q: %r", path);
 	}
@@ -792,9 +812,9 @@ Torrentx.piecewrite(tx: self ref Torrentx, index: int, buf: array of byte): stri
 	return tx.pwritex(buf, tx.t.piecelen, big index*big tx.t.piecelen);
 }
 
-Torrentx.preadx(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string
+iox(tx: ref Torrentx, buf: array of byte, n: int, off: big, read: int): string
 {
-	for(i := 0; i < len tx.files; i++) {
+	for(i := 0; n > 0 && i < len tx.files; i++) {
 		f := tx.files[i];
 		size := f.f.length;
 		if(size <= off) {
@@ -805,45 +825,35 @@ Torrentx.preadx(tx: self ref Torrentx, buf: array of byte, n: int, off: big): st
 		want := n;
 		if(size < off+big n)
 			want = int (size-off);
-		nn := preadn(f.fd, buf, want, off);
-		if(nn < 0)
-			return sprint("reading: %r");
-		if(nn != want)
-			return "short read";
+		nn: int;
+		if(read)
+			nn = preadn(f.fd, buf, want, off);
+		else
+			nn = sys->pwrite(f.fd, buf, want, off);
+		if(read && nn >= 0 && nn < want)
+			return sprint("short read (%r)");
+		if(nn < 0) {
+			if(read)
+				return sprint("read: %r");
+			return sprint("write: %r");
+		}
 		n -= nn;
 		buf = buf[nn:];
-		off -= size;
+		off = big 0;
 	}
 	if(n != 0)
-		return "could not read all requested data";
+		return sprint("leftover %d bytes", n);
 	return nil;
+}
+
+Torrentx.preadx(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string
+{
+	return iox(tx, buf, n, off, 1);
 }
 
 Torrentx.pwritex(tx: self ref Torrentx, buf: array of byte, n: int, off: big): string
 {
-	for(i := 0; i < len tx.files; i++) {
-		f := tx.files[i];
-		size := f.f.length;
-		if(size <= off) {
-			off -= size;
-			continue;
-		}
-
-		want := n;
-		if(size < off+big n)
-			want = int (size-off);
-		nn := sys->pwrite(f.fd, buf, want, off);
-		if(nn < 0)
-			return sprint("write: %r");
-		if(nn != want)
-			return "short write";
-		n -= nn;
-		buf = buf[nn:];
-		off -= size;
-	}
-	if(n != 0)
-		return "could not write all requested data";
-	return nil;
+	return iox(tx, buf, n, off, 0);
 }
 
 reader(tx: ref Torrentx, c: chan of (array of byte, string))
