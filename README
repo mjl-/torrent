@@ -55,10 +55,8 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
+- find the problem that causes progs to spin (at least it seems that way.  after some time the program becomes responsive again...)
 - should we use Req.length for its key?
-- propagate exceptions to main/other progs?  so we are never left with a half-operating program?
-- add hash failures to state
-- add peerid to badpeer
 - when first unchoked by peer, should probably start out with few requests, then if pieces come in start scheduling more.
 - we need an end-game: request blocks from one piece from multiple peers
 - the choking algorithm for uploading should use ip pools too

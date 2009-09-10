@@ -301,8 +301,9 @@ Bittorrentpeer: module
 			id:	int;
 		Bad =>
 			ip:	string;
-			mtime:	int;
-			err:	string;
+			time:	int;
+			peerid:	array of byte;
+			banreason:	string;
 		State =>
 			id:	int;
 			s:	int;

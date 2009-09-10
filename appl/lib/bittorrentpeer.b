@@ -915,7 +915,7 @@ Peerevent.text(pp: self ref Peerevent): string
 	Tracker =>	s += sprint(" %q", p.addr);
 	New =>		s += sprint(" %q %d %s %d", p.addr, p.id, p.peeridhex, p.dialed);
 	Gone =>		s += sprint(" %d", p.id);
-	Bad =>		s += sprint(" %q %d %q", p.ip, p.mtime, p.err);
+	Bad =>		s += sprint(" %q %d %q %q", p.ip, p.time, hex(p.peerid), p.banreason);
 	State =>	s += sprint(" %d %s %s", p.id, eventstatestr0[p.s>>2], eventstatestr1[p.s&3]);
 	Piece => 	s += sprint(" %d %d", p.id, p.piece);
 	Pieces =>	s += sprint(" %d", p.id);

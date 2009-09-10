@@ -94,6 +94,7 @@ delaytoken := 1;
 delaytokenc: chan of int;
 rotateips:	ref Pool[string];  # masked ip address
 islistening := 0;	# whether listener() is listening
+nhashfails := 0;
 totalleft:	big;
 trackerevent:	string;
 trackkickpid := -1;
@@ -242,6 +243,7 @@ init(nil: ref Draw->Context, args: list of string)
 	peereventlast.next = ref List[ref Peerevent];
 
 	sys->pctl(Sys->NEWPGRP, nil);
+	writefile(sprint("/prog/%d/ctl", pid()), -1, array of byte "restricted");
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-dns] [-m ratio] [-r maxuprate] [-R maxdownrate] [-t maxuptotal] [-T maxdowntotal] torrentfile");
@@ -470,6 +472,7 @@ dostyx(mm: ref Tmsg)
 				s += sprint("rateup %d\n", trafficup.rate());
 				s += sprint("ratedown %d\n", trafficdown.rate());
 				s += sprint("eta %d\n", eta());
+				s += sprint("hashfails %d\n", nhashfails);
 				s += sprint("peers %d\n", len peerbox.peers);
 				s += sprint("seeds %d\n", peerbox.nseeding);
 				s += sprint("dialed %d\n", peerbox.ndialed);
@@ -524,7 +527,7 @@ dostyx(mm: ref Tmsg)
 			if(m.offset == big 0) {
 				s := "";
 				for(f := newpeers.faulty(); f != nil; f = f.next)
-					s += sprint("%q %d %q\n", f.e.addr, f.e.time, f.e.banreason);
+					s += sprint("%q %d %q %q\n", f.e.addr, f.e.time, hex(f.e.peerid), f.e.banreason);
 				fid.data = array of byte s;
 			}
 			srv.reply(styxservers->readbytes(m, fid.data));
@@ -806,7 +809,7 @@ putprogressstate(l: ref List[ref Progress])
 putpeerstate(l: ref List[ref Peerevent])
 {
 	for(f := newpeers.faulty(); f != nil; f = f.next)
-		l = next(l, ref Peerevent.Bad (f.e.addr, f.e.time, f.e.banreason));
+		l = next(l, ref Peerevent.Bad (f.e.addr, f.e.time, f.e.peerid, f.e.banreason));
 	for(t := newpeers.peers(); t != nil; t = t.next)
 		l = next(l, ref Peerevent.Tracker (t.e.addr));
 	for(pl := peerbox.peers; pl != nil; pl = tl pl) {
@@ -945,7 +948,7 @@ peerdrop(p: ref Peer, faulty: int, err: string)
 	warn(1, err+", "+p.text());
 	if(faulty) {
 		nexttime := newpeers.disconnectfaulty(p.np, err);
-		putevent(ref Peerevent.Bad (p.np.ip, nexttime, err));
+		putevent(ref Peerevent.Bad (p.np.ip, nexttime, p.np.peerid, err));
 	} else
 		newpeers.disconnected(p.np, err);
 
@@ -1472,8 +1475,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 		if(m.index >= state.t.piececount)
 			return peerdrop(p, 1, sprint("'have' for invalid piece %d", m.index));
 
-		# xxx it seems some clients (rtorrent) send "have" for pieces that were in the bitfield message.
-		if(0 && p.rhave.get(m.index))
+		if(p.rhave.get(m.index))
 			return peerdrop(p, 1, sprint("already had piece %d (has %d/%d)", m.index, p.rhave.have, p.rhave.n));
 
 		putevent(ref Peerevent.Piece (p.id, m.index));
@@ -1827,6 +1829,7 @@ main0()
 		if(wanthash != havehash) {
 			putprogress(ref Progress.Hashfail (pc.index));
 			say(sprint("piece %d did not check out, want %s, have %s", pc.index, wanthash, havehash));
+			nhashfails++;
 
 			if(stopped)
 				return;

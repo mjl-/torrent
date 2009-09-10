@@ -61,6 +61,7 @@ State: adt {
 	upr,
 	downr:	int;
 	eta:	int;
+	hashfails,
 	npeers,
 	nseeds,
 	ndialed,
@@ -73,8 +74,7 @@ State: adt {
 
 Config: adt {
 	listenport:	int;
-	localpeerid,
-	localpeeridhex:	string;
+	localpeerid:	string;
 	maxratio:	real;
 	maxuprate,
 	maxdownrate,
@@ -106,8 +106,7 @@ Local:	con 2;
 Peer: adt {
 	addr:	string;
 	id:	int;
-	peerid,
-	peeridhex:	string;
+	peerid:	string;
 	dialed:	int;
 	done:	int;
 	pieces:	ref Bits;
@@ -117,8 +116,9 @@ Peer: adt {
 
 Badpeer: adt {
 	ip:	string;
-	mtime:	int;
-	err:	string;
+	time:	int;
+	peerid:	string;
+	banreason:	string;
 };
 
 Tracker: adt {
@@ -466,7 +466,7 @@ setstate()
 	stategrid := list of {
 	l2("stopped",		string s.stopped),
 	l2("eta",		etastr(s.eta)),
-	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n)),
+	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces, %d hash fails", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n, s.hashfails)),
 	l2("total",		sprint("%5s   up, %5s   down, ratio: %s ", sizefmt(s.up), sizefmt(s.down), ratio(s.up, s.down))),
 	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
 	l2("connected",		sprint("%d peer%s (%d seed%s), %d dialed", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ndialed)),
@@ -678,10 +678,8 @@ peerword(t: array of string): int
 	"tracker" =>
 		; # not keeping track of peers from tracker
 	"new" =>
-		peeridhex := t[3];
-		peerid := peeridfmt(peeridhex);
 		c := Peercount (big 0, big 0, 0, 0, 0, 0, 0, 0);
-		p := ref Peer (t[1], getint(t[2]), peerid, peeridhex, getint(t[4]), 0, Bits.new(info.npieces), 0, c);
+		p := ref Peer (t[1], getint(t[2]), peeridfmtstr(t[3]), getint(t[4]), 0, Bits.new(info.npieces), 0, c);
 		peers.add(p.id, p);
 		return 1;
 	"gone" =>
@@ -698,7 +696,7 @@ peerword(t: array of string): int
 		barflush(availbar);
 		return 1;
 	"bad" =>
-		badpeers = ref Badpeer (t[1], getint(t[2]), t[3])::badpeers;
+		badpeers = ref Badpeer (t[1], getint(t[2]), peeridfmtstr(t[3]), t[4])::badpeers;
 		setbadpeers();
 		return 1;
 	"state" =>
@@ -925,9 +923,7 @@ readconfig(): ref Config
 		v := t[1];
 		case t[0] {
 		"listenport" =>		c.listenport = getint(v);
-		"localpeerid" =>
-			c.localpeerid = peeridfmt(v);
-			c.localpeeridhex = v;
+		"localpeerid" =>	c.localpeerid = peeridfmtstr(v);
 		"maxratio" =>		c.maxratio = getreal(v);
 		"maxuprate" =>		c.maxuprate = getbig(v);
 		"maxdownrate" =>	c.maxdownrate = getbig(v);
@@ -962,6 +958,7 @@ readstate(): ref State
 		"rateup" =>	s.upr = getint(v);
 		"ratedown" =>	s.downr = getint(v);
 		"eta" =>	s.eta = getint(v);
+		"hashfails" =>	s.hashfails = getint(v);
 		"peers" =>	s.npeers = getint(v);
 		"seeds" =>	s.nseeds = getint(v);
 		"dialed" =>	s.ndialed = getint(v);
@@ -1049,7 +1046,7 @@ setpeers()
 	if(view != Vpeers)
 		return;
 
-	peergrid := l9("id", "addr", "dir", "rate", "total", "pieces", " l/r", "reqs", "peerid")::nil;
+	peergrid := l10("id", "dir", "rate", "total", "pieces", " l/r", "reqs", "oreqs", "peerid", "addr")::nil;
 	for(l := peerall(); l != nil; l = tl l) {
 		p := hd l;
 		dir := "in";
@@ -1058,10 +1055,11 @@ setpeers()
 		pr := sprint("%3d%%", 100*p.pieces.have/info.npieces);
 		lr := sprint("%s/%s", statefmt(p.state>>Local), statefmt(p.state>>Remote));
 		c := p.counts;
-		reqstr := sprint("%2d(%2d)/%2d(%2d)", c.lreqs, c.olreqs, c.rreqs, c.orreqs);
+		reqstr := sprint("%d/%d", c.lreqs, c.rreqs);
+		oreqstr := sprint("%d/%d", c.olreqs, c.orreqs);
 		rate := sprint("%s/%s", sizefmt(big c.upr), sizefmt(big c.downr));
 		total := sprint("%s/%s", sizefmt(c.up), sizefmt(c.down));
-		peergrid = l9(string p.id, p.addr, dir, rate, total, pr, lr, reqstr, peeridfmt(p.peerid))::peergrid;
+		peergrid = l10(string p.id, dir, rate, total, pr, lr, reqstr, oreqstr, p.peerid, p.addr)::peergrid;
 	}
 	tkgrid(".v.p.c.g", rev(peergrid));
 	setscrollregion(".v.p.c", ".v.p.c.g");
@@ -1092,10 +1090,11 @@ setbadpeers()
 	if(view != Vbadpeers)
 		return;
 
-	badpeergrid := l3("ip", "mtime", "error")::nil;
+	badpeergrid := l4("ip", "until", "peerid", "reason")::nil;
+	now := daytime->now();
 	for(l := badpeers; l != nil; l = tl l) {
 		b := hd l;
-		badpeergrid = l3(b.ip, string b.mtime, b.err)::badpeergrid;
+		badpeergrid = l4(b.ip, etastr(max(0, b.time-now)), b.peerid, b.banreason)::badpeergrid;
 	}
 	tkgrid(".v.b.c.g", rev(badpeergrid));
 	setscrollregion(".v.b.c", ".v.b.c.g");
@@ -1121,7 +1120,7 @@ etastr(n: int): string
 	return s;
 }
 
-peeridfmt(s: string): string
+peeridfmtstr(s: string): string
 {
 	d := unhex(s);
 	if(d == nil)
@@ -1270,6 +1269,11 @@ l8(a, b, c, d, e, f, g, h: string): list of string
 l9(a, b, c, d, e, f, g, h, i: string): list of string
 {
 	return list of {a, b, c, d, e, f, g, h, i};
+}
+
+l10(a, b, c, d, e, f, g, h, i, j: string): list of string
+{
+	return list of {a, b, c, d, e, f, g, h, i, j};
 }
 
 
