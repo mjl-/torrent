@@ -114,6 +114,19 @@ Bittorrent: module
         reader:		fn(tx: ref Torrentx, c: chan of (array of byte, string));
 	torrenthash:	fn(tx: ref Torrentx, haves: ref Bitarray->Bits): string;
 
-	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string);
+
+	Trackpeer: adt {
+		ip:	string;
+		port:	int;
+		peerid:	array of byte;
+	};
+	Track: adt {
+		interval:	int;
+		mininterval:	int;	# < 0 if absent
+		peers:	array of Trackpeer;
+		b:	ref Bee;
+	};
+
+	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event, key: string): (ref Track, string);
 	genpeerid:	fn(): array of byte;
 };

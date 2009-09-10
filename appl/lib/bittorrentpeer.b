@@ -21,10 +21,10 @@ include "bitarray.m";
 	Bits, Bititer: import bitarray;
 include "bittorrent.m";
 	bt: Bittorrent;
-	File, Torrent, Filex, Torrentx: import bt;
+	File, Torrent, Filex, Torrentx, Trackpeer: import bt;
 include "util0.m";
 	util: Util0;
-	hex, sizefmt, preadn, min, warn, rev, l2a, inssort: import util;
+	hex, hasstr, sizefmt, preadn, min, warn, rev, l2a: import util;
 include "bittorrentpeer.m";
 
 state: ref State;
@@ -61,16 +61,28 @@ now(): big
 }
 
 
-RReq.eq(r1, r2: ref RReq): int
+Req.rkey(piece, begin: int): big
+{
+	v := (big piece)<<32;
+	v |= big begin;
+	return v;
+}
+
+Req.key(r: self ref Req): big
+{
+	return Req.rkey(r.piece, r.begin);
+}
+
+Req.eq(r1, r2: ref Req): int
 {
 	return r1.piece == r2.piece &&
 		r1.begin == r2.begin &&
 		r1.length == r2.length;
 }
 
-RReq.text(r: self ref RReq): string
+Req.text(r: self ref Req): string
 {
-	return sprint("RReq(piece %d, begin %d, length %d)", r.piece, r.begin, r.length);
+	return sprint("Req(piece %d, begin %d, length %d, flushed %d)", r.piece, r.begin, r.length, r.flushed);
 }
 
 
@@ -88,7 +100,7 @@ Bigtab[T].add(t: self ref Bigtab, k: big, v: T)
 {
 	i := int (k % big len t.items);
 	t.items[i] = (k, v)::t.items[i];
-	t.nelems++;
+	t.length++;
 }
 
 Bigtab[T].del(t: self ref Bigtab, k: big): T
@@ -99,7 +111,7 @@ Bigtab[T].del(t: self ref Bigtab, k: big): T
 	for(l := t.items[i]; l != nil; l = tl l)
 		if((hd l).t0 == k && v == nil) {
 			v = (hd l).t1;
-			t.nelems--;
+			t.length--;
 		} else
 			r = hd l::r;
 	t.items[i] = r;
@@ -125,164 +137,170 @@ Bigtab[T].all(t: self ref Bigtab): list of T
 }
 
 
-RReqs.new(): ref RReqs
+
+Reqs.new(): ref Reqs
 {
-	rr := ref RReqs;
+	rr := ref Reqs;
+	rr.q = rr.q.new();
 	rr.tab = rr.tab.new(17);
-	rr.length = 0;
 	return rr;
 }
 
-RReqs.clear(rr: self ref RReqs)
+Reqs.clear(rr: self ref Reqs)
 {
-	*rr = *RReqs.new();
+	*rr = *Reqs.new();
 }
 
-rrkey(r: ref RReq): big
+Reqs.add(rr: self ref Reqs, r: ref Req)
 {
-	k := (big r.piece)<<32;;
-	k |= big r.begin;
-	return k;
+	l := rr.q.append(r);
+	rr.tab.add(r.key(), l);
 }
 
-RReqs.add(rr: self ref RReqs, r: ref RReq)
+Reqs.del(rr: self ref Reqs, r: ref Req): int
 {
-	l := ref Link[ref RReq](rr.last, nil, r);
-	if(rr.first == nil) {
-		rr.first = rr.last = l;
-	} else {
-		rr.last.next = l;
-		rr.last = l;
-	}
-	rr.tab.add(rrkey(r), l);
-	rr.length++;
+	return rr.delkey(r.key()) != nil;
 }
 
-RReqs.del(rr: self ref RReqs, r: ref RReq): int
+Reqs.delkey(rr: self ref Reqs, key: big): ref Req
 {
-	l := rr.tab.del(rrkey(r));
+	l := rr.tab.del(key);
 	if(l == nil)
-		return 0;
-
-	if(rr.first == l) {
-		rr.first = rr.first.next;
-		if(rr.first != nil)
-			rr.first.prev = nil;
-	} else {
-		l.prev.next = l.next;
-		if(l.next != nil)
-			l.next.prev = l.prev;
-	}
-	if(rr.last == l)
-		rr.last = l.prev;
-	rr.length--;
-	return 1;
+		return nil;
+	e := l.e;
+	rr.q.unlink(l);
+	return e;
 }
 
-RReqs.dropfirst(rr: self ref RReqs)
+Reqs.takefirst(rr: self ref Reqs): ref Req
 {
-	rr.first.e = nil;
-	if(rr.last == rr.first) {
-		rr.first = rr.last = nil;
-	} else {
-		rr.first = rr.first.next;
-		if(rr.first != nil)
-			rr.first.prev = nil;
-	}
-	rr.length--;
+	r := rr.q.unlink(rr.q.first);
+	rr.tab.del(r.key());
+	return r;
 }
 
-
-isascii(d: array of byte): int
+Reqs.drophead(rr: self ref Reqs, time, max: int)
 {
-	for(i := 0; i < len d; i++)
-		if(!str->in(int d[i], " -~"))
-			return 0;
-	return 1;
+	while(rr.q.first != nil && (rr.q.length > max || rr.q.first.e.flushed <= time)) {
+		rr.tab.del(rr.q.first.e.key());
+		rr.q.unlink(rr.q.first);
+	}
 }
+
+Reqs.concat(rr: self ref Reqs, r: ref Reqs)
+{
+	for(f := r.q.first; f != nil; f = f.next)
+		rr.add(f.e);
+}
+
 
 peeridfmt(d: array of byte): string
 {
-	if(isascii(d))
-		return string d;
-	return hex(d);
+	s := "";
+	for(i := 0; i < len d; i++)
+		case c := int d[i] {
+		'-' or
+		'a' to 'z' or
+		'A' to 'Z' or
+		'0' to '9' =>
+			s[len s] = c;
+		* =>
+			s += sprint("%02x", c);
+		}
+	return s;
 }
 
 
 Queue[T].new(): ref Queue[T]
 {
-	return ref Queue[T];
+	return ref Queue[T](nil, nil, 0);
 }
 
 Queue[T].take(q: self ref Queue): T
 {
 	if(q.first == nil)
 		raise "take on empty queue";
-	n := q.first;
-	e := n.e;
-	n.e = nil;
-	if(q.first == q.last)
-		q.first = q.last = nil;
-	else
-		q.first = q.first.next;
-	return e;
+	return q.unlink(q.first);
 }
 
 Queue[T].takeq(q: self ref Queue): ref Queue[T]
 {
 	e := q.take();
 	nq := q.new();
-	nq.add(e);
+	nq.append(e);
 	return nq;
 }
 
-Queue[T].prepend(q: self ref Queue, e: T)
+Queue[T].prepend(q: self ref Queue, e: T): ref Link[T]
 {
-	n := ref List[T];
-	n.e = e;
-	n.next = q.first;
-	q.first = n;
+	l := ref Link[T](nil, q.first, e);
+	if(q.first != nil)
+		q.first.prev = l;
+	q.first = l;
 	if(q.last == nil)
-		q.last = n;
+		q.last = l;
+	q.length++;
+	return l;
 }
 
-Queue[T].add(q: self ref Queue, e: T)
+Queue[T].append(q: self ref Queue, e: T): ref Link[T]
 {
-	n := ref List[T];
-	n.e = e;
-	if(q.first == nil) {
-		q.first = q.last = n;
-	} else {
-		q.last.next = n;
-		q.last = n;
-	}
+	l := ref Link[T](q.last, nil, e);
+	if(q.last != nil)
+		q.last.next = l;
+	q.last = l;
+	if(q.first == nil)
+		q.first = l;
+	q.length++;
+	return l;
 }
 
 Queue[T].empty(q: self ref Queue): int
 {
-	return q.first == nil;
+	return q.length == 0;
+}
+
+Queue[T].unlink(q: self ref Queue, l: ref Link[T]): T
+{
+	prev := l.prev;
+	next := l.next;
+	if(prev != nil)
+		prev.next = next;
+	if(next != nil)
+		next.prev = prev;
+	if(q.first == l)
+		q.first = next;
+	if(q.last == l)
+		q.last = prev;
+	l.prev = l.next = nil;
+	e := l.e;
+	l.e = nil;
+	q.length--;
+	return e;
 }
 
 
-Peer.new(np: Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
+Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
 {
-	getmsgc := chan of ref Queue[ref Bittorrent->Msg];
+	outmsgc := chan of ref Queue[ref Bittorrent->Msg];
 	msgseq := 0;
 	writec := chan[4] of ref Chunkwrite;
-	readc := chan of ref RReq;
+	readc := chan of ref Req;
+	now := daytime->now();
 	return ref Peer (
 		peergen++,
 		np, fd, extensions, peerid, hex(peerid),
 		0, 0, 0,
-		getmsgc, Queue[ref Bittorrent->Msg].new(), Queue[ref Bittorrent->Msg].new(),
+		outmsgc, Queue[ref Bittorrent->Msg].new(), Queue[ref Bittorrent->Msg].new(),
 		Bits.new(npieces),
 		Bits.new(npieces),
 		RemoteChoking|LocalChoking,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
-		Bigtab[ref LReq].new(17),
-		RReqs.new(),
-		0, dialed, Chunk.new(), writec, readc, -1);
+		Reqs.new(), Reqs.new(),
+		Reqs.new(), Reqs.new(),
+		0, 0, dialed, Chunk.new(), writec, readc,
+		now, now, now);
 }
 
 Peer.remotechoking(p: self ref Peer): int
@@ -312,7 +330,7 @@ Peer.isdone(p: self ref Peer): int
 
 Peer.text(p: self ref Peer): string
 {
-	return sprint("Peer(id %d, addr %s)", p.id, p.np.addr);
+	return sprint("Peer(id %d, addr %s, peerid %s)", p.id, p.np.addr, peeridfmt(p.peerid));
 }
 
 
@@ -324,7 +342,7 @@ Chunk.new(): ref Chunk
 Chunk.tryadd(c: self ref Chunk, piece: ref Piece, begin: int, buf: array of byte): int
 {
 	if(c.piece < 0) {
-		c.bufs.add(buf);
+		c.bufs.append(buf);
 		c.piece = piece.index;
 		c.begin = begin;
 		c.piecelength = piece.length;
@@ -336,7 +354,7 @@ Chunk.tryadd(c: self ref Chunk, piece: ref Piece, begin: int, buf: array of byte
 		return 0;
 
 	if(begin % Diskchunksize != 0 && begin == c.begin+c.nbytes) {
-		c.bufs.add(buf);
+		c.bufs.append(buf);
 	} else if(c.begin % Diskchunksize != 0 && begin == c.begin-len buf) {
 		c.bufs.prepend(buf);
 		c.begin = begin;
@@ -373,7 +391,7 @@ Chunk.flush(c: self ref Chunk): ref Chunkwrite
 }
 
 
-Newpeer.text(np: self Newpeer): string
+Newpeer.text(np: self ref Newpeer): string
 {
 	peerid := "nil";
 	if(np.peerid != nil)
@@ -381,53 +399,332 @@ Newpeer.text(np: self Newpeer): string
 	return sprint("Newpeer(addr %s, peerid %s)", np.addr, peerid);
 }
 
-Newpeers.del(n: self ref Newpeers, np: Newpeer)
+
+newpeerready(n: ref Newpeers, np: ref Newpeer): int
 {
-	l: list of Newpeer;
-	for(; n.l != nil; n.l = tl n.l)
-		if((hd n.l).addr != np.addr)
-			l = (hd n.l)::l;
-	n.l = l;
+	if(n.done && (np.state & Pseeding))
+		return 0;
+	return (np.state & (Pdialing|Pconnected|Plistener)) == 0 && np.time <= daytime->now();
 }
 
-Newpeers.add(n: self ref Newpeers, np: Newpeer)
+newpeersfind(n: ref Newpeers, np: ref Newpeer): int
 {
-	n.l = np::n.l;
+	for(i := 0; i < n.np; i++)
+		if(n.p[i].ip == np.ip)
+			return i;
+	return -1;
 }
 
-Newpeers.take(n: self ref Newpeers): Newpeer
+newpeersfindip(n: ref Newpeers, ip: string): list of ref Newpeer
 {
-	np := hd n.l;
-	n.l = tl n.l;
+	l: list of ref Newpeer;
+	for(i := 0; i < n.np; i++)
+		if(n.p[i].ip == ip)
+			l = n.p[i]::l;
+	return l;
+}
+
+newpeersadd(n: ref Newpeers, np: ref Newpeer)
+{
+	if(n.np+1 >= len n.p)
+		n.p = grow(n.p, 8);
+	n.p[n.np++] = np;
+}
+
+newpeersdelindex(n: ref Newpeers, i: int)
+{
+	n.p[i:] = n.p[i+1:];
+	n.p[--n.np] = nil;
+}
+
+newpeersdel(n: ref Newpeers, np: ref Newpeer)
+{
+	for(i := 0; i < n.np; i++)
+		if(n.p[i] == np)
+			return newpeersdelindex(n, i);
+}
+
+newpeercmp(a, b: ref Newpeer, done: int): int
+{
+	mask := Pdialing|Pconnected|Plistener;
+	if(!done)
+		mask |= Pseeding;
+	if((a.state & mask) == (b.state & mask))
+		return a.time-b.time;
+	if((a.state & mask) == 0)
+		return -1;
+	return 1;
+}
+
+newpeerge(a, b: ref Newpeer, done: int): int
+{
+	return newpeercmp(a, b, done) >= 0;
+}
+
+newpeerssort(n: ref Newpeers)
+{
+	inssort(n.p[:n.np], newpeerge, n.done);
+}
+
+Newpeerslowat: con 1000;
+Newpeershiwat: con 1100;
+newpeerstrunc(n: ref Newpeers)
+{
+	if(n.np < Newpeershiwat)
+		return;
+	for(nn := n.np; nn-1 >= Newpeerslowat; nn--)
+		if(n.p[nn-1].state & (Pdialing|Pconnected))
+			break;
+	if(nn == n.np)
+		return;
+	np := array[nn] of ref Newpeer;
+	np[:] = n.p[:nn];
+	n.p = np;
+}
+
+newpeertext(np: ref Newpeer): string
+{
+	return sprint("%s time %d waittime %d listener %d dialing %d connected %d", np.addr, np.time, np.waittime,
+		(np.state & Plistener) != 0,
+		(np.state & Pdialing) != 0,
+		(np.state & Pconnected) != 0);
+}
+
+newpeersdump(n: ref Newpeers)
+{
+	say("newpeers:");
+	for(i := 0; i < n.np; i++)
+		say("\t"+newpeertext(n.p[i]));
+	say("eonewpeers");
+}
+
+Newpeers.new(): ref Newpeers
+{
+	return ref Newpeers (nil, array[0] of ref Newpeer, 0, 0);
+}
+
+Newpeers.add(n: self ref Newpeers, tp: Trackpeer)
+{
+	return n.addmany(array[] of {tp});
+}
+
+Newpeers.addmany(n: self ref Newpeers, tps: array of Trackpeer)
+{
+	now := daytime->now();
+next:
+	for(i := 0; i < len tps; i++) {
+		tp := tps[i];
+		for(l := newpeersfindip(n, tp.ip); l != nil; l = tl l) {
+			onp := hd l;
+			if(!(onp.state & Plistener))
+				continue next;
+		}
+		np := ref Newpeer (sprint("%s!%d", tp.ip, tp.port), tp.ip, tp.port, tp.peerid, now, 0, 0, nil, nil);
+		newpeersadd(n, np);
+	}
+	newpeerssort(n);
+	newpeerstrunc(n);
+}
+
+Newpeers.addlistener(n: self ref Newpeers, addr: string, peerid: array of byte): ref Newpeer
+{
+	(ip, portstr) := str->splitstrl(addr, "!");
+	if(portstr != nil)
+		portstr = portstr[1:];
+	port := int portstr;
+	now := daytime->now();
+	np := ref Newpeer (addr, ip, port, peerid, now, 0, Plistener|Pconnected, nil, nil);
+	newpeersadd(n, np);
+	newpeerssort(n);
+	newpeerstrunc(n);
 	return np;
 }
 
-Newpeers.all(n: self ref Newpeers): list of Newpeer
+Newpeers.markself(n: self ref Newpeers, ip: string)
 {
-	return n.l;
+	if(hasstr(n.localips, ip))
+		return;
+	n.localips = ip::n.localips;
+	for(l := newpeersfindip(n, ip); l != nil; l = tl l) {
+		np := hd l;
+		if(!(np.state & Pconnected) && !(np.state & Pdialing))
+			newpeersdel(n, np);
+	}
 }
 
-Newpeers.empty(n: self ref Newpeers): int
+Newpeers.markdone(n: self ref Newpeers)
 {
-	return n.l == nil;
+	n.done = 1;
+	i := 0;
+	while(i < n.np) {
+		np := n.p[i];
+		if((np.state & Pseeding) && (np.state & (Pdialing|Plistener) == 0))
+			newpeersdelindex(n, i);
+		else
+			i++;
+	}
 }
 
-
-LReq.key(r: self ref LReq): big
+Newpeers.peers(n: self ref Newpeers): ref List[ref Newpeer]
 {
-	v := (big r.piece)<<32;
-	v |= big r.block;
-	return v;
+	first := p := ref List[ref Newpeer];
+	for(i := 0; i < n.np; i++) {
+		p.next = ref List[ref Newpeer](nil, n.p[i]);
+		p = p.next;
+	}
+	return first.next;
 }
 
-LReq.eq(r1, r2: ref LReq): int
+Newpeers.faulty(n: self ref Newpeers): ref List[ref Newpeer]
 {
-	return r1.piece == r2.piece && r1.block == r2.block;
+	first := p := ref List[ref Newpeer];
+	for(i := 0; i < n.np; i++) {
+		if(n.p[i].banreason == nil)
+			continue;
+		p.next = ref List[ref Newpeer](nil, n.p[i]);
+		p = p.next;
+	}
+	return first.next;
 }
 
-LReq.text(r: self ref LReq): string
+Newpeers.npeers(n: self ref Newpeers): int
 {
-	return sprint("LReq(piece %d, block %d)", r.piece, r.block);
+	return n.np;
+}
+
+Newpeers.nfaulty(n: self ref Newpeers): int
+{
+	c := 0;
+	for(i := 0; i < n.np; i++)
+		if(n.p[i].banreason != nil)
+			c++;
+	return c;
+}
+
+Newpeers.ndialers(n: self ref Newpeers): int
+{
+	c := 0;
+	for(i := 0; i < n.np; i++)
+		if(n.p[i].state & Pdialing)
+			c++;
+	return c;
+}
+
+Newpeers.nready(n: self ref Newpeers): int
+{
+	c := 0;
+	for(i := 0; i < n.np && newpeerready(n, n.p[i]); i++)
+		c++;
+	return c;
+}
+
+Newpeers.nseeding(n: self ref Newpeers): int
+{
+	c := 0;
+	for(i := 0; i < n.np; i++)
+		if(n.p[i].state & Pseeding)
+			c++;
+	return c;
+}
+
+Newpeers.nlisteners(n: self ref Newpeers): int
+{
+	c := 0;
+	for(i := 0; i < n.np; i++)
+		if(n.p[i].state & Plistener)
+			c++;
+	return c;
+}
+
+Newpeers.cantake(n: self ref Newpeers): int
+{
+#say(sprint("cantake, npeers %d", n.np));
+	return n.np > 0 && newpeerready(n, n.p[0]);
+}
+
+Newpeers.take(n: self ref Newpeers): ref Newpeer
+{
+	if(!n.cantake())
+		raise "newpeers.take, newpeer not ready";
+	np := n.p[0];
+	if(np.state & Pconnected)
+		raise "newpeers.take, connected?";
+	if(np.state & Plistener)
+		raise "newpeers.take, listener?";
+	np.state |= Pdialing;
+	np.banreason = nil;
+	newpeerssort(n);
+	return np;
+}
+
+newpeerbackoff(np: ref Newpeer, backoff: int)
+{
+	if(backoff) {
+		if(np.waittime == 0)
+			np.waittime = 15;
+		np.waittime *= 2;
+	}
+	np.time = daytime->now()+np.waittime;
+}
+
+Newpeers.dialfailed(n: self ref Newpeers, np: ref Newpeer, backoff: int, err: string)
+{
+	if((np.state & Pdialing) == 0)
+		raise "dialfailed but not dialing?";
+	np.state &= ~Pdialing;
+	np.lasterror = err;
+	newpeerbackoff(np, backoff);
+	newpeerssort(n);
+}
+
+Newpeers.connected(n: self ref Newpeers, np: ref Newpeer)
+{
+	if((np.state & Pdialing) == 0)
+		raise "connected but was not dialing?";
+	np.state &= ~Pdialing;
+	np.state |= Pconnected;
+	np.lasterror = nil;
+	newpeerssort(n);
+}
+
+Newpeers.disconnected(n: self ref Newpeers, np: ref Newpeer, err: string)
+{
+	if((np.state & Pconnected) == 0)
+		raise "disconnected but were not connected?";
+	np.state &= ~Pconnected;
+	np.lasterror = err;
+	newpeerbackoff(np, 1);
+	newpeerssort(n);
+}
+
+Newpeers.disconnectfaulty(n: self ref Newpeers, np: ref Newpeer, err: string): int
+{
+	if(np.state & Pdialing)
+		raise "newpeers.disconnectfaulty, for dialing peer";
+	if((np.state & Pconnected) == 0)
+		raise "newpeers.disconnectfaulty, but not connected";
+	if(np.banreason != nil)
+		raise "newpeers.disconnectfaulty, peer was already faulty";
+	now := daytime->now();
+	np.time = now+500;
+	np.waittime = 0;
+	np.banreason = err;
+	np.lasterror = err;
+	newpeerssort(n);
+	return np.time;
+}
+
+Newpeers.seeding(nil: self ref Newpeers, np: ref Newpeer)
+{
+	np.state |= Pseeding;
+}
+
+Newpeers.isfaulty(n: self ref Newpeers, ip: string): int
+{
+	for(l := newpeersfindip(n, ip); l != nil; l = tl l)
+		if((hd l).banreason != nil)
+			return 1;
+	return 0;
 }
 
 
@@ -679,11 +976,28 @@ Eventfid[T].flushtag(ef: self ref Eventfid, tag: int): int
 	return 1;
 }
 
+grow[T](a: array of T, n: int): array of T
+{
+	na := array[len a+n] of T;
+	na[:] = a;
+	return na;
+}
+
 randomize[T](a: array of T)
 {
 	for(i := 0; i < len a; i++) {
 		j := rand->rand(len a);
 		(a[i], a[j]) = (a[j], a[i]);
+	}
+}
+
+inssort[T](a: array of T, ge: ref fn(a, b: T, done: int): int, done: int)
+{
+	for(i := 1; i < len a; i++) {
+		tmp := a[i];
+		for(j := i; j > 0 && ge(a[j-1], tmp, done); j--)
+			a[j] = a[j-1];
+		a[j] = tmp;
 	}
 }
 

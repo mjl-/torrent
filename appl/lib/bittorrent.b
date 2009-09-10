@@ -15,6 +15,9 @@ include "security.m";
 include "tables.m";
 	tables: Tables;
 	Strhash: import tables;
+include "ip.m";
+	ip: IP;
+	IPaddr: import ip;
 include "filter.m";
 include "mhttp.m";
 	http: Http;
@@ -25,7 +28,7 @@ include "bitarray.m";
 include "bittorrent.m";
 include "util0.m";
 	util: Util0;
-	warn, rev, l2a, hex, readfile, preadn, g32i, p32i, g16, suffix, prefix, join, hasstr: import util;
+	warn, rev, l2a, hex, index, strip, readfile, preadn, g32i, p32i, g16, suffix, prefix, join, hasstr: import util;
 
 dflag = 0;
 version: con 0;
@@ -39,6 +42,8 @@ init()
 	kr = load Keyring Keyring->PATH;
 	bufio = load Bufio Bufio->PATH;
 	tables = load Tables Tables->PATH;
+	ip = load IP IP->PATH;
+	ip->init();
 	http = load Http Http->PATH;
 	http->init(bufio);
 	bitarray = load Bitarray Bitarray->PATH;
@@ -139,7 +144,7 @@ Bee.unpack(d: array of byte): (ref Bee, string)
 	if(err != nil)
 		return (nil, err+" (at offset "+string n+")");
 	if(n != len d)
-		return (nil, "data still left after parsing");
+		return (nil, sprint("%d bytes left after parsing", len d-n));
 	return (b, nil);
 }
 
@@ -434,7 +439,7 @@ Msg.unpack(d: array of byte): (ref Msg, string)
 	if(len d == 0)
 		return (ref Msg.Keepalive(), nil);
 	if(int d[0] > MLast)
-		return (nil, "bad message, unknown type");
+		return (nil, sprint("bad message, unknown type %d", int d[0]));
 
 	msize := msizes[int d[0]];
 	if(len d < msize)
@@ -515,19 +520,21 @@ Msg.text(mm: self ref Msg): string
 	return s;
 }
 
-encode(a: array of byte): string
+encode(a: array of byte, verbatim: string): string
 {
 	s := "";
 	for(i := 0; i < len a; i++)
-		s += sprint("%%%02x", int a[i]);
+		if(str->in(int a[i], verbatim))
+			s[len s] = int a[i];
+		else
+			s += sprint("%%%02x", int a[i]);
 	return s;
 }
 
 
 sanitizepath(s: string): string
 {
-	if(prefix("/", s) || suffix("/", s))
-		s = s[1:];
+	s = strip(s, "/");
 	if(prefix("../", s) || suffix("/..", s) || s == "..")
 		return nil;
 	if(str->splitstrl(s, "/../").t1 != nil)
@@ -541,7 +548,7 @@ foldpath(l: list of string): string
 	if(l == nil)
 		return nil;
 	for(; l != nil; l = tl l)
-		if(hd l == ".." || hd l == "" || str->in('/', hd l))
+		if(hd l == ".." || hd l == "" || index("/", hd l) >= 0)
 			return nil;
 		else
 			path += "/"+hd l;
@@ -576,24 +583,24 @@ Torrent.open(path: string): (ref Torrent, string)
 
 	bannoun := b.gets("announce"::nil);
 	if(bannoun == nil)
-		return (nil, sprint("%s: missing announce field", path));
+		return (nil, sprint("%s: missing/bad announce field", path));
 
 	binfo := b.get("info"::nil);
 	if(binfo == nil)
-		return (nil, sprint("%s: missing info field", path));
+		return (nil, sprint("%s: missing/bad info field", path));
 	bd := binfo.pack();
 	infohash := array[kr->SHA1dlen] of byte;
 	kr->sha1(bd, len bd, infohash, nil);
 
 	bpiecelen := binfo.geti("piece length"::nil);
 	if(bpiecelen == nil)
-		return (nil, sprint("%s: missing 'piece length' field", path));
+		return (nil, sprint("%s: missing/bad 'piece length' field", path));
 	piecelen := int bpiecelen.i;
 
 
 	bpieces := binfo.gets("pieces"::nil);
 	if(bpieces == nil)
-		return (nil, sprint("%s: missing field 'pieces' in 'info'", path));
+		return (nil, sprint("%s: missing/bad field 'pieces' in 'info'", path));
 	if(len bpieces.a % 20 != 0)
 		return (nil, sprint("%s: bad length of 'pieces', not multiple of hash size", path));
 
@@ -606,10 +613,10 @@ Torrent.open(path: string): (ref Torrent, string)
 	# file name, or dir name for files in case of multi-file torrent
 	bname := binfo.gets("name"::nil);
 	if(bname == nil)
-		return (nil, "missing destination file name");
+		return (nil, "missing/bad destination file name");
 	name := sanitizepath(string bname.a);
 	if(name == nil)
-		return (nil, sprint("weird path, refusing to create %#q", name));
+		return (nil, sprint("weird name, refusing to create %#q", name));
 
 	# determine paths for files, and total length
 	length := big 0;
@@ -621,7 +628,7 @@ Torrent.open(path: string): (ref Torrent, string)
 	} else {
 		bfiles := binfo.getl("files"::nil);
 		if(bfiles == nil)
-			return (nil, sprint("%s: missing field 'length' or 'files' in 'info'", path));
+			return (nil, sprint("%s: missing/bad field 'length' or 'files' in 'info'", path));
 		if(len bfiles.a == 0)
 			return (nil, sprint("%s: no files in torrent", path));
 		files = array[len bfiles.a] of ref File;
@@ -629,13 +636,13 @@ Torrent.open(path: string): (ref Torrent, string)
 		for(i = 0; i < len bfiles.a; i++) {
 			blen := bfiles.a[i].geti("length"::nil);
 			if(blen == nil)
-				return (nil, sprint("%s: missing field 'length' in 'files[%d]' in 'info'", path, i));
+				return (nil, sprint("%s: missing/bad field 'length' in 'files[%d]' in 'info'", path, i));
 			files[i] = f := ref File;
 			f.length = blen.i;
 
 			pathl := bfiles.a[i].getl("path"::nil);
 			if(pathl == nil)
-				return (nil, sprint("missing or invalid 'path' for file"));
+				return (nil, sprint("missing/bad or invalid 'path' for file"));
 			pathls: list of string;
 			for(j := len pathl.a-1; j >= 0; j--)
 				pick e := pathl.a[j] {
@@ -902,22 +909,40 @@ torrenthash(tx: ref Torrentx, haves: ref Bits): string
 }
 
 
-trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event: string): (int, array of (string, int, array of byte), ref Bee, string)
+trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event, key: string): (ref Track, string)
+{
+	{
+		return (trackerget0(t, peerid, up, down, left, lport, event, key), nil);
+	} exception e {
+	"track:*" =>
+		return (nil, e[len "track:":]);
+	}
+}
+trackerror(s: string)
+{
+	raise "track:"+s;
+}
+
+trackerget0(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event, key: string): ref Track
 {
 	(url, uerr) := Url.unpack(t.announce);
 	if(uerr != nil)
-		return (0, nil, nil, "parsing announce url: "+uerr);
+		trackerror("parsing announce url: "+uerr);
 	if(left < big 0)
-		return (0, nil, nil, sprint("bogus negative 'left' %bd", left));
+		trackerror(sprint("bogus negative 'left' %bd", left));
 
 	s := "";
-	s += "&info_hash="+encode(t.infohash);
-	s += "&peer_id="+encode(peerid);
-	s += "&port="+string lport;
+	s += "&info_hash="+encode(t.infohash, nil);
+	s += "&peer_id="+encode(peerid, "a-zA-Z0-9-");
+	s += sprint("&port=%d", lport);
 	s += sprint("&uploaded=%bd", up);
 	s += sprint("&downloaded=%bd", down);
 	s += sprint("&left=%bd", left);
 	s += "&compact=1";
+	s += "&numwant=200";
+	s += "&no_peer_id=1";
+	if(key != nil)
+		s += "&key="+key;
 	if(event != nil)
 		s += "&event="+http->encodequery(event);
 	if(url.query == "")
@@ -927,52 +952,71 @@ trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: in
 
 	(nil, nil, fd, herr) := http->get(url, nil);
 	if(herr != nil)
-		return (0, nil, nil, "request: "+herr);
+		trackerror("request: "+herr);
 	n := sys->readn(fd, d := array[32*1024] of byte, len d);
 	if(n < 0)
-		return (0, nil, nil, sprint("read: %r"));
+		trackerror(sprint("read: %r"));
+	if(n == len d)
+		trackerror("huge answer");
 	d = d[:n];
 
 	(b, err) := Bee.unpack(d);
 	if(err != nil)
-		return (0, nil, nil, "parsing: "+err);
+		trackerror("parsing: "+err);
 
-        interval := b.geti("interval"::nil);
-        if(interval == nil)
-                return (0, nil, nil, "bad response, missing key interval");
+	interval := b.geti("interval"::nil);
+	if(interval == nil)
+		trackerror("bad response, missing/bad key interval");
+	bmininterval := b.geti("min interval"::nil);
+	mininterval := -1;
+	if(bmininterval != nil)
+		mininterval = int bmininterval.i;
 
-        bpeers := b.get("peers"::nil);
-        if(bpeers == nil)
-                return (0, nil, nil, "bad response, missing key peers");
-
+	bpeers := b.get("peers"::nil);
+	if(bpeers == nil)
+		trackerror("bad response, missing/bad key peers");
 	pick peers := bpeers {
 	List =>
 		say("received traditional, non-compact form tracker response");
-		p := array[len peers.a] of (string, int, array of byte);
+		p := array[len peers.a] of Trackpeer;
 		for(i := 0; i < len peers.a; i++) {
-			ip := peers.a[i].gets("ip"::nil);
-			port := peers.a[i].geti("port"::nil);
-			rpeerid := peers.a[i].gets("peer id"::nil);
-			if(ip == nil || port == nil || rpeerid == nil)
-				return (0, nil, nil, "bad response, missing key ip, port or peer id");
-			p[i] = (string ip.a, int port.i, rpeerid.a);
+			bip := peers.a[i].gets("ip"::nil);
+			bport := peers.a[i].geti("port"::nil);
+			bpeerid := peers.a[i].gets("peer id"::nil);
+			if(bip == nil || bport == nil)
+				trackerror("bad response, missing/bad key ip or port");
+			(ok, ipaddr) := IPaddr.parse(string bip.a);
+			if(ok != 0)
+				trackerror(sprint("tracker sent bogus ip %#q", string bip.a));
+			tp: Trackpeer;
+			tp.ip = ipaddr.text();
+			tp.port = int bport.i;
+			if(tp.port < 0)
+				trackerror(sprint("tracker sent bogus port %d", tp.port));
+			if(bpeerid != nil) {
+				if(len bpeerid.a != Peeridlen)
+					trackerror(sprint("tracker sent bogus peerid of length %d", len bpeerid.a));
+				tp.peerid = bpeerid.a;
+			}
+			p[i] = tp;
 		}
-		return (int interval.i, p, b, nil);
+		return ref Track (int interval.i, mininterval, p, b);
 
 	String =>
 		say("received compact form tracker response");
 		if(len peers.a % 6 != 0)
-			return (0, nil, nil, "bad response, bad length for compact form for key peers");
-		p := array[len peers.a/6] of (string, int, array of byte);
+			trackerror("bad response, bad length for compact form for key peers");
+		p := array[len peers.a/6] of Trackpeer;
 		i := 0;
 		for(o := 0; o+6 <= len peers.a; o += 6) {
-			ip := sprint("%d.%d.%d.%d", int peers.a[o], int peers.a[o+1], int peers.a[o+2], int peers.a[o+3]);
+			ipstr := sprint("%d.%d.%d.%d", int peers.a[o], int peers.a[o+1], int peers.a[o+2], int peers.a[o+3]);
 			(port, nil) := g16(peers.a, o+4);
-			p[i++] = (ip, port, nil);
+			p[i++] = Trackpeer(ipstr, port, nil);
 		}
-		return (int interval.i, p, b, nil);
+		return ref Track (int interval.i, mininterval, p, b);
 	}
-	return (0, nil, nil, "bad response, bad type for key peers");
+	trackerror("bad response, bad type for key peers");
+	return nil;
 }
 
 genpeerid(): array of byte

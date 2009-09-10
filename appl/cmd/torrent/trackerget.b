@@ -2,7 +2,7 @@ implement Torrenttrackget;
 
 include "sys.m";
 	sys: Sys;
-	sprint: import sys;
+	print, sprint: import sys;
 include "draw.m";
 include "bufio.m";
 	bufio: Bufio;
@@ -51,16 +51,18 @@ init(nil: ref Draw->Context, args: list of string)
 
 	localpeerid := bt->genpeerid();
 
-	(interval, peers, nil, terr) := bt->trackerget(t, localpeerid, big 0, big 0, big 0, 0, nil);
+	(track, terr) := bt->trackerget(t, localpeerid, big 0, big 0, big 0, 0, nil, nil);
 	if(terr != nil)
 		fail("trackerget: "+terr);
 	say("trackget okay");
 
-	sys->print("interval=%d\n", interval);
-	sys->print("number of peers=%d\n", len peers);
-	for(i := 0; i < len peers; i++) {
-		(ip, port, nil) := peers[i];
-		sys->print("ip=%s port=%d rpeerid=...\n", ip, port);
+	print("interval: %d\n", track.interval);
+	if(track.mininterval >= 0)
+		print("min interval: %d\n", track.mininterval);
+	print("number of peers: %d\n", len track.peers);
+	for(i := 0; i < len track.peers; i++) {
+		tp := track.peers[i];
+		print("\tip=%s port=%d rpeerid=...\n", tp.ip, tp.port);
 	}
 	say("done");
 }

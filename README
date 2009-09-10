@@ -42,7 +42,7 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 ## wm/torrent: 
 
 - make config options settable.  just put the value in a tk entry, and write+read the new value on return.
-- available bar is not smoothly filled
+- available bar is not smoothly/correctly filled.  probably best to only show non-seeders in it.
 - figure out how to fill the panel with the bars (and thus bars themselves) in x direction
 - catch resizes and recreate the bars with new width.
 - merge the state & info grids, so they have same widths?
@@ -55,31 +55,29 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
+- should we use Req.length for its key?
+- propagate exceptions to main/other progs?  so we are never left with a half-operating program?
+- add hash failures to state
+- add peerid to badpeer
+- when first unchoked by peer, should probably start out with few requests, then if pieces come in start scheduling more.
 - we need an end-game: request blocks from one piece from multiple peers
-- the choking algorithm for uploading should probably use ip pools too?
+- the choking algorithm for uploading should use ip pools too
 - for rounds while downloading, shouldn't we ignore seeders when choosing peers to unchoke?
 - stopping & starting does not fix up all the state.
+- determine "race conditions" (sort of).  e.g. we send requests, we receive remote choke & unchoke, we receive a response to our piece.  this means remote first sent choke & unchoke, then received our requests, to which it responded.  this means we have to keep track of sent requests followed by received responses for some time.
 
-- lots of testing
-- for unused peers from tracker, make difference between new ip's and known ip's (current peers, bad peers).
+- resurrect Peerevent.Tracker.
+- when becoming a seed, drop seeders and aim for half the normal max peers
+
 - write manual page
-- make ctl for max peers, and ratio of dialed/listened peers, and (non)-seeders.
-- if we are fully connected, drop some peers once in a while, for better peers/peercloud
-- should we set a receive timeout for peers?  in case we expect something (e.g. when we sent requests and are unchoked by remote, but not getting any data for a long time).  probably not worth the trouble.
-- should we send keepalives to peers?
+- implement Newpeers more efficiently
 - when reading data from local disk for a peer, see if we have to (can) read the entire piece?  not just one block.
-- don't try dialing the same peers over and over again.  do some exponential backoff.
 
 - verify hash in separate prog?
 - do not block on i/o in peermsg().  should perhaps do more in progs?
 - optim: use better data structures in eg Peerbox, so picking peers to unchoke etc doesn't require walking through all the peers and their pieces.
-- use numwant in tracker request, set it high
-- after having had a peer/seed, but no longer, do a tracker request before interval.  not too often though.
-- set max number of peers connected, and max number of seeds among those?
-- send keep-alive messages?
 
 - support magnet uri's? (bep 9)
-- support fast extensions?  perhaps have all/none messages. (bep 6)
 - udp tracker support (bep 15)
 - multiple tracker support (bep 12)
 - http seeding (bep 17 and/or bep 19)

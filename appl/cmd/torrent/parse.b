@@ -58,7 +58,6 @@ init(nil: ref Draw->Context, args: list of string)
 	d := readfile(f, -1);
 	if(d == nil)
 		fail(sprint("%r"));
-	say(sprint("file length=%d byte0=%c", len d, int d[0]));
 
 	(b, err) := Bee.unpack(d);
 	if(err != nil)
