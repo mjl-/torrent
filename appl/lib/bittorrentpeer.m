@@ -138,14 +138,20 @@ Bittorrentpeer: module
 		isfaulty:	fn(n: self ref Newpeers, ip: string): int;
 	};
 
+	Piecepeer: adt {
+		peerid:		int;
+		canrequest,				# blocks we can still request (we don't have and we haven't requested yet)	
+		requested:	ref Bitarray->Bits;	# blocks requested and response pending
+	};
+
 	Piece: adt {
 		index:		int;
-		have,
-		written,
-		requested:	ref Bitarray->Bits;
+		have,					# blocks we have received (might not be written!)
+		written,				# blocks we have written to disk (subset of "have")
+		needrequest:	ref Bitarray->Bits;	# blocks we don't have and could use a request (note that if cleared, we can still send another request for same blocks to other peers)
 		length:		int;
-		peer:		int;	# current peer working on this piece
-		peers:		list of int;	# peers that contributed
+		peers:		ref Tables->Table[ref Piecepeer];	# peers working on this piece
+		peersgiven:	list of int;	# peers that contributed
 		hash:		ref Keyring->DigestState;
 		hashoff:	int; 
 	};
@@ -176,8 +182,8 @@ Bittorrentpeer: module
 		concat:		fn(rr: self ref Reqs, r: ref Reqs);
 	};
 
-	# Peer.state
-	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con (1<<iota);
+	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con 1<<iota;	# Peer.state
+	Gfaulty, Gunknown, Ghalfgood, Ggood: con iota;	# Peer.good
 	Peer: adt {
 		id:		int;
 		np:		ref Newpeer;
@@ -185,14 +191,15 @@ Bittorrentpeer: module
 		extensions,
 		peerid:		array of byte;
 		peeridhex:	string;
-		good:		int;	# whether it has sent full, verified piece to us, all by itself
+		good:		int;
 		lastpiece:	int;
 		wantmsg:	int;
 		outmsgc:	chan of ref Queue[ref Bittorrent->Msg];
 		metamsgs,
 		datamsgs: 	ref Queue[ref Bittorrent->Msg];
 		rhave,					# pieces remote has
-		lwantinact:	ref Bitarray->Bits;	# pieces remote has, we do not, and are not active or orphan
+		lwant,					# pieces remote has and we do not
+		canschedule:	ref Bitarray->Bits;	# pieces remote has, we do not, and we can schedule blocks from
 		state:		int;  # interested/choked
 		msgseq:		int;
 		up,
@@ -204,7 +211,7 @@ Bittorrentpeer: module
 		rreqs,				# remote wants from us
 		orreqs:		ref Reqs;	# remote wanted from us, but remote cancelled or we flushed by choke
 		lastunchoke:	int;
-		unchokepieces:	int;
+		unchokeblocks:	int;
 		dialed:		int;  # whether we initiated connection
 		chunk:		ref Chunk;  # unwritten part of piece
 		writec:		chan of ref Chunkwrite;

@@ -663,7 +663,7 @@ peerwords := array[] of {
 ("tracker",	1),
 ("new",		4),
 ("gone",	1),
-("bad",		3),
+("bad",		4),
 ("state",	3),
 ("piece",	2),
 ("pieces",	-2),

@@ -55,15 +55,17 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- find the problem that causes progs to spin (at least it seems that way.  after some time the program becomes responsive again...)
+- do we have delays in traffic?
+- find cause of hangs.  one emu proc takes lots of cpu, wm and programs (wm/torrent, wm/sh, etc) are responsive.  it seems anything with i/o is stuck, e.g. running a new program from the shell doesn't go anywhere, no progress.
 - should we use Req.length for its key?
-- when first unchoked by peer, should probably start out with few requests, then if pieces come in start scheduling more.
-- we need an end-game: request blocks from one piece from multiple peers
+
 - the choking algorithm for uploading should use ip pools too
 - for rounds while downloading, shouldn't we ignore seeders when choosing peers to unchoke?
-- stopping & starting does not fix up all the state.
+- when requesting blocks from active pieces, take known goodness of peer into account.  known bad peers should not be used.  unknown peers should only be tried if we haven't been making progress.  good peers can be tried immediately.  right now we're treating all peers as good.
 - determine "race conditions" (sort of).  e.g. we send requests, we receive remote choke & unchoke, we receive a response to our piece.  this means remote first sent choke & unchoke, then received our requests, to which it responded.  this means we have to keep track of sent requests followed by received responses for some time.
+- stopping & starting does not fix up all the state.
 
+- once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.
 - resurrect Peerevent.Tracker.
 - when becoming a seed, drop seeders and aim for half the normal max peers
 
@@ -74,6 +76,9 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 - verify hash in separate prog?
 - do not block on i/o in peermsg().  should perhaps do more in progs?
 - optim: use better data structures in eg Peerbox, so picking peers to unchoke etc doesn't require walking through all the peers and their pieces.
+
+- when remote becomes uninterested, we should cancel all requests (dropping the peer seems a bit too much), but obviously he doesn't want the pieces anymore, no need wasting bandwidth.
+- when remote sends Have for a piece, we should cancel all requests from that peer for that piece.  the peer might do it himself (or might have cancelled before the have (more likely actually)), but at least there is no use wasting bandwidth sending the data.
 
 - support magnet uri's? (bep 9)
 - udp tracker support (bep 15)

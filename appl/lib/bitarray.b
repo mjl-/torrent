@@ -109,6 +109,15 @@ Bits.invert(b: self ref Bits)
 	b.have = b.n-b.have;
 }
 
+Bits.clearbits(b: self ref Bits, o: ref Bits)
+{
+	for(i := 0; i < len b.d; i++) {
+		b.have -= nbits(b.d[i]);
+		b.d[i] &= ~o.d[i];
+		b.have += nbits(b.d[i]);
+	}
+}
+
 Bits.nand(a, na: ref Bits): ref Bits
 {
 	r := ref Bits(array[len a.d] of byte, a.n, 0);

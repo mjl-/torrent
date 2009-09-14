@@ -16,6 +16,7 @@ Bitarray: module
 		clear:		fn(b: self ref Bits, i: int);
 		clearall:	fn(b: self ref Bits);
 		invert:		fn(b: self ref Bits);
+		clearbits:	fn(b: self ref Bits, o: ref Bits);
 		nand:		fn(a, na: ref Bits): ref Bits;
 		isempty:	fn(b: self ref Bits): int;
 		isfull:		fn(b: self ref Bits): int;

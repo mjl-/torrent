@@ -290,10 +290,9 @@ Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, di
 	return ref Peer (
 		peergen++,
 		np, fd, extensions, peerid, hex(peerid),
-		0, 0, 0,
+		Gunknown, 0, 0,
 		outmsgc, Queue[ref Bittorrent->Msg].new(), Queue[ref Bittorrent->Msg].new(),
-		Bits.new(npieces),
-		Bits.new(npieces),
+		Bits.new(npieces), Bits.new(npieces), Bits.new(npieces),
 		RemoteChoking|LocalChoking,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
@@ -661,7 +660,7 @@ newpeerbackoff(np: ref Newpeer, backoff: int)
 {
 	if(backoff) {
 		if(np.waittime == 0)
-			np.waittime = 15;
+			np.waittime = 30;
 		np.waittime *= 2;
 	}
 	np.time = daytime->now()+np.waittime;
