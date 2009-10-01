@@ -237,7 +237,7 @@ beeunpack(d: array of byte, o: int): (ref Bee, int, string)
 		return (ref Bee.String(d[e+1:e+1+n]), e+1+n, nil);
 
 	* =>
-		return (nil, o, "bad structure type");
+		return (nil, o, sprint("bad structure type %c (%#x)", int d[o], int d[o]));
 	}
 }
 

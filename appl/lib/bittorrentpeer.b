@@ -61,16 +61,17 @@ now(): big
 }
 
 
-Req.rkey(piece, begin: int): big
+Req.rkey(piece, begin, length: int): big
 {
-	v := (big piece)<<32;
-	v |= big begin;
+	v := big length;  # max 32k
+	v |= big begin<<15;
+	v |= big piece<<(15+28);
 	return v;
 }
 
 Req.key(r: self ref Req): big
 {
-	return Req.rkey(r.piece, r.begin);
+	return Req.rkey(r.piece, r.begin, r.length);
 }
 
 Req.eq(r1, r2: ref Req): int
@@ -82,7 +83,7 @@ Req.eq(r1, r2: ref Req): int
 
 Req.text(r: self ref Req): string
 {
-	return sprint("Req(piece %d, begin %d, length %d, flushed %d)", r.piece, r.begin, r.length, r.flushed);
+	return sprint("Req(piece %d, begin %d, length %d)", r.piece, r.begin, r.length);
 }
 
 
@@ -177,20 +178,6 @@ Reqs.takefirst(rr: self ref Reqs): ref Req
 	r := rr.q.unlink(rr.q.first);
 	rr.tab.del(r.key());
 	return r;
-}
-
-Reqs.drophead(rr: self ref Reqs, time, max: int)
-{
-	while(rr.q.first != nil && (rr.q.length > max || rr.q.first.e.flushed <= time)) {
-		rr.tab.del(rr.q.first.e.key());
-		rr.q.unlink(rr.q.first);
-	}
-}
-
-Reqs.concat(rr: self ref Reqs, r: ref Reqs)
-{
-	for(f := r.q.first; f != nil; f = f.next)
-		rr.add(f.e);
 }
 
 
@@ -297,8 +284,7 @@ Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, di
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
 		Reqs.new(), Reqs.new(),
-		Reqs.new(), Reqs.new(),
-		0, 0, dialed, Chunk.new(), writec, readc,
+		0, now, 0, dialed, Chunk.new(), writec, readc,
 		now, now, now);
 }
 

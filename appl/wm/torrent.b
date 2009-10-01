@@ -59,7 +59,9 @@ State: adt {
 	down,
 	left:	big;
 	upr,
-	downr:	int;
+	downr,
+	metaupr,
+	metadownr:	int;
 	eta:	int;
 	hashfails,
 	npeers,
@@ -95,9 +97,7 @@ Peercount: adt {
 	up, down:	big;
 	upr, downr:	int;
 	lreqs,
-	olreqs,
-	rreqs,
-	orreqs:		int;
+	rreqs:		int;
 };
 
 Choking, Interested: con 1<<iota;
@@ -469,6 +469,7 @@ setstate()
 	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces, %d hash fails", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n, s.hashfails)),
 	l2("total",		sprint("%5s   up, %5s   down, ratio: %s ", sizefmt(s.up), sizefmt(s.down), ratio(s.up, s.down))),
 	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
+	l2("metarate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.metaupr), sizefmt(big s.metadownr))),
 	l2("connected",		sprint("%d peer%s (%d seed%s), %d dialed", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ndialed)),
 	l2("known",		sprint("%d peer%s (%d seed%s), %d in dial queue, %d listeners, %d faulty", s.knownpeers, trails(s.knownpeers), s.knownseeds, trails(s.knownseeds), s.unusedpeers, s.listeners, s.nfaultypeers)),
 	l2("tracker",		trackerstr()),
@@ -678,7 +679,7 @@ peerword(t: array of string): int
 	"tracker" =>
 		; # not keeping track of peers from tracker
 	"new" =>
-		c := Peercount (big 0, big 0, 0, 0, 0, 0, 0, 0);
+		c := Peercount (big 0, big 0, 0, 0, 0, 0);
 		p := ref Peer (t[1], getint(t[2]), peeridfmtstr(t[3]), getint(t[4]), 0, Bits.new(info.npieces), 0, c);
 		peers.add(p.id, p);
 		return 1;
@@ -957,6 +958,8 @@ readstate(): ref State
 		"totaldown" =>	s.down = getbig(v);
 		"rateup" =>	s.upr = getint(v);
 		"ratedown" =>	s.downr = getint(v);
+		"metarateup" =>	s.metaupr = getint(v);
+		"metaratedown" =>	s.metadownr = getint(v);
 		"eta" =>	s.eta = getint(v);
 		"hashfails" =>	s.hashfails = getint(v);
 		"peers" =>	s.npeers = getint(v);
@@ -982,18 +985,16 @@ readpeers0(): list of (int, Peercount)
 	r: list of (int, Peercount);
 	for(l := readlines0(b); l != nil; l = tl l) {
 		t := l2a(str->unquoted(hd l));
-		if(len t != 25)
-			fail(sprint("bad state line, expected 26 tokens, saw %d", len t));
+		if(len t != 23)
+			fail(sprint("bad peers line, expected 23 tokens, saw %d: %s", len t, hd l));
 		id := getint(t[0]);
 		up := getbig(t[9]);
 		upr := getint(t[10]);
 		down := getbig(t[12]);
 		downr := getint(t[13]);
 		lreqs := getint(t[21]);
-		olreqs := getint(t[22]);
-		rreqs := getint(t[23]);
-		orreqs := getint(t[24]);
-		r = (id, Peercount(up, down, upr, downr, lreqs, olreqs, rreqs, orreqs))::r;
+		rreqs := getint(t[22]);
+		r = (id, Peercount(up, down, upr, downr, lreqs, rreqs))::r;
 	}
 	return r;
 }
@@ -1046,7 +1047,7 @@ setpeers()
 	if(view != Vpeers)
 		return;
 
-	peergrid := l10("id", "dir", "rate", "total", "pieces", " l/r", "reqs", "oreqs", "peerid", "addr")::nil;
+	peergrid := l9("id", "dir", "rate", "total", "pieces", " l/r", "reqs", "peerid", "addr")::nil;
 	for(l := peerall(); l != nil; l = tl l) {
 		p := hd l;
 		dir := "in";
@@ -1056,10 +1057,9 @@ setpeers()
 		lr := sprint("%s/%s", statefmt(p.state>>Local), statefmt(p.state>>Remote));
 		c := p.counts;
 		reqstr := sprint("%d/%d", c.lreqs, c.rreqs);
-		oreqstr := sprint("%d/%d", c.olreqs, c.orreqs);
 		rate := sprint("%s/%s", sizefmt(big c.upr), sizefmt(big c.downr));
 		total := sprint("%s/%s", sizefmt(c.up), sizefmt(c.down));
-		peergrid = l10(string p.id, dir, rate, total, pr, lr, reqstr, oreqstr, p.peerid, p.addr)::peergrid;
+		peergrid = l9(string p.id, dir, rate, total, pr, lr, reqstr, p.peerid, p.addr)::peergrid;
 	}
 	tkgrid(".v.p.c.g", rev(peergrid));
 	setscrollregion(".v.p.c", ".v.p.c.g");

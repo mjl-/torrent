@@ -77,11 +77,12 @@ Peerbox: adt {
 	nunchokedinterested:	fn(b: self ref Peerbox): int;
 	longestunchoked:	fn(b: self ref Peerbox): ref Peer;
 	droppable:		fn(b: self ref Peerbox): ref Peer;
-	takeflushnow:	fn(b: self ref Peerbox): list of ref Peer;
-	takeflushdelay:	fn(b: self ref Peerbox): ref Peer;
+	listflushnow:	fn(b: self ref Peerbox): list of ref Peer;
+	peekflushdelay:	fn(b: self ref Peerbox): ref Peer;
 	addflushnow,
 	addflushdelay:	fn(b: self ref Peerbox, p: ref Peer);
 	haveflushdelay:	fn(b: self ref Peerbox): int;
+	delflush:	fn(b: self ref Peerbox, p: ref Peer);
 };
 
 # state
@@ -180,9 +181,9 @@ peerfids:	ref Table[ref Eventfid[ref Peerevent]];
 trackereventlast: ref Progress.Tracker;
 nexttrack:	int;
 
-Qroot, Qctl, Qinfo, Qstate, Qfiles, Qprogress, Qpeerevents, Qpeers, Qpeerstracker, Qpeersbad, Qnewpeers: con iota;
+Qroot, Qctl, Qinfo, Qstate, Qfiles, Qprogress, Qpeerevents, Qpeers, Qpeerstracker, Qpeersbad: con iota;
 Qfirst:	con Qctl;
-Qlast:	con Qnewpeers;
+Qlast:	con Qpeersbad;
 tab := array[] of {
 	(Qroot,		".",		Sys->DMDIR|8r555),
 	(Qctl,		"ctl",		8r666),
@@ -194,7 +195,6 @@ tab := array[] of {
 	(Qpeers,	"peers",	8r444),
 	(Qpeerstracker,	"peerstracker",	8r444),
 	(Qpeersbad,	"peersbad",	8r444),
-	(Qnewpeers,	"newpeers",	8r444),
 };
 srv:	ref Styxserver;
 msgc:	chan of ref Tmsg;
@@ -472,6 +472,8 @@ dostyx(mm: ref Tmsg)
 				s += sprint("totaldown %bd\n", trafficdown.total());
 				s += sprint("rateup %d\n", trafficup.rate());
 				s += sprint("ratedown %d\n", trafficdown.rate());
+				s += sprint("metarateup %d\n", trafficmetaup.rate());
+				s += sprint("metaratedown %d\n", trafficmetadown.rate());
 				s += sprint("eta %d\n", eta());
 				s += sprint("hashfails %d\n", nhashfails);
 				s += sprint("peers %d\n", len peerbox.peers);
@@ -529,26 +531,6 @@ dostyx(mm: ref Tmsg)
 				s := "";
 				for(f := newpeers.faulty(); f != nil; f = f.next)
 					s += sprint("%q %d %q %q\n", f.e.addr, f.e.time, hex(f.e.peerid), f.e.banreason);
-				fid.data = array of byte s;
-			}
-			srv.reply(styxservers->readbytes(m, fid.data));
-
-		Qnewpeers =>
-			if(m.offset == big 0) {
-				s := "";
-				now := daytime->now();
-				for(f := newpeers.peers(); f != nil; f = f.next) {
-					np := f.e;
-					s += sprint("%q %q %d %d %d %d %d %q %q\n",
-						np.addr, btp->peeridfmt(np.peerid),
-						(np.state & btp->Pconnected) != 0,
-						(np.state & btp->Pdialing) != 0,
-						(np.state & btp->Pseeding) != 0,
-						max(0, np.time-now),
-						np.waittime,
-						np.banreason,
-						np.lasterror);
-				}
 				fid.data = array of byte s;
 			}
 			srv.reply(styxservers->readbytes(m, fid.data));
@@ -867,7 +849,7 @@ peerline(p: ref Peer): string
 	s += sprint(" down %bd %d", p.down.total(), p.down.rate());
 	s += sprint(" metaup %bd %d", p.metaup.total(), p.metaup.rate());
 	s += sprint(" metadown %bd %d", p.metadown.total(), p.metadown.rate());
-	s += sprint(" reqs %d %d %d %d", p.lreqs.q.length, p.olreqs.q.length, p.rreqs.q.length, p.orreqs.q.length);
+	s += sprint(" reqs %d %d", p.lreqs.q.length, p.rreqs.q.length);
 	s += "\n";
 	return s;
 }
@@ -936,10 +918,8 @@ writestate()
 
 peerflush()
 {
-	for(l := peerbox.takeflushnow(); l != nil; l = tl l) {
-if(dflag) say(sprint("peerflush, now, peer %d, wantmsg %d", (hd l).id, (hd l).wantmsg));
+	for(l := peerbox.listflushnow(); l != nil; l = tl l)
 		peergive(hd l);
-	}
 	if(delaytoken && peerbox.haveflushdelay()) {
 		delaytoken = 0;
 		spawn givedelaytoken(100+randvar(20));
@@ -964,6 +944,10 @@ peerdrop(p: ref Peer, faulty: int, err: string)
 	spawn stopwritec(p.writec);
 
 	undolreqs(p);
+
+	if(faulty)
+		hangup(p.fd);
+
 	diallisten();
 }
 
@@ -1051,6 +1035,7 @@ account(p: ref Peer, q: ref Queue[ref Msg])
 peergive(p: ref Peer)
 {
 if(dflag) say(sprint("peergive, peer %d, wantmsg %d, metamsgs empty %d, datamsgs empty %d", p.id, p.wantmsg, p.metamsgs.empty(), p.datamsgs.empty()));
+	peerbox.delflush(p);
 	if(!p.wantmsg)
 		return;
 
@@ -1060,13 +1045,15 @@ if(dflag) say(sprint("peergive, peer %d, wantmsg %d, metamsgs empty %d, datamsgs
 		p.metamsgs = ref Queue[ref Msg];
 		p.wantmsg = 0;
 		p.lastsend = daytime->now();
-	} else if(!p.datamsgs.empty() && !p.localchoking() && p.remoteinterested()) {
+	} else if(!p.datamsgs.empty()) {
 		m := p.datamsgs.takeq();
 		account(p, m);
 		p.outmsgc <-= m;
 		p.wantmsg = 0;
 		p.lastsend = daytime->now();
 	}
+	if(p.datamsgs.length > 0)
+		peerbox.addflushnow(p);
 }
 
 blocksize(piece, begin: int): int
@@ -1086,9 +1073,7 @@ readrreq(p: ref Peer)
 	alt {
 	p.readc <-= p.rreqs.q.first.e =>
 		if(dflag) say("readrreq: another rreq");
-		r := p.rreqs.takefirst();
-		r.flushed = daytime->now();
-		p.orreqs.add(r);
+		p.rreqs.takefirst();
 	* =>
 		if(dflag) say("readrreq: diskreader busy, did get another not request");
 	}
@@ -1110,6 +1095,7 @@ peerlwant(i: int)
 		p.lwant.set(i);
 		p.canschedule.set(i);
 		interesting(p);
+		schedule(p);
 	}
 }
 
@@ -1132,8 +1118,7 @@ peernolwant(i: int)
 cancel(pc: ref Piece, block: int)
 {
 	begin := block*Blocksize;
-	length := blocksize(pc.index, block);
-	now := daytime->now();
+	length := blocksize(pc.index, begin);
 	for(l := tablist(pc.peers); l != nil; l = tl l) {
 		pcp := hd l;
 		if(!pcp.requested.get(block))
@@ -1143,23 +1128,20 @@ cancel(pc: ref Piece, block: int)
 		peersend(p, ref Msg.Cancel(pc.index, begin, length));
 		pcp.requested.clear(block);
 
-		r := ref Req (pc.index, begin, length, now);
+		r := ref Req (pc.index, begin, length);
 		if(!p.lreqs.del(r))
 			raise "cancel, peer had block requested, but no lreq for it?";
-		p.olreqs.add(r);
 	}
 }
 
-# peer is choking us, or we dropped it.
+# peer is choking us, or we are dropping it.
 # we won't be getting the blocks pending from it.
 # so mark them such that they will be scheduled again.
 undolreqs(p: ref Peer)
 {
 	li: list of int;
-	now := daytime->now();
 	for(f := p.lreqs.q.first; f != nil; f = f.next) {
 		lr := f.e;
-		lr.flushed = now;
 		if(hasint(li, lr.piece))
 			continue;
 		li = lr.piece::li;
@@ -1171,8 +1153,11 @@ undolreqs(p: ref Peer)
 		if(pcp == nil)
 			raise "undolreqs, have lreq for piece for which we are not in peer list?";
 		pc.peers.del(p.id);
-		if(p.lwant.get(lr.piece))
+		if(p.lwant.get(lr.piece)) {
+			if(pc.have.isfull())
+				raise "pc.have.isfull() but peer still had lwant set for piece?";
 			p.canschedule.set(lr.piece);
+		}
 		if(len tablist(pc.peers) == 0) {
 			state.active.del(lr.piece);
 			if(!pc.have.isempty()) {
@@ -1188,7 +1173,6 @@ if(dflag) say(sprint("schedule peer %d: turning active piece %d (have %d) into o
 				pc.needrequest.clearbits((hd l).requested);
 		}
 	}
-	p.olreqs.concat(p.lreqs);
 	p.lreqs = p.lreqs.new();
 }
 
@@ -1214,10 +1198,10 @@ requestblock(p: ref Peer, pc: ref Piece, pcp: ref Piecepeer, block: int)
 	pcp.canrequest.clear(block);
 	pcp.requested.set(block);
 	begin := block*Blocksize;
-	r := ref Req (pc.index, begin, blocksize(pc.index, begin), 0);
-if(dflag) say(sprint("schedule peer %d: %s", p.id, r.text()));
-	p.lreqs.add(r);
-	peersend(p, ref Msg.Request(r.piece, r.begin, r.length));
+	lr := ref Req (pc.index, begin, blocksize(pc.index, begin));
+if(dflag) say(sprint("schedule peer %d: %s", p.id, lr.text()));
+	p.lreqs.add(lr);
+	peersend(p, ref Msg.Request(lr.piece, lr.begin, lr.length));
 	p.lastpiece = pc.index;
 }
 
@@ -1239,14 +1223,13 @@ if(dflag) say(sprint("schedule peer %d: first block for peer on piece %d, making
 		pc.peers.add(p.id, pcp);
 	}
 
+if(dflag) say(sprint("schedule peer %d: pc.needrequest %d, pcp.canrequest %d", p.id, pc.needrequest.have, pcp.canrequest.have));
 	onblocks := nblocks;
 	it := pc.needrequest.clone().iter();
 	for(; nblocks > 0 && (i := it.next()) >= 0; nblocks--)
 		requestblock(p, pc, pcp, i);
 	for(; nblocks > 0 && !pcp.canrequest.isempty(); nblocks--)
 		requestblock(p, pc, pcp, pcp.canrequest.rand());
-	if(pcp.canrequest.isempty())
-		p.canschedule.clear(pc.index);
 if(dflag) say(sprint("schedule peer %d: scheduled %d blocks (%d allowed) for piece %d", p.id, onblocks-nblocks, onblocks, pc.index));
 	return nblocks;
 }
@@ -1315,7 +1298,6 @@ if(dflag) say(sprint("schedule peer %d: done with previous piece", p.id));
 
 	# orphan pieces
 	if(p.good >= Ggood) {
-		# xxx disable this for non-good peers after fixing random piece selection case to exclude orphans
 		if(dflag) say(sprint("schedule peer %d: orphans for good peer", p.id));
 		nblocks = scheduleorphans(p, nblocks);
 if(dflag) say(sprint("schedule peer %d: done with orphan pieces", p.id));
@@ -1324,7 +1306,8 @@ if(dflag) say(sprint("schedule peer %d: done with orphan pieces", p.id));
 	}
 
 	# random new piece
-if(dflag) say(sprint("schedule peer %d: looking at new pieces.  canschedule %d, rhave %d lwant %d", p.id, p.canschedule.have, p.rhave.have, p.lwant.have));
+if(dflag) say(sprint("schedule peer %d: looking at new pieces.  rhave %d, lwant %d, canschedule %d", p.id, p.rhave.have, p.lwant.have, p.canschedule.have));
+	# xxx selection should be less inefficient
 	canstart := p.canschedule.clone();
 	for(l := tablist(state.active); l != nil; l = tl l)
 		canstart.clear((hd l).index);
@@ -1354,7 +1337,7 @@ if(dflag) say(sprint("schedule peer %d: using new random piece %d", p.id, i));
 	}
 
 	# orphan pieces for non-good peers
-	if(0 && p.good < Ggood) {
+	if(p.good < Ggood) {
 		if(dflag) say(sprint("schedule peer %d: orphans for non-good peer", p.id));
 		nblocks = scheduleorphans(p, nblocks);
 		if(nblocks <= 0)
@@ -1366,8 +1349,10 @@ if(dflag) say(sprint("schedule peer %d: using new random piece %d", p.id, i));
 if(dflag) say(sprint("schedule peer %d: looking at %d active pieces", p.id, len l));
 	for(; l != nil; l = tl l) {
 		pc := hd l;
-		if(!p.canschedule.get(pc.index))
+		if(!p.canschedule.get(pc.index)) {
+if(dflag) say(sprint("schedule peer %d: cannot schedule on active piece %d, want %d, canschedule %d", p.id, pc.index, p.lwant.get(pc.index) != 0, p.canschedule.get(pc.index) != 0));
 			continue;
+		}
 		if(dflag) say(sprint("schedule peer %d: co-scheduling on active piece %d", p.id, pc.index));
 		nblocks = schedulepiece(p, pc, nblocks);
 		if(nblocks <= 0)
@@ -1381,13 +1366,8 @@ choke(p: ref Peer)
 	peersend(p, ref Msg.Choke);
 	p.state |= btp->LocalChoking;
 	putevent(ref Peerevent.State (p.id, Slocal|Schoking));
+	p.lastchoke = daytime->now();
 
-	if(p.rreqs.q.length > 0) {
-		now := daytime->now();
-		for(f := p.rreqs.q.first; f != nil; f = f.next)
-			f.e.flushed = now;
-		p.orreqs.concat(p.rreqs);
-	}
 	p.rreqs = p.rreqs.new();
 }
 
@@ -1422,7 +1402,7 @@ interesting(p: ref Peer)
 {
 	if(p.localinterested() && p.lwant.have == 0)
 		uninterested(p);
-	else if(!p.localinterested() && p.canschedule.have > 0)
+	else if(!p.localinterested() && p.lwant.have > 0)
 		interested(p);
 }
 
@@ -1527,20 +1507,12 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 	msize := mm.packedsize();
 	pick m := mm {
 	Piece =>
-		dsize := len m.d;
-		p.down.add(dsize, 1);
-		p.metadown.add(msize-dsize, 0);
-		trafficdown.add(dsize, 1);
-		trafficmetadown.add(msize-dsize, 0);
+		# handled at the case for Piece below
+		;
 	* =>
 		p.metadown.add(msize, 1);
 		trafficmetadown.add(msize, 1);
 	}
-
-	if(p.orreqs.q.length > 0)
-		p.orreqs.drophead(daytime->now()-Keepaliverecv, 2*Blockqueuemax);
-	if(p.olreqs.q.length > 0)
-		p.olreqs.drophead(daytime->now()-Keepaliverecv, 2*Blockqueuemax);
 
 	pick m := mm {
 	Keepalive =>
@@ -1548,7 +1520,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 
 	Choke =>
 		if(p.remotechoking())
-			return peerdrop(p, 1, "double choke");
+			pwarn(p, 1, "double choke");
 
 		p.state |= btp->RemoteChoking;
 		putevent(ref Peerevent.State (p.id, Sremote|Schoking));
@@ -1563,7 +1535,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 
 	Unchoke =>
 		if(!p.remotechoking())
-			return peerdrop(p, 1, "double unchoke");
+			pwarn(p, 1, "double unchoke");
 
 		p.unchokeblocks = 0;
 		p.state &= ~btp->RemoteChoking;
@@ -1571,8 +1543,8 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 		schedule(p);
 
 	Interested =>
-		if(0 && p.remoteinterested())
-			return peerdrop(p, 1, "double interested");
+		if(p.remoteinterested())
+			pwarn(p, 1, "double interested");
 
 		p.state |= btp->RemoteInterested;
 		putevent(ref Peerevent.State (p.id, Sremote|Sinterested));
@@ -1583,7 +1555,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 
 	Notinterested =>
 		if(!p.remoteinterested())
-			return peerdrop(p, 1, "double uninterested");
+			pwarn(p, 1, "double uninterested");
 
 		p.state &= ~btp->RemoteInterested;
 		putevent(ref Peerevent.State (p.id, Sremote|Suninterested));
@@ -1594,7 +1566,6 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 	Have =>
 		if(m.index >= state.t.piececount)
 			return peerdrop(p, 1, sprint("'have' for invalid piece %d", m.index));
-
 		if(p.rhave.get(m.index))
 			return peerdrop(p, 1, sprint("already had piece %d (has %d/%d)", m.index, p.rhave.have, p.rhave.n));
 
@@ -1643,12 +1614,19 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 		if(blocksize(m.index, m.begin) != len m.d)
 			return peerdrop(p, 1, sprint("bad size %d for piece %d, begin %d", len m.d, m.index, m.begin));
 
-		key := Req.rkey(m.index, m.begin);
+		key := Req.rkey(m.index, m.begin, len m.d);
 		if(p.lreqs.delkey(key) == nil) {
-			if(p.olreqs.delkey(key) == nil)
-				return peerdrop(p, 1, sprint("unrequested block, piece %d, begin %d", m.index, m.begin));
+			p.metadown.add(msize, 0);
+			trafficmetadown.add(msize, 0);
 			return;
 		}
+
+		dsize := len m.d;
+		p.down.add(dsize, 1);
+		p.metadown.add(msize-dsize, 0);
+		trafficdown.add(dsize, 1);
+		trafficmetadown.add(msize-dsize, 0);
+
 		pc := state.active.find(m.index);
 		if(pc == nil)
 			return peerdrop(p, 0, sprint("block for non-active and unfinished piece %d", m.index));
@@ -1696,34 +1674,29 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 		schedule(p);
 
 	Request =>
-		rr := ref Req (m.index, m.begin, m.length, 0);
+		rr := ref Req (m.index, m.begin, m.length);
 		if(m.begin != 0 && (m.begin & ((16*1024)-1)))
-			return peerdrop(p, 0, "bad begin, "+rr.text());
+			return peerdrop(p, 1, "bad begin, "+rr.text());
 		if(m.length != 16*1024 && m.length != 32*1024 && (big m.index*big state.t.piecelen+big m.begin+big m.length) != state.t.length)
-			return peerdrop(p, 0, "bad length, "+rr.text());
+			return peerdrop(p, 1, "bad length, "+rr.text());
 		if(p.rhave.get(m.index))
 			return peerdrop(p, 1, "requested piece it already claimed to have");
 		if(p.rreqs.q.length >= Blockqueuemax)
 			return peerdrop(p, 0, sprint("scheduled one too many block, already has %d scheduled", p.rreqs.q.length));
+		if(!p.remoteinterested())
+			return peerdrop(p, 1, "remote sent request while not interested in us");
 
-		p.rreqs.add(rr);
-		if(!p.localchoking() && p.remoteinterested())
+		if(p.localchoking()) {
+			if(p.lastchoke < daytime->now()-Keepaliverecv)
+				return peerdrop(p, 1, sprint("remote sent request even though last choke was long ago (now %d, lastchoke %d)", daytime->now(), p.lastchoke));
+		} else {
+			p.rreqs.add(rr);
 			readrreq(p);
+		}
 
 	Cancel =>
-		rr := ref Req (m.index, m.begin, m.length, 0);
-		if(!p.rreqs.del(rr) && !p.orreqs.del(rr)) {
-			err := sprint("cancelled unrequested block %s, nrreqs %d, norreqs %d", rr.text(), p.rreqs.q.length, p.orreqs.q.length);
-			say("rreqs/orreqs dump for error: "+err);
-			say("rreqs:");
-			for(f := p.rreqs.q.first; f != nil; f = f.next)
-				say("\t"+f.e.text());
-			say("orreqs:");
-			for(f = p.orreqs.q.first; f != nil; f = f.next)
-				say("\t"+f.e.text());
-			say("end");
-			return peerdrop(p, 1, err);
-		}
+		rr := ref Req (m.index, m.begin, m.length);
+		p.rreqs.del(rr);
 
 	* =>
 		raise "missing case";
@@ -1843,7 +1816,7 @@ if(dflag) say("<-delaytokenc");
 		delaytoken = 1;
 		if(stopped)
 			return;
-		p := peerbox.takeflushdelay();
+		p := peerbox.peekflushdelay();
 		if(p != nil)
 			peergive(p);
 		if(peerbox.haveflushdelay()) {
@@ -1953,12 +1926,12 @@ if(dflag) say("<-diskwrittenc");
 			raise sprint("data written for inactive piece %d", piece);
 
 		# mark written blocks as such
-		first := begin/Blocksize; 
-		end := (begin+length+Blocksize-1)/Blocksize;
-		while(first < end) {
-			if(!pc.have.get(first))
-				raise "written block we don't have";
-			pc.written.set(first++);
+		end := begin+length;
+		for(off := begin; off < end; off += Blocksize) {
+			block := off/Blocksize;
+			if(!pc.have.get(block))
+				raise "written block we don't have?";
+			pc.written.set(block);
 		}
 
 		if(!pc.written.isfull())
@@ -2054,7 +2027,7 @@ if(dflag) say("<-diskwrittenc");
 			}
 			if(!stopped) {
 				ratio := ratio();
-				if(ratio >= 1.1 && ratio >= maxratio) {
+				if(maxratio >= 1.1 && ratio >= maxratio) {
 					say(sprint("stopping due to max ratio achieved (%.2f)", ratio));
 					return stop();
 				}
@@ -2080,6 +2053,7 @@ if(dflag) say(sprint("<-wantmsgc, peer %d", p.id));
 			if(!p.metamsgs.empty()) {
 				p.datamsgs = p.datamsgs.new();
 				peergive(p);
+				# note: p.wantmsg=1 and there are only meta messages, so peer will not be put into peerbox again
 			} else {
 				hangup(p.fd);
 				p.outmsgc <-= nil;
@@ -2617,20 +2591,15 @@ warn(1, "droppable fail");
 	return peers[len peers-1];
 }
 
-Peerbox.takeflushnow(b: self ref Peerbox): list of ref Peer
+Peerbox.listflushnow(b: self ref Peerbox): list of ref Peer
 {
-	l := tablist(b.fnow);
-	b.fnow = b.fnow.new(5, nil);
-	return l;
+	return tablist(b.fnow);
 }
 
-Peerbox.takeflushdelay(b: self ref Peerbox): ref Peer
+Peerbox.peekflushdelay(b: self ref Peerbox): ref Peer
 {
-	if(!b.haveflushdelay())
-		return nil;
-	p := b.fdelayq.take();
-	if(p != nil)
-		b.fdelay.del(p.id);
+	if(b.haveflushdelay())
+		p := b.fdelayq.first.e;
 	return p;
 }
 
@@ -2659,6 +2628,16 @@ Peerbox.addflushdelay(b: self ref Peerbox, p: ref Peer)
 Peerbox.haveflushdelay(b: self ref Peerbox): int
 {
 	return b.fdelayq.length > 0;
+}
+
+Peerbox.delflush(b: self ref Peerbox, p: ref Peer)
+{
+	b.fnow.del(p.id);
+	l := b.fdelay.find(p.id);
+	if(l != nil) {
+		b.fdelay.del(p.id);
+		b.fdelayq.unlink(l);
+	}
 }
 
 
@@ -2799,9 +2778,14 @@ hangup(fd: ref Sys->FD)
 
 warn(put: int, s: string)
 {
-	sys->fprint(sys->fildes(2), "%s\n", s);
+	sys->fprint(sys->fildes(2), "%-11d %s\n", sys->millisec(), s);
 	if(put)
 		putprogress(ref Progress.Error (s));
+}
+
+pwarn(p: ref Peer, put: int, s: string)
+{
+	warn(put, sprint("peer %d: %s", p.id, s));
 }
 
 warnstop(s: string)

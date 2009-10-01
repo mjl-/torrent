@@ -159,11 +159,10 @@ Bittorrentpeer: module
 	Req: adt {
 		piece,
 		begin,
-		length,
-		flushed:	int;
+		length:	int;
 
 		key:	fn(r: self ref Req): big;
-		rkey:	fn(piece, begin: int): big;
+		rkey:	fn(piece, begin, length: int): big;
 		eq:	fn(r1, r2: ref Req): int;
 		text:	fn(rr: self ref Req): string;
 	};
@@ -178,8 +177,6 @@ Bittorrentpeer: module
 		del:		fn(rr: self ref Reqs, r: ref Req): int;
 		delkey:		fn(rr: self ref Reqs, key: big): ref Req;
 		takefirst:	fn(rr: self ref Reqs): ref Req;
-		drophead:	fn(rr: self ref Reqs, time, max: int);
-		concat:		fn(rr: self ref Reqs, r: ref Reqs);
 	};
 
 	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con 1<<iota;	# Peer.state
@@ -207,10 +204,9 @@ Bittorrentpeer: module
 		metaup,
 		metadown: 	ref Traffic;
 		lreqs,				# we want from remote
-		olreqs,				# we wanted from remote, but we cancelled or remote flushed by choke
-		rreqs,				# remote wants from us
-		orreqs:		ref Reqs;	# remote wanted from us, but remote cancelled or we flushed by choke
-		lastunchoke:	int;
+		rreqs:		ref Reqs;	# remote wants from us
+		lastunchoke,
+		lastchoke:	int;
 		unchokeblocks:	int;
 		dialed:		int;  # whether we initiated connection
 		chunk:		ref Chunk;  # unwritten part of piece

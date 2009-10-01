@@ -45,17 +45,30 @@ init(nil: ref Draw->Context, args: list of string)
 		'n' =>
 			n := int (hd args)[1:];
 			b = Bits.new(n);
+		'm' =>
+			err: string;
+			(b, err) = Bits.mk(b.n, b.d);
+			if(err != nil)
+				fail("bits.mk: "+err);
+		'o' =>
+			b = b.clone();
 		's' =>
 			n := int (hd args)[1:];
 			b.set(n);
+		'S' =>
+			b.setall();
 		'g' =>
 			n := int (hd args)[1:];
 			sys->print("get: %d\n", b.get(n));
-		'u' =>
+		'c' =>
 			n := int (hd args)[1:];
 			b.clear(n);
+		'C' =>
+			b.clearall();
 		'i' =>
 			b.invert();
+		't' =>
+			sys->print("dump:\n%s", b.text());
 		}
 }
 

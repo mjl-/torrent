@@ -25,8 +25,10 @@ nbits(b: byte): int
 
 clearhigh(b: ref Bits)
 {
+	if((b.n&7) == 0)
+		return;
 	n := b.n&7;
-	b.d[(b.n-1)>>3] &= byte ~((1<<n)-1);
+	b.d[(b.n-1)>>3] &= ~(~(byte 0)>>n);
 }
 
 bytebit(i: int): byte
@@ -38,13 +40,6 @@ bytebit(i: int): byte
 Bits.new(n: int): ref Bits
 {
 	return ref Bits(array[(n+8-1)>>3] of {* => byte 0}, n, 0);
-}
-
-newones(n: int): ref Bits
-{
-	b := ref Bits(array[(n+8-1)>>3] of {* => byte ~0}, n, 0);
-	clearhigh(b);
-	return b;
 }
 
 Bits.mk(n: int, d: array of byte): (ref Bits, string)

@@ -41,6 +41,7 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## wm/torrent: 
 
+- is there a race in reading Qpeers?  e.g. that a an old read is happening after a seek 0 for restarting?  e.g. due to a slow kill?  i've seen an error about a bad line from Qpeers...
 - make config options settable.  just put the value in a tk entry, and write+read the new value on return.
 - available bar is not smoothly/correctly filled.  probably best to only show non-seeders in it.
 - figure out how to fill the panel with the bars (and thus bars themselves) in x direction
@@ -49,36 +50,29 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 - update grids without redrawing completely?
 - make torrent/peer send events on removal of bad peers?  and remove them from our list.  or at least reserve the peerevent message for it.
 - clear stale entries from badpeers list.
-- limit the history in torrentlog & peerlog.
+- limit the history in torrentlog & peerlog.  and scroll them automatically when last line is in view?
 - could add buttons to peers grid, to disconnect peers.
 - availbar seems to pieces with overlap, on the edges of the piece
 
 ## torrent/peer
 
-- do we have delays in traffic?
-- find cause of hangs.  one emu proc takes lots of cpu, wm and programs (wm/torrent, wm/sh, etc) are responsive.  it seems anything with i/o is stuck, e.g. running a new program from the shell doesn't go anywhere, no progress.
-- should we use Req.length for its key?
-
+- when scheduling blocks that have been requested before, limit number of pending requests.  currently most end-game traffic is consumed by duplicate blocks.
+- take meta transfer rate in account for determining which peers to unchoke.
+- after some time of not getting any data from a peer that we are interested in and has us unchoked and we have requests outstanding to, send the requests again.  the original requests have probably gone lost in a choke message race.  if the remote doesn't want to talk to us, he should've choked us.
+- resurrect Peerevent.Tracker.
+- implement changing the bandwidth
+- when reading data from local disk for a peer, see if we have to (can) read the entire piece?  not just one block.  probably better to just pipeline short reads (the size of the request), then the kernel can read-ahead or coalesce the reads if thinks that's useful.  will also help if remote is reading random pieces.
+- we seem to send a lot of choke/unchoke messages, can probably do with fewer
 - the choking algorithm for uploading should use ip pools too
 - for rounds while downloading, shouldn't we ignore seeders when choosing peers to unchoke?
 - when requesting blocks from active pieces, take known goodness of peer into account.  known bad peers should not be used.  unknown peers should only be tried if we haven't been making progress.  good peers can be tried immediately.  right now we're treating all peers as good.
-- determine "race conditions" (sort of).  e.g. we send requests, we receive remote choke & unchoke, we receive a response to our piece.  this means remote first sent choke & unchoke, then received our requests, to which it responded.  this means we have to keep track of sent requests followed by received responses for some time.
 - stopping & starting does not fix up all the state.
 
 - once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.
-- resurrect Peerevent.Tracker.
-- when becoming a seed, drop seeders and aim for half the normal max peers
 
 - write manual page
-- implement Newpeers more efficiently
-- when reading data from local disk for a peer, see if we have to (can) read the entire piece?  not just one block.
 
-- verify hash in separate prog?
-- do not block on i/o in peermsg().  should perhaps do more in progs?
-- optim: use better data structures in eg Peerbox, so picking peers to unchoke etc doesn't require walking through all the peers and their pieces.
-
-- when remote becomes uninterested, we should cancel all requests (dropping the peer seems a bit too much), but obviously he doesn't want the pieces anymore, no need wasting bandwidth.
-- when remote sends Have for a piece, we should cancel all requests from that peer for that piece.  the peer might do it himself (or might have cancelled before the have (more likely actually)), but at least there is no use wasting bandwidth sending the data.
+- verify hash in separate prog?  mostly useful for the case where we have to read from disk to verify, we now do that in the main loop, then hash.
 
 - support magnet uri's? (bep 9)
 - udp tracker support (bep 15)
