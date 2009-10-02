@@ -43,29 +43,17 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 - is there a race in reading Qpeers?  e.g. that a an old read is happening after a seek 0 for restarting?  e.g. due to a slow kill?  i've seen an error about a bad line from Qpeers...
 - make config options settable.  just put the value in a tk entry, and write+read the new value on return.
-- available bar is not smoothly/correctly filled.  probably best to only show non-seeders in it.
-- figure out how to fill the panel with the bars (and thus bars themselves) in x direction
-- catch resizes and recreate the bars with new width.
+- available bar is not smoothly/correctly filled.  probably best to only show non-seeders in it.  availbar seems to pieces with overlap, on the edges of the piece.  figure out how to fill the panel with the bars (and thus bars themselves) in x direction.  catch resizes and recreate the bars with new width.
 - merge the state & info grids, so they have same widths?
 - update grids without redrawing completely?
 - make torrent/peer send events on removal of bad peers?  and remove them from our list.  or at least reserve the peerevent message for it.
 - clear stale entries from badpeers list.
-- limit the history in torrentlog & peerlog.  and scroll them automatically when last line is in view?
-- could add buttons to peers grid, to disconnect peers.
-- availbar seems to pieces with overlap, on the edges of the piece
 
 ## torrent/peer
 
-- when scheduling blocks that have been requested before, limit number of pending requests.  currently most end-game traffic is consumed by duplicate blocks.
-- take meta transfer rate in account for determining which peers to unchoke.
-- after some time of not getting any data from a peer that we are interested in and has us unchoked and we have requests outstanding to, send the requests again.  the original requests have probably gone lost in a choke message race.  if the remote doesn't want to talk to us, he should've choked us.
-- resurrect Peerevent.Tracker.
-- implement changing the bandwidth
 - when reading data from local disk for a peer, see if we have to (can) read the entire piece?  not just one block.  probably better to just pipeline short reads (the size of the request), then the kernel can read-ahead or coalesce the reads if thinks that's useful.  will also help if remote is reading random pieces.
 - we seem to send a lot of choke/unchoke messages, can probably do with fewer
 - the choking algorithm for uploading should use ip pools too
-- for rounds while downloading, shouldn't we ignore seeders when choosing peers to unchoke?
-- when requesting blocks from active pieces, take known goodness of peer into account.  known bad peers should not be used.  unknown peers should only be tried if we haven't been making progress.  good peers can be tried immediately.  right now we're treating all peers as good.
 - stopping & starting does not fix up all the state.
 
 - once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.

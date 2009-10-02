@@ -277,15 +277,15 @@ Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, di
 	return ref Peer (
 		peergen++,
 		np, fd, extensions, peerid, hex(peerid),
-		Gunknown, 0, 0,
+		Gunknown, 0,
 		outmsgc, Queue[ref Bittorrent->Msg].new(), Queue[ref Bittorrent->Msg].new(),
 		Bits.new(npieces), Bits.new(npieces), Bits.new(npieces),
 		RemoteChoking|LocalChoking,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
 		Reqs.new(), Reqs.new(),
-		0, now, 0, dialed, Chunk.new(), writec, readc,
-		now, now, now);
+		0, now, 0, 0, now, 0, now, 0, dialed, Chunk.new(), writec, readc,
+		now);
 }
 
 Peer.remotechoking(p: self ref Peer): int

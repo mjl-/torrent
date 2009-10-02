@@ -427,7 +427,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 			s := hd l;
 			t := l2a(str->unquoted(s));
 			checkwords("progress", s, t, progresswords);
-			tkcmd(".v.t.t insert end '"+s+"\n");
+			insert(".v.t.t", s);
 			redraw = progressword(t) || redraw;
 		}
 		if(redraw) {
@@ -446,7 +446,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 			s := hd l;
 			t := l2a(str->unquoted(s));
 			checkwords("peerevents", s, t, peerwords);
-			tkcmd(".v.l.t insert end '"+s+"\n");
+			insert(".v.l.t", s);
 			redraw = peerword(t) || redraw;
 		}
 		if(redraw) {
@@ -455,6 +455,20 @@ init(ctxt: ref Draw->Context, args: list of string)
 		}
 		tkcmd("update");
 	}
+}
+
+insert(w: string, s: string)
+{
+	nlines := int str->splitstrl(tkcmd(w+" index end"), ".").t0;
+	if(nlines > 4*1024)
+		tkcmd(w+" delete 1.0 2.0");
+	y := tkcmd(w+" yview");
+	t := sys->tokenize(y, " \t").t1;
+	if(str->prefix("!", y) || len t != 2)
+		warn("bad yview: "+y);
+	tkcmd(w+" insert end '"+s+"\n");
+	if(int hd tl t >= 1)
+		tkcmd(w+" see end");
 }
 
 setstate()
@@ -469,7 +483,7 @@ setstate()
 	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces, %d hash fails", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n, s.hashfails)),
 	l2("total",		sprint("%5s   up, %5s   down, ratio: %s ", sizefmt(s.up), sizefmt(s.down), ratio(s.up, s.down))),
 	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
-	l2("metarate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.metaupr), sizefmt(big s.metadownr))),
+	l2("meta rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.metaupr), sizefmt(big s.metadownr))),
 	l2("connected",		sprint("%d peer%s (%d seed%s), %d dialed", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ndialed)),
 	l2("known",		sprint("%d peer%s (%d seed%s), %d in dial queue, %d listeners, %d faulty", s.knownpeers, trails(s.knownpeers), s.knownseeds, trails(s.knownseeds), s.unusedpeers, s.listeners, s.nfaultypeers)),
 	l2("tracker",		trackerstr()),
@@ -636,7 +650,7 @@ progressword(t: array of string): int
 		return 1;
 	"error" =>
 		lasterror = t[1];
-		tkcmd(".v.e.t insert end '"+t[1]+"\n");
+		insert(".v.e.t", t[1]);
 		return 1;
 	"hashfail" =>
 		lasterror = sprint("piece %d failed hashcheck", getint(t[1]));

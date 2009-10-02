@@ -117,10 +117,10 @@ trackerkey:	string;
 ip4mask,
 ip6mask:	IPaddr;
 maxratio	:= 0.0;
-maxdownrate	:= big -1;
-maxuprate	:= big -1;
-maxdowntotal	:= big -1;
+maxuprate	:= -1;
+maxdownrate	:= -1;
 maxuptotal	:= big -1;
+maxdowntotal	:= big -1;
 
 
 # tracker
@@ -134,6 +134,7 @@ newpeerc:	chan of (string, string, int, ref Newpeer, ref Sys->FD, array of byte,
 
 # upload/download rate limiter
 upc, downc:	chan of (int, chan of int);
+maxupc, maxdownc:	chan of int;
 
 # peer interaction
 peerinmsgc:	chan of (ref Peer, ref Msg, chan of int, chan of ref Queue[ref Chunkwrite], string);
@@ -253,13 +254,11 @@ init(nil: ref Draw->Context, args: list of string)
 		'd' =>	bt->dflag = btp->dflag = dflag++;
 		'n' =>	nofix = 1;
 		'm' =>	maxratio = real arg->earg();
-			if(maxratio <= 1.1)
-				fail("invalid maximum ratio");
-		'r' =>	maxuprate = sizeparse(arg->earg());
-			if(maxuprate < big (10*1024))
+		'r' =>	maxuprate = int sizeparse(arg->earg());
+			if(maxuprate < 0)
 				fail("invalid maximum uprate rate");
-		'R' =>	maxdownrate = sizeparse(arg->earg());
-			if(maxdownrate < big 0)
+		'R' =>	maxdownrate = int sizeparse(arg->earg());
+			if(maxdownrate < 0)
 				fail("invalid maximum downrate rate");
 		's' =>	stopped = 1;
 		't' =>	maxuptotal = sizeparse(arg->earg());
@@ -390,8 +389,8 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn roundticker();
 	spawn swarmticker();
 	spawn track();
-	spawn limiter(upc, int maxuprate);
-	spawn limiter(downc, int maxdownrate);
+	spawn limiter(upc, maxupc = chan[1] of int, maxuprate);
+	spawn limiter(downc, maxdownc = chan[1] of int, maxdownrate);
 	spawn diskwriter(diskwritec);
 
 	navc := chan of ref Navop;
@@ -439,8 +438,8 @@ dostyx(mm: ref Tmsg)
 				s += sprint("listenport %d\n", listenport);
 				s += sprint("localpeerid %s\n", localpeeridhex);
 				s += sprint("maxratio %.2f\n", maxratio);
-				s += sprint("maxuprate %bd\n", maxuprate);
-				s += sprint("maxdownrate %bd\n", maxdownrate);
+				s += sprint("maxuprate %d\n", maxuprate);
+				s += sprint("maxdownrate %d\n", maxdownrate);
 				s += sprint("maxuptotal %bd\n", maxuptotal);
 				s += sprint("maxdowntotal %bd\n", maxdowntotal);
 				s += sprint("debugpeer %d\n", dflag);
@@ -647,7 +646,7 @@ replyerror(m: ref Tmsg, s: string)
 }
 
 commands0 := array[] of {"stop", "start", "track"};
-commands1 := array[] of {"disconnect", "debug", "maxratio", "maxdowntotal", "maxuptotal", "maxdownrate", "maxuprate"};
+commands1 := array[] of {"disconnect", "debug", "maxratio", "maxuptotal", "maxdowntotal", "maxuprate", "maxdownrate"};
 ctl(m: ref Tmsg.Write)
 {
 	s := string m.data;
@@ -701,20 +700,25 @@ ctl(m: ref Tmsg.Write)
 		(v, rem) := str->toreal(hd l, 10);
 		if(rem != nil || v <= 1.1)
 			return replyerror(m, styxservers->Ebadarg);
-		maxratio = v; # xxx might want to immediately rethink whether we want to stop
+		maxratio = v;
 		putprogress(ref Progress.Newctl);
-	"maxdowntotal" or
+		ratio := ratio();
+		if(maxratio > 0.0 && ratio >= maxratio) {
+			say(sprint("stopping due to max ratio reached (%.2f)", ratio));
+			stop();
+		}
 	"maxuptotal" or
-	"maxdownrate" or
-	"maxuprate" =>
+	"maxdowntotal" or
+	"maxuprate" or
+	"maxdownrate" =>
 		v := sizeparse(hd l);
 		if(v < big 0)
 			return replyerror(m, styxservers->Ebadarg);
 		case cmd {
-		"maxdowntotal" =>	maxdowntotal = v;
 		"maxuptotal" =>		maxuptotal = v;
-		"maxdownrate" =>	maxdownrate = v;
-		"maxuprate" =>		maxuprate = v;
+		"maxdowntotal" =>	maxdowntotal = v;
+		"maxuprate" =>		maxupc <-= maxuprate = int v;
+		"maxdownrate" =>	maxdownc <-= maxdownrate = int v;
 		}
 		putprogress(ref Progress.Newctl);
 	* =>
@@ -843,7 +847,7 @@ peerline(p: ref Peer): string
 	s += sprint("%d %q %q %s", p.id, p.np.addr, p.peeridhex, direction);
 	s += sprint(" %q", statestr(p.localchoking(), p.localinterested()));
 	s += sprint(" %q", statestr(p.remotechoking(), p.remoteinterested()));
-	s += sprint(" %d", p.lastunchoke);
+	s += sprint(" %d", p.lastunchokemsg);
 	s += sprint(" %d", p.rhave.have);
 	s += sprint(" up %bd %d", p.up.total(), p.up.rate());
 	s += sprint(" down %bd %d", p.down.total(), p.down.rate());
@@ -1125,6 +1129,8 @@ cancel(pc: ref Piece, block: int)
 			continue;
 
 		p := peerbox.findid(pcp.peerid);
+		if(p == nil)
+			continue;
 		peersend(p, ref Msg.Cancel(pc.index, begin, length));
 		pcp.requested.clear(block);
 
@@ -1202,6 +1208,7 @@ requestblock(p: ref Peer, pc: ref Piece, pcp: ref Piecepeer, block: int)
 if(dflag) say(sprint("schedule peer %d: %s", p.id, lr.text()));
 	p.lreqs.add(lr);
 	peersend(p, ref Msg.Request(lr.piece, lr.begin, lr.length));
+	p.lastrequestmsg = daytime->now();
 	p.lastpiece = pc.index;
 }
 
@@ -1345,6 +1352,9 @@ if(dflag) say(sprint("schedule peer %d: using new random piece %d", p.id, i));
 	}
 
 	# finally, try active pieces.  xxx could sort this by least peers busy, or most done
+	nblocks = min(nblocks, max(0, 2+p.down.rate()/(32*1024)-p.lreqs.q.length));
+	if(nblocks <= 0)
+		return;
 	l = tablist(state.active);
 if(dflag) say(sprint("schedule peer %d: looking at %d active pieces", p.id, len l));
 	for(; l != nil; l = tl l) {
@@ -1366,7 +1376,7 @@ choke(p: ref Peer)
 	peersend(p, ref Msg.Choke);
 	p.state |= btp->LocalChoking;
 	putevent(ref Peerevent.State (p.id, Slocal|Schoking));
-	p.lastchoke = daytime->now();
+	p.lastchokemsg = daytime->now();
 
 	p.rreqs = p.rreqs.new();
 }
@@ -1376,7 +1386,7 @@ unchoke(p: ref Peer)
 	peersend(p, ref Msg.Unchoke);
 	p.state &= ~btp->LocalChoking;
 	putevent(ref Peerevent.State (p.id, Slocal|Sunchoking));
-	p.lastunchoke = daytime->now();
+	p.lastunchokemsg = daytime->now();
 }
 
 interested(p: ref Peer)
@@ -1469,9 +1479,13 @@ chokingdownload(gen: int)
 	i := 0;
 	luckyindex := -1;
 	for(l := peerbox.peers; l != nil; l = tl l) {
-		if(peerbox.lucky != nil && hd l == peerbox.lucky)
+		p := hd l;
+		if(peerbox.lucky != nil && p == peerbox.lucky)
 			luckyindex = i;
-		allpeers[i++] = ref (hd l, (hd l).down.rate());
+		downrate := p.down.rate();
+		if(downrate > 0)
+			downrate = max(1, downrate-p.metadown.rate());
+		allpeers[i++] = ref (p, downrate);
 	}
 	inssort(allpeers, peerratecmp);
 
@@ -1493,9 +1507,9 @@ chokingdownload(gen: int)
 		(p, nil) := *allpeers[i];
 		if(p == nil)
 			say(sprint("bad allpeers, len allpeers %d, len peers %d, i %d, unchokeend %d, luckyindex %d, nintr %d", len allpeers, len peerbox.peers, i, unchokeend, luckyindex, nintr));
-		if(i < unchokeend && p.localchoking())
+		if((i < unchokeend || p.isdone()) && p.localchoking())
 			unchoke(p);
-		else if(i >= unchokeend && !p.localchoking())
+		else if(i >= unchokeend && !p.localchoking() && !p.isdone())
 			choke(p);
 	}
 }
@@ -1548,10 +1562,6 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 
 		p.state |= btp->RemoteInterested;
 		putevent(ref Peerevent.State (p.id, Sremote|Sinterested));
-
-		if(!p.localchoking() && peerbox.nactive() >= Unchokedmax && !done()) {
-			# xxx choke slowest peer that is not the optimistic unchoke
-		}
 
 	Notinterested =>
 		if(!p.remoteinterested())
@@ -1621,6 +1631,8 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 			return;
 		}
 
+		p.ctime = daytime->now();
+
 		dsize := len m.d;
 		p.down.add(dsize, 1);
 		p.metadown.add(msize-dsize, 0);
@@ -1667,8 +1679,15 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 			if(!p.chunk.tryadd(pc, m.begin, m.d))
 				raise "tryadd";
 		}
-		if(p.chunk.isfull() || (pc.have.isfull() && !p.chunk.isempty()))
+		if(p.chunk.isfull())
 			needwrites.append(p.chunk.flush());
+		if(pc.have.isfull()) {
+			for(l = tablist(pc.peers); l != nil; l = tl l) {
+				pp := peerbox.findid((hd l).peerid);
+				if(pp != nil && !pp.chunk.isempty())
+					mainwrites.append(pp.chunk.flush());
+			}
+		}
 		needwritec <-= needwrites;
 		sent.i = 1;
 		schedule(p);
@@ -1687,8 +1706,8 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 			return peerdrop(p, 1, "remote sent request while not interested in us");
 
 		if(p.localchoking()) {
-			if(p.lastchoke < daytime->now()-Keepaliverecv)
-				return peerdrop(p, 1, sprint("remote sent request even though last choke was long ago (now %d, lastchoke %d)", daytime->now(), p.lastchoke));
+			if(p.lastchokemsg < daytime->now()-Keepaliverecv)
+				return peerdrop(p, 1, sprint("remote sent request even though last choke was long ago (now %d, lastchokemsg %d)", daytime->now(), p.lastchokemsg));
 		} else {
 			p.rreqs.add(rr);
 			readrreq(p);
@@ -1754,10 +1773,15 @@ if(dflag) say("<-swarmc");
 		recvtime := now-Keepaliverecv;
 		for(l := peerbox.peers; l != nil; l = tl l) {
 			p := hd l;
-			if(p.lastrecv < recvtime)
+			if(p.lastrecv < recvtime) {
 				peerdrop(p, 0, "idle connection");
-			else if(p.lastsend < sendtime)
+			} else if(p.lreqs.q.length > 0 && p.localinterested() && !p.remotechoking() && p.lastpiecemsg-p.lastrequestmsg > Keepaliverecv) {
+				# assume requests got lost in choke message race, resend them.
+				for(f := p.lreqs.q.first; f != nil; f = f.next)
+					peersend(p, ref Msg.Request (f.e.piece, f.e.begin, f.e.length));
+			} else if(p.lastsend < sendtime) {
 				peersend(p, ref Msg.Keepalive);
+			}
 		}
 		diallisten();
 
@@ -1797,7 +1821,8 @@ if(dflag) say("<-trackc");
 			return warn(0, sprint("tracker error: %s", err));
 
 		newpeers.addmany(tr.peers);
-		# xxx putevent(ref Peerevent.Tracker (np.addr));
+		for(i := 0; i < len tr.peers; i++)
+			putevent(ref Peerevent.Tracker (sprint("%s!%d", tr.peers[i].ip, tr.peers[i].port)));
 		diallisten();
 
 	<-dialtokenc =>
@@ -1896,7 +1921,7 @@ if(dflag) say("<-peerinmsgc");
 			if(p == nil)
 				{}
 			else if(err != nil)
-				peerdrop(p, 0, "read from peer: "+err);
+				peerdrop(p, 0, err);
 			else if(msg == nil)
 				peerdrop(p, 0, "eof");
 			return;
@@ -2027,8 +2052,8 @@ if(dflag) say("<-diskwrittenc");
 			}
 			if(!stopped) {
 				ratio := ratio();
-				if(maxratio >= 1.1 && ratio >= maxratio) {
-					say(sprint("stopping due to max ratio achieved (%.2f)", ratio));
+				if(maxratio > 0.0 && ratio >= maxratio) {
+					say(sprint("stopping due to max ratio reached (%.2f)", ratio));
 					return stop();
 				}
 			}
@@ -2074,6 +2099,7 @@ if(dflag) say("<-diskreadc");
 		if(peerbox.findid(p.id) == nil)
 			return;
 		peersend(p, ref Msg.Piece(piece, begin, buf));
+		p.lastpiecemsg = daytime->now();
 	}
 }
 
@@ -2085,6 +2111,14 @@ warn(1, sprint("main pid %d", pid()));
 	for(;;) {
 		main0();
 		peerflush();
+		if(maxdowntotal >= big 0 && maxdowntotal >= trafficdown.total()) {
+			say(sprint("stopping due to maxdowntotal reached (max %bd, reached %bd)", maxdowntotal, trafficdown.total()));
+			stop();
+		}
+		if(maxuptotal >= big 0 && maxuptotal >= trafficup.total()) {
+			say(sprint("stopping due to maxuptotal reached (max %bd, reached %bd)", maxuptotal, trafficup.total()));
+			stop();
+		}
 	}
 }
 
@@ -2170,12 +2204,15 @@ listener(aconn: Sys->Connection)
 
 
 # we are allowed to pass `max' bytes per second.
-limiter(c: chan of (int, chan of int), max: int)
+limiter(c: chan of (int, chan of int), maxc: chan of int, max: int)
 {
 	maxallow := min(max, Netiounit);
 
-	for(;;) {
-		(want, respc) := <-c;
+	for(;;) alt {
+	max = <-maxc  =>
+		maxallow = min(max, Netiounit);
+		
+	(want, respc) := <-c =>
 		if(max <= 0) {
 			# no rate limiting, let traffic pass
 			respc <-= want;
@@ -2503,7 +2540,7 @@ Peerbox.oldestunchoke(b: self ref Peerbox, ipmasked: string): ref Peer
 	oldest: ref Peer;
 	for(l := b.peers; l != nil; l = tl l) {
 		p := hd l;
-		if(maskip(p.np.ip) == ipmasked && (oldest == nil || p.lastunchoke < oldest.lastunchoke))
+		if(maskip(p.np.ip) == ipmasked && (oldest == nil || p.lastunchokemsg < oldest.lastunchokemsg))
 			oldest = p;
 	}
 	return oldest;
@@ -2537,7 +2574,7 @@ Peerbox.longestunchoked(b: self ref Peerbox): ref Peer
 	for(l := b.peers; l != nil; l = tl l) {
 		p := hd l;
 		if(!p.localchoking() && p.remoteinterested()) {
-			if(oldest == nil || p.lastunchoke < oldest.lastunchoke)
+			if(oldest == nil || p.lastunchokemsg < oldest.lastunchokemsg)
 				oldest = p;
 		}
 	}

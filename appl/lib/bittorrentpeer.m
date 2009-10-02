@@ -189,7 +189,6 @@ Bittorrentpeer: module
 		peerid:		array of byte;
 		peeridhex:	string;
 		good:		int;
-		lastpiece:	int;
 		wantmsg:	int;
 		outmsgc:	chan of ref Queue[ref Bittorrent->Msg];
 		metamsgs,
@@ -205,16 +204,19 @@ Bittorrentpeer: module
 		metadown: 	ref Traffic;
 		lreqs,				# we want from remote
 		rreqs:		ref Reqs;	# remote wants from us
-		lastunchoke,
-		lastchoke:	int;
+		lastunchokemsg,
+		lastchokemsg,
+		lastpiecemsg,
+		lastrequestmsg,
+		lastsend,
+		lastrecv:	int;
+		lastpiece:	int;
 		unchokeblocks:	int;
 		dialed:		int;  # whether we initiated connection
 		chunk:		ref Chunk;  # unwritten part of piece
 		writec:		chan of ref Chunkwrite;
 		readc:		chan of ref Req;
 		ctime:		int;
-		lastsend,
-		lastrecv:	int;
 
 		new:			fn(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
 		remotechoking:		fn(p: self ref Peer): int;
