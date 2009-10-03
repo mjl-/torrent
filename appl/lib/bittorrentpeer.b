@@ -871,7 +871,7 @@ Progress.text(pp: self ref Progress): string
 	Stopped or
 	Newctl =>	;
 	Piece =>	s += sprint(" %d %d %d", p.p, p.have, p.total);
-	Block =>	s += sprint(" %d %d %d %d", p.p, p.b, p.have, p.total);
+	Block =>	s += sprint(" %d %d %d %d %d", p.peerid, p.p, p.b, p.have, p.total);
 	Pieces =>	for(l := p.l; l != nil; l = tl l)
 				s += " "+string hd l;
 	Blocks =>	s += sprint(" %d", p.p);

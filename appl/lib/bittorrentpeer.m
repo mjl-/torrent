@@ -122,11 +122,11 @@ Bittorrentpeer: module
 		markdone:	fn(n: self ref Newpeers);
 		peers:		fn(n: self ref Newpeers): ref List[ref Newpeer];
 		faulty:		fn(n: self ref Newpeers): ref List[ref Newpeer];
-		npeers:		fn(n: self ref Newpeers): int;
-		nfaulty:	fn(n: self ref Newpeers): int;
-		ndialers:	fn(n: self ref Newpeers): int;
-		nready:		fn(n: self ref Newpeers): int;
-		nseeding:	fn(n: self ref Newpeers): int;
+		npeers,
+		nfaulty,
+		ndialers,
+		nready,
+		nseeding,
 		nlisteners:	fn(n: self ref Newpeers): int;
 		cantake:	fn(n: self ref Newpeers): int;
 		take:		fn(n: self ref Newpeers): ref Newpeer;
@@ -261,6 +261,7 @@ Bittorrentpeer: module
 			have,
 			total:	int;
 		Block =>
+			peerid,
 			p,
 			b,
 			have,

@@ -41,13 +41,9 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## wm/torrent: 
 
-- is there a race in reading Qpeers?  e.g. that a an old read is happening after a seek 0 for restarting?  e.g. due to a slow kill?  i've seen an error about a bad line from Qpeers...
-- make config options settable.  just put the value in a tk entry, and write+read the new value on return.
+- is there a race in reading Qpeers?  e.g. that an old read is happening after a seek 0 for restarting?  e.g. due to a slow kill?  i've seen an error about a bad line from Qpeers...
 - available bar is not smoothly/correctly filled.  probably best to only show non-seeders in it.  availbar seems to pieces with overlap, on the edges of the piece.  figure out how to fill the panel with the bars (and thus bars themselves) in x direction.  catch resizes and recreate the bars with new width.
-- merge the state & info grids, so they have same widths?
-- update grids without redrawing completely?
-- make torrent/peer send events on removal of bad peers?  and remove them from our list.  or at least reserve the peerevent message for it.
-- clear stale entries from badpeers list.
+- make torrent/peer send events on removal of bad peers?  and remove them from our list.  or at least reserve the peerevent message for it.  clear stale entries from badpeers list.
 
 ## torrent/peer
 

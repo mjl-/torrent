@@ -67,6 +67,8 @@ State: adt {
 	npeers,
 	nseeds,
 	ndialed,
+	ninteresting,
+	ngiving,
 	knownpeers,
 	knownseeds,
 	unusedpeers,
@@ -186,8 +188,7 @@ tkcmds0 := array[] of {
 "button .ctl.torrentlog -text torrentlog -command {send cmd torrentlog}",
 "button .ctl.log -text peerlog -command {send cmd log}",
 "button .ctl.errors -text errors -command {send cmd errors}",
-"button .ctl.x -text x -command {send cmd x}",
-"pack .ctl.info .ctl.files .ctl.peers .ctl.badpeers .ctl.torrentlog .ctl.log .ctl.errors .ctl.x -fill x -side left",
+"pack .ctl.info .ctl.files .ctl.peers .ctl.badpeers .ctl.torrentlog .ctl.log .ctl.errors -fill x -side left",
 "pack .ctl -fill x",
 
 "frame .v", # view
@@ -226,7 +227,40 @@ tkcmds0 := array[] of {
 "frame .v.m.c.m.c.g",
 "pack .v.m.c.m.c.g -anchor w",
 "frame .v.m.c.m.i -borderwidth 5",	# info
-"pack .v.m.c.m.p .v.m.c.m.s .v.m.c.m.c .v.m.c.m.i -anchor w",
+
+"frame .v.m.c.m.ctl -borderwidth 5",	# ctl
+"label .v.m.c.m.ctl.lmaxratio -text 'max ratio   ",  # 12 wide
+"entry .v.m.c.m.ctl.maxratio -width 10w",
+"bind .v.m.c.m.ctl.maxratio <Key-\n> {send cmd set maxratio}",
+
+"label .v.m.c.m.ctl.lmaxrate -text 'max rate",
+"frame .v.m.c.m.ctl.fmr",
+"label .v.m.c.m.ctl.fmr.lup -text 'up",
+"entry .v.m.c.m.ctl.fmr.up -width 10w",
+"bind .v.m.c.m.ctl.fmr.up <Key-\n> {send cmd set maxuprate}",
+"label .v.m.c.m.ctl.fmr.ldown -text 'down",
+"entry .v.m.c.m.ctl.fmr.down -width 10w",
+"bind .v.m.c.m.ctl.fmr.down <Key-\n> {send cmd set maxdownrate}",
+"pack .v.m.c.m.ctl.fmr.lup .v.m.c.m.ctl.fmr.up .v.m.c.m.ctl.fmr.ldown .v.m.c.m.ctl.fmr.down -side left",
+
+"label .v.m.c.m.ctl.lmaxtotal -text 'max total",
+"frame .v.m.c.m.ctl.fmt",
+"label .v.m.c.m.ctl.fmt.lup -text 'up",
+"entry .v.m.c.m.ctl.fmt.up -width 10w",
+"bind .v.m.c.m.ctl.fmt.up <Key-\n> {send cmd set maxuptotal}",
+"label .v.m.c.m.ctl.fmt.ldown -text 'down",
+"entry .v.m.c.m.ctl.fmt.down -width 10w",
+"bind .v.m.c.m.ctl.fmt.down <Key-\n> {send cmd set maxdowntotal}",
+"pack .v.m.c.m.ctl.fmt.lup .v.m.c.m.ctl.fmt.up .v.m.c.m.ctl.fmt.ldown .v.m.c.m.ctl.fmt.down -side left",
+
+"grid .v.m.c.m.ctl.lmaxratio -row 0 -column 0 -sticky w -padx 10",
+"grid .v.m.c.m.ctl.maxratio -row 0 -column 1 -sticky w -padx 10",
+"grid .v.m.c.m.ctl.lmaxrate -row 1 -column 0 -sticky w -padx 10",
+"grid .v.m.c.m.ctl.fmr -row 1 -column 1 -sticky w -padx 10",
+"grid .v.m.c.m.ctl.lmaxtotal -row 2 -column 0 -sticky w -padx 10",
+"grid .v.m.c.m.ctl.fmt -row 2 -column 1 -sticky w -padx 10",
+
+"pack .v.m.c.m.p .v.m.c.m.s .v.m.c.m.c .v.m.c.m.i .v.m.c.m.ctl -anchor w",
 "pack .v.m.c -anchor w -fill both -expand 1",
 
 "frame .v.f -bg blue",	# files
@@ -344,7 +378,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	prog = ref Prog (0, Bits.new(info.npieces), 0);
 
 	infogrid := list of {
-	l2("infohash",	info.infohash),
+	l2(sprint("%-12s", "infohash"),	info.infohash),
 	l2("tracker",	info.tracker),
 	l2("pieces",	sprint("%d, %s each", info.npieces, sizefmt(big info.piecelen))),
 	l2("length",	sprint("%s (%bd bytes)", sizefmt(info.length), info.length)),
@@ -478,13 +512,13 @@ setstate()
 
 	s := state;
 	stategrid := list of {
-	l2("stopped",		string s.stopped),
+	l2(sprint("%-12s", "stopped"),		string s.stopped),
 	l2("eta",		etastr(s.eta)),
 	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces, %d hash fails", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n, s.hashfails)),
 	l2("total",		sprint("%5s   up, %5s   down, ratio: %s ", sizefmt(s.up), sizefmt(s.down), ratio(s.up, s.down))),
 	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
 	l2("meta rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.metaupr), sizefmt(big s.metadownr))),
-	l2("connected",		sprint("%d peer%s (%d seed%s), %d dialed", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ndialed)),
+	l2("connected",		sprint("%d peer%s (%d seed%s), %d dialed;  %d interesting, %d giving", s.npeers, trails(s.npeers), s.nseeds, trails(s.nseeds), s.ndialed, s.ninteresting, s.ngiving)),
 	l2("known",		sprint("%d peer%s (%d seed%s), %d in dial queue, %d listeners, %d faulty", s.knownpeers, trails(s.knownpeers), s.knownseeds, trails(s.knownseeds), s.unusedpeers, s.listeners, s.nfaultypeers)),
 	l2("tracker",		trackerstr()),
 	l2("last error",	lasterror),
@@ -510,11 +544,28 @@ setconfig()
 	c := config;
 	configgrid := list of {
 	l2("listen port",	string c.listenport),
-	l2("local peerid",	c.localpeerid),
-	l2("max",		sprint("ratio %s,  rate: up %s, down %s,  total: up %s, down %s", ratiofmt(c.maxratio), infsizefmt(c.maxuprate), infsizefmt(c.maxdownrate), infsizefmt(c.maxuptotal), infsizefmt(c.maxdowntotal))),
+	l2(sprint("%-12s", "local peerid"),	c.localpeerid),
 	l2("debug",		sprint("peer %d, lib %d, peerlib %d", c.debugpeer, c.debuglib, c.debugpeerlib)),
 	};
 	tkgrid(".v.m.c.m.c.g", configgrid);
+
+	focus := tkcmd("focus");
+	pairs := array[] of {
+		("maxratio",	ratiofmt(c.maxratio)),
+		("fmr.up",	infsizefmt(c.maxuprate)),
+		("fmr.down",	infsizefmt(c.maxdownrate)),
+		("fmt.up",	infsizefmt(c.maxuptotal)),
+		("fmt.down",	infsizefmt(c.maxdowntotal)),
+	};
+	for(i := 0; i < len pairs; i++) {
+		(w, v) := pairs[i];
+		w = ".v.m.c.m.ctl."+w;
+		if(w == focus)
+			continue;
+		tkcmd(w+" delete 0 end");
+		tkcmd(w+" insert 0 '"+v);
+	}
+
 	setscrollregion(".v.m.c", ".v.m.c.m");
 }
 
@@ -593,7 +644,7 @@ progresswords := array[] of {
 ("stopped",	0),
 ("newctl",	0),
 ("piece",	3),
-("block",	4),
+("block",	5),
 ("pieces",	-1),
 ("blocks",	-2),
 ("filedone",	3),
@@ -824,6 +875,13 @@ reader(f: string, c: chan of list of string)
 	}
 }
 
+writectl(s: string)
+{
+	err := writefile(mtpt+"/ctl", 0, array of byte s);
+	tkcmd(".v.m.c.m.s.ctl.error configure -text '"+err);
+	tkcmd("update");
+}
+
 cmd(s: string)
 {
 	l := sys->tokenize(s, " ").t1;
@@ -832,13 +890,8 @@ cmd(s: string)
 	op := hd l;
 	l = tl l;
 	case op {
-	"x" =>
-		setscrollregion(".v.m.c", ".v.m.c.m");
-
 	"ctl" =>
-		err := writefile(mtpt+"/ctl", 0, array of byte str->quoted(l));
-		tkcmd(".v.m.c.m.s.ctl.error configure -text '"+err);
-		tkcmd("update");
+		writectl(str->quoted(l));
 
 	"main" or
 	"files" or
@@ -876,9 +929,33 @@ cmd(s: string)
 			peerspid = -1;
 		}
 		tkcmd("update");
+
+	"set" =>
+		case hd l {
+		"maxratio" =>
+			v := tkcmd(".v.m.c.m.ctl.maxratio get");
+			if(v == "∞")
+				v = "0.0";
+			writectl(hd l+" "+v);
+		"maxuprate" =>		writectl(hd l+" "+getsize(".v.m.c.m.ctl.fmr.up"));
+		"maxdownrate" =>	writectl(hd l+" "+getsize(".v.m.c.m.ctl.fmr.down"));
+		"maxuptotal" =>		writectl(hd l+" "+getsize(".v.m.c.m.ctl.fmt.up"));
+		"maxdowntotal" =>	writectl(hd l+" "+getsize(".v.m.c.m.ctl.fmt.down"));
+		* =>
+			say("bad 'set'");
+		}
+
 	* =>
 		say(sprint("unknown command %#q", op));
 	}
+}
+
+getsize(w: string): string
+{
+	v := tkcmd(w+" get");
+	if(v == "∞")
+		v = "-1";
+	return v;
 }
 
 getindex(a: array of string, s: string): int
@@ -979,6 +1056,8 @@ readstate(): ref State
 		"peers" =>	s.npeers = getint(v);
 		"seeds" =>	s.nseeds = getint(v);
 		"dialed" =>	s.ndialed = getint(v);
+		"interesting" =>	s.ninteresting = getint(v);
+		"giving" =>	s.ngiving = getint(v);
 		"knownpeers" =>	s.knownpeers = getint(v);
 		"knownseeds" =>	s.knownseeds = getint(v);
 		"unusedpeers" =>	s.unusedpeers = getint(v);
@@ -1046,11 +1125,11 @@ setfiles()
 	if(view != Vfiles)
 		return;
 
-	filegrid := l3("path", "size", "progress")::nil;
+	filegrid := l3("size", "progress", "path")::nil;
 	for(i := 0; i < len info.files; i++) {
 		f := info.files[i];
 		p := f.pieces;
-		filegrid = l3(f.path, sizefmt(f.length), sprint("%3d%% %d/%d", 100*p.have/p.n, p.have, p.n))::filegrid;
+		filegrid = l3(sprint("%s", sizefmt(f.length)), sprint("%3d%% %d/%d", 100*p.have/p.n, p.have, p.n), f.path)::filegrid;
 	}
 	tkgrid(".v.f.c.g", rev(filegrid));
 	setscrollregion(".v.f.c", ".v.f.c.g");
@@ -1061,7 +1140,7 @@ setpeers()
 	if(view != Vpeers)
 		return;
 
-	peergrid := l9("id", "dir", "rate", "total", "pieces", " l/r", "reqs", "peerid", "addr")::nil;
+	peergrid := l9("id ", "dir", sprint("%11s", "rate"), sprint("%11s", "total"), "pieces", " l/r", " reqs", "peerid", "addr")::nil;
 	for(l := peerall(); l != nil; l = tl l) {
 		p := hd l;
 		dir := "in";
@@ -1070,9 +1149,9 @@ setpeers()
 		pr := sprint("%3d%%", 100*p.pieces.have/info.npieces);
 		lr := sprint("%s/%s", statefmt(p.state>>Local), statefmt(p.state>>Remote));
 		c := p.counts;
-		reqstr := sprint("%d/%d", c.lreqs, c.rreqs);
-		rate := sprint("%s/%s", sizefmt(big c.upr), sizefmt(big c.downr));
-		total := sprint("%s/%s", sizefmt(c.up), sizefmt(c.down));
+		reqstr := sprint("%2d/%2d", c.lreqs, c.rreqs);
+		rate := sprint("%5s/%5s", sizefmt(big c.upr), sizefmt(big c.downr));
+		total := sprint("%5s/%5s", sizefmt(c.up), sizefmt(c.down));
 		peergrid = l9(string p.id, dir, rate, total, pr, lr, reqstr, p.peerid, p.addr)::peergrid;
 	}
 	tkgrid(".v.p.c.g", rev(peergrid));
@@ -1104,7 +1183,7 @@ setbadpeers()
 	if(view != Vbadpeers)
 		return;
 
-	badpeergrid := l4("ip", "until", "peerid", "reason")::nil;
+	badpeergrid := l4(sprint("%15s", "ip"), sprint("%7s", "until"), "peerid", "reason")::nil;
 	now := daytime->now();
 	for(l := badpeers; l != nil; l = tl l) {
 		b := hd l;
