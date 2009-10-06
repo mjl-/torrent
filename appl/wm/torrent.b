@@ -163,7 +163,7 @@ statec: chan of ref State;
 
 ctlfd: ref Sys->FD;
 newconfigc: chan of int;
-configc: chan of ref Config;
+configc: chan of (ref Config, int);
 
 prog: ref Prog;
 peersfd: ref Sys->FD;
@@ -219,7 +219,7 @@ tkcmds0 := array[] of {
 "button .v.m.c.m.s.ctl.dpeer -text peer -command {send cmd ctl debug peer}",
 "button .v.m.c.m.s.ctl.dlib -text lib -command {send cmd ctl debug lib}",
 "button .v.m.c.m.s.ctl.dpeerlib -text peerlib -command {send cmd ctl debug peerlib}",
-"label .v.m.c.m.s.ctl.error",
+"label .v.m.c.m.s.ctl.error -bg red",
 "pack .v.m.c.m.s.ctl.start .v.m.c.m.s.ctl.stop .v.m.c.m.s.ctl.track .v.m.c.m.s.ctl.error .v.m.c.m.s.ctl.ldebug .v.m.c.m.s.ctl.dpeer .v.m.c.m.s.ctl.dlib .v.m.c.m.s.ctl.dpeerlib -side left -anchor w",
 "frame .v.m.c.m.s.g",
 "pack .v.m.c.m.s.ctl .v.m.c.m.s.g -anchor w",
@@ -231,26 +231,31 @@ tkcmds0 := array[] of {
 "frame .v.m.c.m.ctl -borderwidth 5",	# ctl
 "label .v.m.c.m.ctl.lmaxratio -text 'max ratio   ",  # 12 wide
 "entry .v.m.c.m.ctl.maxratio -width 10w",
-"bind .v.m.c.m.ctl.maxratio <Key-\n> {send cmd set maxratio}",
+"bind .v.m.c.m.ctl.maxratio <FocusIn> +{send cmd clearerror}",
+"bind .v.m.c.m.ctl.maxratio <Key-\n> +{send cmd set maxratio}",
 
 "label .v.m.c.m.ctl.lmaxrate -text 'max rate",
 "frame .v.m.c.m.ctl.fmr",
 "label .v.m.c.m.ctl.fmr.lup -text 'up",
 "entry .v.m.c.m.ctl.fmr.up -width 10w",
-"bind .v.m.c.m.ctl.fmr.up <Key-\n> {send cmd set maxuprate}",
+"bind .v.m.c.m.ctl.fmr.up <FocusIn> +{send cmd clearerror}",
+"bind .v.m.c.m.ctl.fmr.up <Key-\n> +{send cmd set maxuprate}",
 "label .v.m.c.m.ctl.fmr.ldown -text 'down",
 "entry .v.m.c.m.ctl.fmr.down -width 10w",
-"bind .v.m.c.m.ctl.fmr.down <Key-\n> {send cmd set maxdownrate}",
+"bind .v.m.c.m.ctl.fmr.down <FocusIn> +{send cmd clearerror}",
+"bind .v.m.c.m.ctl.fmr.down <Key-\n> +{send cmd set maxdownrate}",
 "pack .v.m.c.m.ctl.fmr.lup .v.m.c.m.ctl.fmr.up .v.m.c.m.ctl.fmr.ldown .v.m.c.m.ctl.fmr.down -side left",
 
 "label .v.m.c.m.ctl.lmaxtotal -text 'max total",
 "frame .v.m.c.m.ctl.fmt",
 "label .v.m.c.m.ctl.fmt.lup -text 'up",
 "entry .v.m.c.m.ctl.fmt.up -width 10w",
-"bind .v.m.c.m.ctl.fmt.up <Key-\n> {send cmd set maxuptotal}",
+"bind .v.m.c.m.ctl.fmt.up <FocusIn> +{send cmd clearerror}",
+"bind .v.m.c.m.ctl.fmt.up <Key-\n> +{send cmd set maxuptotal}",
 "label .v.m.c.m.ctl.fmt.ldown -text 'down",
 "entry .v.m.c.m.ctl.fmt.down -width 10w",
-"bind .v.m.c.m.ctl.fmt.down <Key-\n> {send cmd set maxdowntotal}",
+"bind .v.m.c.m.ctl.fmt.down <FocusIn> +{send cmd clearerror}",
+"bind .v.m.c.m.ctl.fmt.down <Key-\n> +{send cmd set maxdowntotal}",
 "pack .v.m.c.m.ctl.fmt.lup .v.m.c.m.ctl.fmt.up .v.m.c.m.ctl.fmt.ldown .v.m.c.m.ctl.fmt.down -side left",
 
 "grid .v.m.c.m.ctl.lmaxratio -row 0 -column 0 -sticky w -padx 10",
@@ -402,7 +407,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	barinit(availbar);
 
 	config = readconfig();
-	setconfig();
+	setconfig(1);
 
 	state = readstate();
 	statec = chan of ref State;
@@ -410,7 +415,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	statepid = <-pidc;
 
 	newconfigc = chan of int;
-	configc = chan of ref Config;
+	configc = chan of (ref Config, int);
 	spawn readconfigs();
 
 	peersc = chan of list of (int, Peercount);
@@ -470,9 +475,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 		}
 		tkcmd("update");
 
-	cfg := <-configc =>
+	(cfg, focustoo) := <-configc =>
 		config = cfg;
-		setconfig();
+		setconfig(focustoo);
 
 	l := <-peereventsc =>
 		redraw := 0;
@@ -536,7 +541,7 @@ ratio(a, b: big): string
 	return sprint("%.2f", real a/real b);
 }
 
-setconfig()
+setconfig(focustoo: int)
 {
 	if(view != Vmain)
 		return;
@@ -560,7 +565,7 @@ setconfig()
 	for(i := 0; i < len pairs; i++) {
 		(w, v) := pairs[i];
 		w = ".v.m.c.m.ctl."+w;
-		if(w == focus)
+		if(!focustoo && w == focus)
 			continue;
 		tkcmd(w+" delete 0 end");
 		tkcmd(w+" insert 0 '"+v);
@@ -623,8 +628,8 @@ readstates(pidc: chan of int)
 readconfigs()
 {
 	for(;;) {
-		<-newconfigc;
-		configc <-= readconfig();
+		focustoo := <-newconfigc;
+		configc <-= (readconfig(), focustoo);
 	}
 }
 
@@ -672,7 +677,7 @@ progressword(t: array of string): int
 		return 1;
 	"newctl" =>
 		alt {
-		newconfigc <-= 1 =>	;
+		newconfigc <-= 0 =>	;
 		* =>	;
 		}
 	"piece" =>
@@ -944,6 +949,14 @@ cmd(s: string)
 		* =>
 			say("bad 'set'");
 		}
+		alt {
+		newconfigc <-= 1 =>	;
+		* =>	;
+		}
+
+	"clearerror" =>
+		tkcmd(".v.m.c.m.s.ctl.error configure -text '");
+		tkcmd("update");
 
 	* =>
 		say(sprint("unknown command %#q", op));

@@ -267,7 +267,7 @@ Queue[T].unlink(q: self ref Queue, l: ref Link[T]): T
 }
 
 
-Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer
+Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int, maskip: string): ref Peer
 {
 	outmsgc := chan of ref Queue[ref Bittorrent->Msg];
 	msgseq := 0;
@@ -276,7 +276,7 @@ Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, di
 	now := daytime->now();
 	return ref Peer (
 		peergen++,
-		np, fd, extensions, peerid, hex(peerid),
+		np, maskip, fd, extensions, peerid, hex(peerid),
 		Gunknown, 0,
 		outmsgc, Queue[ref Bittorrent->Msg].new(), Queue[ref Bittorrent->Msg].new(),
 		Bits.new(npieces), Bits.new(npieces), Bits.new(npieces),
@@ -284,7 +284,7 @@ Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, di
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
 		Reqs.new(), Reqs.new(),
-		0, now, 0, 0, now, 0, now, 0, dialed, Chunk.new(), writec, readc,
+		0, now, 0, 0, now, now, 0, 0, dialed, Chunk.new(), writec, readc,
 		now);
 }
 
@@ -392,14 +392,6 @@ newpeerready(n: ref Newpeers, np: ref Newpeer): int
 	return (np.state & (Pdialing|Pconnected|Plistener)) == 0 && np.time <= daytime->now();
 }
 
-newpeersfind(n: ref Newpeers, np: ref Newpeer): int
-{
-	for(i := 0; i < n.np; i++)
-		if(n.p[i].ip == np.ip)
-			return i;
-	return -1;
-}
-
 newpeersfindip(n: ref Newpeers, ip: string): list of ref Newpeer
 {
 	l: list of ref Newpeer;
@@ -411,7 +403,7 @@ newpeersfindip(n: ref Newpeers, ip: string): list of ref Newpeer
 
 newpeersadd(n: ref Newpeers, np: ref Newpeer)
 {
-	if(n.np+1 >= len n.p)
+	if(n.np >= len n.p)
 		n.p = grow(n.p, 8);
 	n.p[n.np++] = np;
 }
@@ -465,6 +457,7 @@ newpeerstrunc(n: ref Newpeers)
 	np := array[nn] of ref Newpeer;
 	np[:] = n.p[:nn];
 	n.p = np;
+	n.np = nn;
 }
 
 newpeertext(np: ref Newpeer): string
@@ -762,99 +755,6 @@ Traffic.total(t: self ref Traffic): big
 Traffic.text(t: self ref Traffic): string
 {
 	return sprint("Traffic(rate %s, total %s)", sizefmt(big t.rate()), sizefmt(t.total()));
-}
-
-
-Pool[T].new(mode: int): ref Pool[T]
-{
-	return ref Pool[T](array[0] of T, array[0] of T, 0, mode);
-}
-
-Pool[T].clear(p: self ref Pool)
-{
-	*p = *Pool[T].new(p.mode);
-}
-
-Pool[T].fill(p: self ref Pool)
-{
-	case p.mode {
-	PoolRandom =>
-		return;
-	PoolRotateRandom or
-	PoolInorder =>
-		n := len p.pool-len p.active;
-
-		newa := array[len p.pool] of T;
-		newa[:] = p.active;
-		start := len p.active;
-		for(i := 0; i < n; i++) {
-			newa[start+i] = p.pool[p.poolnext];
-			p.poolnext = (p.poolnext+1) % len p.pool;
-		}
-		p.active = newa;
-
-		if(p.mode == PoolRotateRandom)
-			randomize(p.active[len p.active-n:]);
-	* =>
-		raise sprint("bad mode for pool: %d", p.mode);
-	}
-}
-
-Pool[T].take(p: self ref Pool): T
-{
-	if(len p.active == 0)
-		return nil;
-
-	case p.mode {
-	PoolRandom =>
-		return p.pool[rand->rand(len p.pool)];
-	PoolRotateRandom or
-	PoolInorder =>
-		e := p.active[0];
-		p.active = p.active[1:];
-		return e;
-	* =>
-		raise sprint("bad mode for pool: %d", p.mode);
-	}
-}
-
-Pool[T].pooladd(p: self ref Pool, e: T)
-{
-	newp := array[len p.pool+1] of T;
-	newp[:] = p.pool;
-	newp[len p.pool] = e;
-}
-
-Pool[T].pooladdunique(p: self ref Pool, e: T)
-{
-	if(!p.poolhas(e))
-		p.pooladd(e);
-}
-
-Pool[T].poolhas(p: self ref Pool, e: T): int
-{
-	for(i := 0; i < len p.pool; i++)
-		if(p.pool[i] == e)
-			return 1;
-	return 0;
-}
-
-Pool[T].pooldel(p: self ref Pool, e: T)
-{
-	i := 0;
-	while(i < len p.pool) {
-		if(p.pool[i] == e) {
-			p.pool[i:] = p.pool[i+1:];
-			p.pool = p.pool[:len p.pool-1];
-		} else
-			i++;
-	}
-}
-
-poolmodes := array[] of {"random", "rotaterandom", "inorder"};
-Pool[T].text(p: self ref Pool): string
-{
-	return sprint("Pool(npool %d, nactive %d, poolnext %d, mode %s)", len p.pool, len p.active, p.poolnext, poolmodes[p.mode]);
 }
 
 

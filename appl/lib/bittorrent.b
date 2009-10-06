@@ -833,6 +833,7 @@ iox(tx: ref Torrentx, buf: array of byte, n: int, off: big, read: int): string
 		if(size < off+big n)
 			want = int (size-off);
 		nn: int;
+say(sprint("iox, read %d, n %d, off %bd", read, want, off));
 		if(read)
 			nn = preadn(f.fd, buf, want, off);
 		else

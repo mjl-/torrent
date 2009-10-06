@@ -55,27 +55,7 @@ Bittorrentpeer: module
 		unlink:		fn(q: self ref Queue, l: ref Link[T]): T;
 	};
 
-
-	PoolRandom, PoolRotateRandom, PoolInorder: con iota;  # Pool.mode
-	Pool: adt[T] {
-		active:	array of T;
-		pool:	array of T;
-		poolnext:	int;
-		mode:	int;
-
-		new:	fn(mode: int): ref Pool[T];
-		clear:	fn(p: self ref Pool);
-		fill:	fn(p: self ref Pool);
-		take:	fn(p: self ref Pool): T;
-		pooladd:	fn(p: self ref Pool, e: T);
-		pooladdunique:	fn(p: self ref Pool, e: T);
-		poolhas:	fn(p: self ref Pool, e: T): int;
-		pooldel:	fn(p: self ref Pool, e: T);
-		text:	fn(p: self ref Pool): string;
-	};
-
-
-	TrafficHistsecs:	con 10;
+	TrafficHistsecs:	con 20;
 	TrafficHistslotmsec2:	con 8;  # msecs for slot: 2**TrafficHistslotmsec2
 	Traffic: adt {
 		last:	big;  # last time, in msec
@@ -184,6 +164,7 @@ Bittorrentpeer: module
 	Peer: adt {
 		id:		int;
 		np:		ref Newpeer;
+		maskip:		string;
 		fd:		ref Sys->FD;
 		extensions,
 		peerid:		array of byte;
@@ -218,7 +199,7 @@ Bittorrentpeer: module
 		readc:		chan of ref Req;
 		ctime:		int;
 
-		new:			fn(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int): ref Peer;
+		new:			fn(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int, maskip: string): ref Peer;
 		remotechoking:		fn(p: self ref Peer): int;
 		remoteinterested:	fn(p: self ref Peer): int;
 		localchoking:		fn(p: self ref Peer): int;
