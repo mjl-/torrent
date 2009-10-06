@@ -272,11 +272,12 @@ Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, di
 	outmsgc := chan of ref Queue[ref Bittorrent->Msg];
 	msgseq := 0;
 	writec := chan[4] of ref Chunkwrite;
-	readc := chan[2] of (big, list of ref Read, int);
+	Ntokens: con 4;
+	readc := chan[Ntokens] of (big, list of ref Read, int);
 	now := daytime->now();
 	reads := Queue[ref Read].new();
-	reads.append(ref Read.Token);
-	reads.append(ref Read.Token);
+	for(i := 0; i < Ntokens; i++)
+		reads.append(ref Read.Token);
 	return ref Peer (
 		peergen++,
 		np, maskip, fd, extensions, peerid, hex(peerid),

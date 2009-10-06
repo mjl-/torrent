@@ -1035,6 +1035,17 @@ account(p: ref Peer, q: ref Queue[ref Msg])
 		account0(p, f.e);
 }
 
+getpiece(q: ref Queue[ref Read]): ref Read.Piece
+{
+	for(f := q.first; f != nil; f = f.next)
+		pick e := f.e {
+		Piece =>
+			q.unlink(f);
+			return e;
+		}
+	return nil;
+}
+
 peergive(p: ref Peer)
 {
 	peerbox.delflush(p);
@@ -1049,19 +1060,16 @@ peergive(p: ref Peer)
 		p.lastsend = daytime->now();
 	} else {
 		readrreqs(p);
-		if(p.reads.empty() || tagof p.reads.first.e != tagof Read.Piece)
+		rr := getpiece(p.reads);
+		if(rr == nil)
 			return;
-		pick r := p.reads.take() {
-		Piece =>
-			mq := Queue[ref Msg].new();
-			mq.append(r.m);
-			account(p, mq);
-			p.outmsgc <-= mq;
-			p.wantmsg = 0;
-			p.lastpiecemsg = p.lastsend = daytime->now();
-		* =>
-			raise "not a piece?";
-		}
+		mq := Queue[ref Msg].new();
+		mq.append(rr.m);
+		account(p, mq);
+		p.outmsgc <-= mq;
+		p.wantmsg = 0;
+		p.lastpiecemsg = p.lastsend = daytime->now();
+		readrreqs(p);
 	}
 }
 
@@ -1093,12 +1101,11 @@ clearrreq(p: ref Peer)
 
 roundup(v, up: int): int
 {
-	return (v+up-1) & (up-1);
+	return (v+up-1) & ~(up-1);
 }
 
 readrreqs(p: ref Peer)
 {
-
 	while(p.rreqs.q.length != 0 && p.reads.length != 0 && tagof p.reads.first.e == tagof Read.Token)
 		readrreq(p);
 }
@@ -2135,8 +2142,6 @@ if(dflag > 2) say(sprint("<-wantmsgc, peer %d", p.id));
 			return;
 		}
 		peergive(p);
-		if(!p.localchoking() && p.remoteinterested())
-			readrreqs(p);
 
 	(p, reads, err) := <-diskreadc =>
 if(dflag > 2) say("<-diskreadc");
