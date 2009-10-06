@@ -47,9 +47,8 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- when reading data from local disk for a peer, see if we have to (can) read the entire piece?  not just one block.  probably better to just pipeline short reads (the size of the request), then the kernel can read-ahead or coalesce the reads if thinks that's useful.  will also help if remote is reading random pieces.
+- over time we drop to zero connections, it seems we are not redialing known peers.
 - stopping & starting does not fix up all the state.
-- verify hash in separate prog?  mostly useful for the case where we have to read from disk to verify, we now do that in the main loop, then hash.
 - udp tracker support (bep 15)
 - multiple tracker support (bep 12)
 - support magnet uri's? (bep 9)

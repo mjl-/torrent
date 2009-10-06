@@ -272,19 +272,23 @@ Peer.new(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, di
 	outmsgc := chan of ref Queue[ref Bittorrent->Msg];
 	msgseq := 0;
 	writec := chan[4] of ref Chunkwrite;
-	readc := chan of ref Req;
+	readc := chan[2] of (big, list of ref Read, int);
 	now := daytime->now();
+	reads := Queue[ref Read].new();
+	reads.append(ref Read.Token);
+	reads.append(ref Read.Token);
 	return ref Peer (
 		peergen++,
 		np, maskip, fd, extensions, peerid, hex(peerid),
 		Gunknown, 0,
-		outmsgc, Queue[ref Bittorrent->Msg].new(), Queue[ref Bittorrent->Msg].new(),
+		outmsgc, Queue[ref Bittorrent->Msg].new(),
 		Bits.new(npieces), Bits.new(npieces), Bits.new(npieces),
 		RemoteChoking|LocalChoking,
 		msgseq,
 		Traffic.new(), Traffic.new(), Traffic.new(), Traffic.new(),
 		Reqs.new(), Reqs.new(),
-		0, now, 0, 0, now, now, 0, 0, dialed, Chunk.new(), writec, readc,
+		0, now, 0, 0, now, now, 0, 0, dialed, Chunk.new(), writec,
+		readc, Bigtab[ref Read.Piece].new(7), reads,
 		now);
 }
 
@@ -338,9 +342,9 @@ Chunk.tryadd(c: self ref Chunk, piece: ref Piece, begin: int, buf: array of byte
 	if(c.piece != piece.index || c.isfull())
 		return 0;
 
-	if(begin % Diskchunksize != 0 && begin == c.begin+c.nbytes) {
+	if(begin % Diskchunksize != 0 && c.begin+c.nbytes == begin) {
 		c.bufs.append(buf);
-	} else if(c.begin % Diskchunksize != 0 && begin == c.begin-len buf) {
+	} else if(c.begin % Diskchunksize != 0 && c.begin-len buf == begin) {
 		c.bufs.prepend(buf);
 		c.begin = begin;
 	} else
@@ -357,13 +361,6 @@ Chunk.isempty(c: self ref Chunk): int
 Chunk.isfull(c: self ref Chunk): int
 {
 	return c.nbytes >= Diskchunksize || c.begin+c.nbytes == c.piecelength;
-}
-
-Chunk.overlaps(c: self ref Chunk, piece, begin, end: int): int
-{
-	bufstart := c.begin;
-	bufend := c.begin+c.nbytes;
-	return c.piece == piece && (bufstart >= begin && bufstart <= end || bufend >= begin && bufend <= end);
 }
 
 Chunk.flush(c: self ref Chunk): ref Chunkwrite

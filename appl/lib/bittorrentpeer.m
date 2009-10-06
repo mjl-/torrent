@@ -159,6 +159,16 @@ Bittorrentpeer: module
 		takefirst:	fn(rr: self ref Reqs): ref Req;
 	};
 
+	Read: adt {
+		pick {
+		Piece =>
+			cancelled:	int;
+			r:	ref Req;
+			m:	ref Bittorrent->Msg.Piece;
+		Token =>
+		}
+	};
+
 	RemoteChoking, RemoteInterested, LocalChoking, LocalInterested: con 1<<iota;	# Peer.state
 	Gfaulty, Gunknown, Ghalfgood, Ggood: con iota;	# Peer.good
 	Peer: adt {
@@ -172,8 +182,7 @@ Bittorrentpeer: module
 		good:		int;
 		wantmsg:	int;
 		outmsgc:	chan of ref Queue[ref Bittorrent->Msg];
-		metamsgs,
-		datamsgs: 	ref Queue[ref Bittorrent->Msg];
+		metamsgs:	ref Queue[ref Bittorrent->Msg];
 		rhave,					# pieces remote has
 		lwant,					# pieces remote has and we do not
 		canschedule:	ref Bitarray->Bits;	# pieces remote has, we do not, and we can schedule blocks from
@@ -196,7 +205,9 @@ Bittorrentpeer: module
 		dialed:		int;  # whether we initiated connection
 		chunk:		ref Chunk;  # unwritten part of piece
 		writec:		chan of ref Chunkwrite;
-		readc:		chan of ref Req;
+		readc:		chan of (big, list of ref Read, int);
+		reading:	ref Bigtab[ref Read.Piece]; # index by Req key, for cancelling
+		reads:		ref Queue[ref Read];
 		ctime:		int;
 
 		new:			fn(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int, maskip: string): ref Peer;
@@ -219,7 +230,6 @@ Bittorrentpeer: module
 		tryadd:		fn(c: self ref Chunk, piece: ref Piece, begin: int, buf: array of byte): int;
 		isempty:	fn(c: self ref Chunk): int;
 		isfull:		fn(c: self ref Chunk): int;
-		overlaps:	fn(c: self ref Chunk, piece, begin, end: int): int;
 		flush:		fn(c: self ref Chunk): ref Chunkwrite;
 	};
 

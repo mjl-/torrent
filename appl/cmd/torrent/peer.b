@@ -40,7 +40,7 @@ include "bittorrent.m";
 	Bee, Msg, File, Torrent, Filex, Torrentx, Track, Trackpeer: import bt;
 include "../../lib/bittorrentpeer.m";
 	btp: Bittorrentpeer;
-	State, Traffic, Piecepeer, Piece, Peer, Newpeer, Newpeers, Bigtab, Queue, Chunk, Chunkwrite, Req, Reqs, Link, List, Progress, Peerevent, Eventfid: import btp;
+	State, Traffic, Piecepeer, Piece, Peer, Newpeer, Newpeers, Bigtab, Queue, Chunk, Chunkwrite, Req, Reqs, Read, Link, List, Progress, Peerevent, Eventfid: import btp;
 	Slocal, Sremote, Schoking, Sunchoking, Sinterested, Suninterested: import btp;
 	Gfaulty, Gunknown, Ghalfgood, Ggood: import btp;
 
@@ -146,14 +146,12 @@ peererrc:	chan of (ref Peer, string);
 wantmsgc:	chan of ref Peer;
 diskwritec:	chan of ref Chunkwrite;
 diskwrittenc:	chan of (int, int, int, string);
-diskreadc:	chan of (ref Peer, int, int, array of byte, string);
+diskreadc:	chan of (ref Peer, list of ref Read, string);
 mainwrites:	ref Queue[ref Chunkwrite];
 
-# round ticker
 roundc:		chan of int;
-
-# swarm ticker
 swarmc:		chan of int;
+verifyc:	chan of (ref Piece, string);
 
 Dialinterval:	con 700;	# msec to wait between dials of peers
 Dialersmax:	con 15;		# max number of dialer procs
@@ -356,6 +354,7 @@ init(nil: ref Draw->Context, args: list of string)
 	newpeerc = chan of (string, string, int, ref Newpeer, ref Sys->FD, array of byte, array of byte, string);
 	roundc = chan of int;
 	swarmc = chan of int;
+	verifyc = chan of (ref Piece, string);
 
 	upc = chan of (int, chan of int);
 	downc = chan of (int, chan of int);
@@ -365,7 +364,7 @@ init(nil: ref Draw->Context, args: list of string)
 	wantmsgc = chan of ref Peer;
 	diskwritec = chan[4] of ref Chunkwrite;
 	diskwrittenc = chan of (int, int, int, string);
-	diskreadc = chan of (ref Peer, int, int, array of byte, string);
+	diskreadc = chan of (ref Peer, list of ref Read, string);
 
 	trafficup = Traffic.new();
 	trafficdown = Traffic.new();
@@ -959,9 +958,9 @@ peerdrop(p: ref Peer, faulty: int, err: string)
 	diallisten();
 }
 
-stopreadc(c: chan of ref Req)
+stopreadc(c: chan of (big, list of ref Read, int))
 {
-	c <-= nil;
+	c <-= (big 0, nil, 0);
 }
 
 stopwritec(c: chan of ref Chunkwrite)
@@ -999,17 +998,9 @@ diallisten()
 	}
 }
 
-peersend0(p: ref Peer, mm: ref Msg)
-{
-	pick m := mm {
-	Piece =>	p.datamsgs.append(m);
-	* =>		p.metamsgs.append(m);
-	}
-}
-
 peersend(p: ref Peer, m: ref Msg)
 {
-	peersend0(p, m);
+	p.metamsgs.append(m);
 
 	case tagof m {
 	tagof Msg.Choke or
@@ -1022,22 +1013,26 @@ peersend(p: ref Peer, m: ref Msg)
 	}
 }
 
+account0(p: ref Peer, mm: ref Msg)
+{
+	msize := mm.packedsize();
+	pick m := mm {
+	Piece =>
+		dsize := len m.d;
+		p.up.add(dsize, 1);
+		p.metaup.add(msize-dsize, 0);
+		trafficup.add(dsize, 1);
+		trafficmetaup.add(msize-dsize, 0);
+	* =>
+		p.metaup.add(msize, 1);
+		trafficmetaup.add(msize, 1);
+	}
+}
+
 account(p: ref Peer, q: ref Queue[ref Msg])
 {
-	for(f := q.first; f != nil; f = f.next) {
-		msize := f.e.packedsize();
-		pick m := f.e {
-		Piece =>
-			dsize := len m.d;
-			p.up.add(dsize, 1);
-			p.metaup.add(msize-dsize, 0);
-			trafficup.add(dsize, 1);
-			trafficmetaup.add(msize-dsize, 0);
-		* =>
-			p.metaup.add(msize, 1);
-			trafficmetaup.add(msize, 1);
-		}
-	}
+	for(f := q.first; f != nil; f = f.next)
+		account0(p, f.e);
 }
 
 peergive(p: ref Peer)
@@ -1052,15 +1047,22 @@ peergive(p: ref Peer)
 		p.metamsgs = ref Queue[ref Msg];
 		p.wantmsg = 0;
 		p.lastsend = daytime->now();
-	} else if(!p.datamsgs.empty()) {
-		m := p.datamsgs.takeq();
-		account(p, m);
-		p.outmsgc <-= m;
-		p.wantmsg = 0;
-		p.lastsend = daytime->now();
+	} else {
+		readrreqs(p);
+		if(p.reads.empty() || tagof p.reads.first.e != tagof Read.Piece)
+			return;
+		pick r := p.reads.take() {
+		Piece =>
+			mq := Queue[ref Msg].new();
+			mq.append(r.m);
+			account(p, mq);
+			p.outmsgc <-= mq;
+			p.wantmsg = 0;
+			p.lastpiecemsg = p.lastsend = daytime->now();
+		* =>
+			raise "not a piece?";
+		}
 	}
-	if(p.datamsgs.length > 0)
-		peerbox.addflushnow(p);
 }
 
 blocksize(piece, begin: int): int
@@ -1075,15 +1077,54 @@ blocksize(piece, begin: int): int
 	return Blocksize;
 }
 
+clearrreq(p: ref Peer)
+{
+	p.rreqs.clear();
+	for(l := p.reading.all(); l != nil; l = tl l)
+		(hd l).cancelled = 1;
+	f := p.reads.first;
+	while(f != nil) {
+		next := f.next;
+		if(tagof f.e == tagof Read.Piece)
+			p.reads.unlink(f);
+		f = next;
+	}
+}
+
+roundup(v, up: int): int
+{
+	return (v+up-1) & (up-1);
+}
+
+readrreqs(p: ref Peer)
+{
+
+	while(p.rreqs.q.length != 0 && p.reads.length != 0 && tagof p.reads.first.e == tagof Read.Token)
+		readrreq(p);
+}
+
 readrreq(p: ref Peer)
 {
-	alt {
-	p.readc <-= p.rreqs.q.first.e =>
-		if(dflag) say("readrreq: another rreq");
-		p.rreqs.takefirst();
-	* =>
-		if(dflag) say("readrreq: diskreader busy, did get another not request");
-	}
+	token := p.reads.take();
+
+	if(dflag) say("readrreq: reading more");
+	n := max(Blocksize, min(roundup(p.up.rate(), Blocksize), 128*1024));
+	h := 0;
+	fr: ref Req;
+	reads: list of ref Read;
+	do {
+		req := p.rreqs.takefirst();
+		if(fr == nil)
+			fr = req;
+		r := ref Read.Piece (0, req, nil);
+		reads = r::reads;
+		h += req.length;
+		p.reading.add(req.key(), r);
+	} while(h < n && p.rreqs.q.length > 0 && p.rreqs.q.first.e.piece == fr.piece && p.rreqs.q.first.e.begin == fr.begin+h);
+	reads = token::reads;
+
+	off := big fr.piece*big state.t.piecelen+big fr.begin;
+	p.readc <-= (off, rev(reads), h);
 }
 
 
@@ -1373,7 +1414,6 @@ if(dflag) say(sprint("schedule peer %d: cannot schedule on active piece %d, want
 	}
 }
 
-
 choke(p: ref Peer)
 {
 	peersend(p, ref Msg.Choke);
@@ -1381,7 +1421,7 @@ choke(p: ref Peer)
 	putevent(ref Peerevent.State (p.id, Slocal|Schoking));
 	p.lastchokemsg = daytime->now();
 
-	p.rreqs = p.rreqs.new();
+	clearrreq(p);
 }
 
 unchoke(p: ref Peer)
@@ -1582,7 +1622,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 		putevent(ref Peerevent.State (p.id, Sremote|Suninterested));
 		if(!p.localchoking())
 			choke(p);
-		p.rreqs.clear();
+		clearrreq(p);
 
 	Have =>
 		if(m.index >= state.t.piececount)
@@ -1725,12 +1765,24 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 				return peerdrop(p, 1, sprint("remote sent request even though last choke was long ago (now %d, lastchokemsg %d)", daytime->now(), p.lastchokemsg));
 		} else {
 			p.rreqs.add(rr);
-			readrreq(p);
+			readrreqs(p);
 		}
 
 	Cancel =>
 		rr := ref Req (m.index, m.begin, m.length);
 		p.rreqs.del(rr);
+		r := p.reading.find(rr.key());
+		if(r != nil)
+			r.cancelled = 1;
+	Nextread:
+		for(f := p.reads.first; f != nil; f = f.next)
+			pick e := f.e {
+			Piece =>
+				if(Req.eq(rr, e.r)) {
+					p.reads.unlink(f);
+					break Nextread;
+				}
+			}
 
 	* =>
 		raise "missing case";
@@ -1983,25 +2035,22 @@ if(dflag > 2) say("<-diskwrittenc");
 		state.active.del(pc.index);
 		state.orphans.del(pc.index);
 
-		need := state.t.piecelength(pc.index)-pc.hashoff;
-		if(need > 0) {
-			# xxx should do this in separate prog?
-			buf := array[need] of byte;
-			herr := state.tx.preadx(buf, len buf, big pc.index*big state.t.piecelen+big pc.hashoff);
-			if(herr != nil)
-				return warnstop("verifying hash: "+herr);  # xxx have to correct more state, e.g. marking piece inactive again
-			pc.hash = kr->sha1(buf, len buf, nil, pc.hash);
-		}
-		wanthash := hex(state.t.hashes[pc.index]);
-		kr->sha1(nil, 0, digest := array[kr->SHA1dlen] of byte, pc.hash);
-		havehash := hex(digest);
-		if(wanthash != havehash) {
-			putprogress(ref Progress.Hashfail (pc.index));
-			say(sprint("piece %d did not check out, want %s, have %s", pc.index, wanthash, havehash));
-			nhashfails++;
+		spawn verifyhash(pc);
 
-			if(stopped)
-				return;
+	(pc, err) := <-verifyc =>
+if(dflag > 2) say("<-verifyc");
+		if(err == nil) {
+			wanthash := hex(state.t.hashes[pc.index]);
+			kr->sha1(nil, 0, digest := array[kr->SHA1dlen] of byte, pc.hash);
+			havehash := hex(digest);
+			if(wanthash != havehash) {
+				err = sprint("piece %d did not check out, want %s, have %s", pc.index, wanthash, havehash);
+				putprogress(ref Progress.Hashfail (pc.index));
+				nhashfails++;
+			}
+		}
+		if(err != nil) {
+			say(err);
 			if(len pc.peersgiven == 1) {
 				pp := peerbox.findid(hd pc.peersgiven);
 				if(pp != nil)
@@ -2027,13 +2076,8 @@ if(dflag > 2) say("<-diskwrittenc");
 		writestate();
 		say(sprint("piece %d now done", pc.index));
 
-		if(done()) {
-			warn(0, "DONE!");
+		if(done())
 			putprogress(ref Progress.Done);
-		}
-
-		if(stopped)
-			return;
 
 		if(len pc.peersgiven == 1) {
 			pp := peerbox.findid(hd pc.peersgiven);
@@ -2049,7 +2093,7 @@ if(dflag > 2) say("<-diskwrittenc");
 		for(l := peerbox.peers; l != nil; l = tl l)
 			peersend(hd l, ref Msg.Have(pc.index));
 
-		if(done()) {
+		if(!stopped && done()) {
 			trackerevent = "completed";
 			trackkick(0);
 			newpeers.markdone();
@@ -2060,11 +2104,9 @@ if(dflag > 2) say("<-diskwrittenc");
 					peerdrop(p, 0, "fellow seeder");
 				}
 			}
-			if(!stopped) {
-				ratio := ratio();
-				if(maxratio > 0.0 && ratio >= maxratio)
-					return stop(sprint("max ratio reached (%.2f)", ratio));
-			}
+			ratio := ratio();
+			if(maxratio > 0.0 && ratio >= maxratio)
+				return stop(sprint("max ratio reached (%.2f)", ratio));
 		}
 
 	curwritec <-= curmainwrite =>
@@ -2084,9 +2126,7 @@ if(dflag > 2) say(sprint("<-wantmsgc, peer %d", p.id));
 		}
 		if(peerbox.findid(p.id) == nil) {
 			if(!p.metamsgs.empty()) {
-				p.datamsgs = p.datamsgs.new();
 				peergive(p);
-				# note: p.wantmsg=1 and there are only meta messages, so peer will not be put into peerbox again
 			} else {
 				hangup(p.fd);
 				p.outmsgc <-= nil;
@@ -2095,19 +2135,28 @@ if(dflag > 2) say(sprint("<-wantmsgc, peer %d", p.id));
 			return;
 		}
 		peergive(p);
-		if(p.rreqs.q.length > 0 && !p.localchoking() && p.remoteinterested())
-			readrreq(p);
+		if(!p.localchoking() && p.remoteinterested())
+			readrreqs(p);
 
-	(p, piece, begin, buf, err) := <-diskreadc =>
+	(p, reads, err) := <-diskreadc =>
 if(dflag > 2) say("<-diskreadc");
 		if(stopped)
 			return;
 		if(err != nil)
-			return warnstop(sprint("error reading piece %d, begin %d, length %d: %s", piece, begin, len buf, err));
+			return warnstop(sprint("error reading piece: %s", err));
 		if(peerbox.findid(p.id) == nil)
 			return;
-		peersend(p, ref Msg.Piece(piece, begin, buf));
-		p.lastpiecemsg = daytime->now();
+
+		for(l := reads; l != nil; l = tl l) {
+			pick e := hd l {
+			Piece =>
+				p.reading.del(e.r.key());
+				if(e.cancelled)
+					continue;
+			}
+			p.reads.append(hd l);
+		}
+		peergive(p);
 	}
 }
 
@@ -2126,6 +2175,21 @@ warn(1, sprint("main pid %d", pid()));
 		if(maxuptotal >= big 0 && trafficup.total() >= maxuptotal)
 			stop(sprint("maxuptotal reached (max %bd, reached %bd)", maxuptotal, trafficup.total()));
 	}
+}
+
+verifyhash(pc: ref Piece)
+{
+	need := state.t.piecelength(pc.index)-pc.hashoff;
+	if(need > 0) {
+		buf := array[need] of byte;
+		herr := state.tx.preadx(buf, len buf, big pc.index*big state.t.piecelen+big pc.hashoff);
+		if(herr != nil) {
+			verifyc <-= (pc, "verifying hash: "+herr);
+			return;
+		}
+		pc.hash = kr->sha1(buf, len buf, nil, pc.hash);
+	}
+	verifyc <-= (pc, nil);
 }
 
 roundticker()
@@ -2460,12 +2524,23 @@ diskwriter(reqc: chan of ref Chunkwrite)
 diskreader(p: ref Peer)
 {
 	for(;;) {
-		rr := <-p.readc;
-		if(rr == nil)
+		(off, reads, n) := <-p.readc;
+		if(reads == nil)
 			break;
-		off := big rr.piece*big state.t.piecelen + big rr.begin;
-		err := state.tx.preadx(buf := array[rr.length] of byte, len buf, off);
-		diskreadc <-= (p, rr.piece, rr.begin, buf, err);
+		
+		err := state.tx.preadx(buf := array[n] of byte, len buf, off);
+		if(err == nil) {
+			o := 0;
+			for(l := reads; l != nil; l = tl l)
+				pick e := hd l {
+				Piece =>
+					e.m = ref Msg.Piece (e.r.piece, e.r.begin, buf[o:o+e.r.length]);
+					o += e.r.length;
+				}
+			if(o != n)
+				raise "not all data from reads used";
+		}
+		diskreadc <-= (p, reads, err);
 	}
 	say("diskreader: stopping...");
 }
