@@ -857,6 +857,7 @@ peerline(p: ref Peer): string
 	s += sprint(" %q", statestr(p.remotechoking(), p.remoteinterested()));
 	s += sprint(" %d", p.lastunchokemsg);
 	s += sprint(" %d", p.rhave.have);
+	s += sprint(" %d", p.createtime);
 	s += sprint(" up %bd %d", p.up.total(), p.up.rate());
 	s += sprint(" down %bd %d", p.down.total(), p.down.rate());
 	s += sprint(" metaup %bd %d", p.metaup.total(), p.metaup.rate());
@@ -1700,8 +1701,6 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 			trafficmetadown.add(msize, 0);
 			return;
 		}
-
-		p.ctime = daytime->now();
 
 		dsize := len m.d;
 		p.down.add(dsize, 1);
@@ -2704,7 +2703,7 @@ trafficscore(p: ref Peer): int
 timescore(p: ref Peer, now: int): int
 {
 	# scoring from 0 to 5 (inclusive).  score > 0 from 10 minutes on.
-	secs := max(0, now-p.ctime-10*60);
+	secs := max(0, now-p.createtime-10*60);
 	secs >>= 4;
 	for(i := 0; i < 5 && secs > 0; i++)
 		secs >>= 4;

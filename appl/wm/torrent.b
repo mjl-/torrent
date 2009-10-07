@@ -38,8 +38,9 @@ WmTorrent: module {
 File: adt {
 	path,
 	origpath:	string;
-	length:	big;
-	ps, pe:	int;	# piece start,end
+	length:		big;
+	ps,
+	pe:		int;	# piece start,end
 	pieces:		ref Bits;
 };
 
@@ -96,6 +97,7 @@ Prog: adt {
 };
 
 Peercount: adt {
+	createtime:	int;
 	up, down:	big;
 	upr, downr:	int;
 	lreqs,
@@ -682,14 +684,14 @@ progressword(t: array of string): int
 		}
 	"piece" =>
 		p := getint(t[1]);
-		setfilepiece(p);
+		setpiece(p);
 		barhave(havebar, p);
 		barflush(havebar);
 		return 1;
 	"pieces" =>
 		for(i := 1; i < len t; i++) {
 			p := getint(t[i]);
-			setfilepiece(p);
+			setpiece(p);
 			barhave(havebar, p);
 		}
 		barflush(havebar);
@@ -715,16 +717,13 @@ progressword(t: array of string): int
 	return 0;
 }
 
-setfilepiece(p: int)
+setpiece(p: int)
 {
 	prog.pieces.set(p);
 	for(i := 0; i < len info.files; i++) {
 		f := info.files[i];
-		if(p < f.ps)
-			continue;
-		if(p >= f.pe)
-			break;
-		f.pieces.set(p-f.ps);
+		if(p >= f.ps && p < f.pe)
+			f.pieces.set(p-f.ps);
 	}
 }
 
@@ -749,7 +748,7 @@ peerword(t: array of string): int
 	"tracker" =>
 		; # not keeping track of peers from tracker
 	"new" =>
-		c := Peercount (big 0, big 0, 0, 0, 0, 0);
+		c := Peercount (0, big 0, big 0, 0, 0, 0, 0);
 		p := ref Peer (t[1], getint(t[2]), peeridfmtstr(t[3]), getint(t[4]), 0, Bits.new(info.npieces), 0, c);
 		peers.add(p.id, p);
 		return 1;
@@ -1091,16 +1090,18 @@ readpeers0(): list of (int, Peercount)
 	r: list of (int, Peercount);
 	for(l := readlines0(b); l != nil; l = tl l) {
 		t := l2a(str->unquoted(hd l));
-		if(len t != 23)
-			fail(sprint("bad peers line, expected 23 tokens, saw %d: %s", len t, hd l));
+		n: con 24;
+		if(len t != n)
+			fail(sprint("bad peers line, expected %d tokens, saw %d: %s", len t, n, hd l));
 		id := getint(t[0]);
-		up := getbig(t[9]);
-		upr := getint(t[10]);
-		down := getbig(t[12]);
-		downr := getint(t[13]);
-		lreqs := getint(t[21]);
-		rreqs := getint(t[22]);
-		r = (id, Peercount(up, down, upr, downr, lreqs, rreqs))::r;
+		createtime := getint(t[8]);
+		up := getbig(t[10]);
+		upr := getint(t[11]);
+		down := getbig(t[13]);
+		downr := getint(t[14]);
+		lreqs := getint(t[22]);
+		rreqs := getint(t[23]);
+		r = (id, Peercount(createtime, up, down, upr, downr, lreqs, rreqs))::r;
 	}
 	return r;
 }
@@ -1153,22 +1154,36 @@ setpeers()
 	if(view != Vpeers)
 		return;
 
-	peergrid := l9("id ", "dir", sprint("%11s", "rate"), sprint("%11s", "total"), "pieces", " l/r", " reqs", "peerid", "addr")::nil;
+	now := daytime->now();
+	peergrid := l10("id ", "dir", sprint("%11s", "rate"), sprint("%11s", "total"), "pieces", " l/r", " reqs", "age", "peerid", "addr")::nil;
 	for(l := peerall(); l != nil; l = tl l) {
 		p := hd l;
 		dir := "in";
 		if(p.dialed)
 			dir = "out";
-		pr := sprint("%3d%%", 100*p.pieces.have/info.npieces);
-		lr := sprint("%s/%s", statefmt(p.state>>Local), statefmt(p.state>>Remote));
 		c := p.counts;
-		reqstr := sprint("%2d/%2d", c.lreqs, c.rreqs);
 		rate := sprint("%5s/%5s", sizefmt(big c.upr), sizefmt(big c.downr));
 		total := sprint("%5s/%5s", sizefmt(c.up), sizefmt(c.down));
-		peergrid = l9(string p.id, dir, rate, total, pr, lr, reqstr, p.peerid, p.addr)::peergrid;
+		pr := sprint("%3d%%", 100*p.pieces.have/info.npieces);
+		lr := sprint("%s/%s", statefmt(p.state>>Local), statefmt(p.state>>Remote));
+		reqstr := sprint("%2d/%2d", c.lreqs, c.rreqs);
+		if(c.createtime != 0)
+			age := timestr(now-c.createtime);
+		peergrid = l10(string p.id, dir, rate, total, pr, lr, reqstr, age, p.peerid, p.addr)::peergrid;
 	}
 	tkgrid(".v.p.c.g", rev(peergrid));
 	setscrollregion(".v.p.c", ".v.p.c.g");
+}
+
+timestr(v: int): string
+{
+	n := v/(24*3600);
+	if(n >= 2)
+		return sprint("%dd", n);
+	n = v/3600;
+	if(n >= 3)
+		return sprint("%dh", n);
+	return sprint("%dm", v/60);
 }
 
 peerall(): list of ref Peer

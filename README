@@ -47,12 +47,11 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- put age in connection in Qpeers, and show it in wm/torrent
 - stopping & starting does not fix up all the state
 
+- write manual page
 - once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.
 
-- write manual page
 
 - allow downloading of a subset of files, perhaps with priority
 - implement rarest-first scheme?

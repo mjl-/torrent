@@ -207,7 +207,7 @@ Bittorrentpeer: module
 		readc:		chan of (big, list of ref Read, int);
 		reading:	ref Bigtab[ref Read.Piece]; # index by Req key, for cancelling
 		reads:		ref Queue[ref Read];
-		ctime:		int;
+		createtime:	int;
 
 		new:			fn(np: ref Newpeer, fd: ref Sys->FD, extensions, peerid: array of byte, dialed: int, npieces: int, maskip: string): ref Peer;
 		remotechoking:		fn(p: self ref Peer): int;
