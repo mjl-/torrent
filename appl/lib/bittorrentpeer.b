@@ -854,14 +854,6 @@ grow[T](a: array of T, n: int): array of T
 	return na;
 }
 
-randomize[T](a: array of T)
-{
-	for(i := 0; i < len a; i++) {
-		j := rand->rand(len a);
-		(a[i], a[j]) = (a[j], a[i]);
-	}
-}
-
 inssort[T, R](a: array of T, ge: ref fn(a, b: T, r: R): int, r: R)
 {
 	for(i := 1; i < len a; i++) {

@@ -11,7 +11,7 @@ include "arg.m";
 include "bitarray.m";
 include "bittorrent.m";
 	bt: Bittorrent;
-	Bee, Torrent: import bt;
+	Bee, Torrent, Trackreq: import bt;
 include "util0.m";
 	util: Util0;
 	fail, warn: import util;
@@ -51,7 +51,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 	localpeerid := bt->genpeerid();
 
-	(track, terr) := bt->trackerget(t, localpeerid, big 0, big 0, big 0, 0, nil, nil);
+	tr := ref Trackreq (t, localpeerid, big 0, big 0, big 0, 0, nil, nil);
+	(track, terr) := bt->trackerget(tr);
 	if(terr != nil)
 		fail("trackerget: "+terr);
 	say("trackget okay");

@@ -12,6 +12,8 @@ include "keyring.m";
 	kr: Keyring;
 include "security.m";
 	random: Random;
+include "rand.m";
+	rand: Rand;
 include "tables.m";
 	tables: Tables;
 	Strhash: import tables;
@@ -28,7 +30,7 @@ include "bitarray.m";
 include "bittorrent.m";
 include "util0.m";
 	util: Util0;
-	warn, rev, l2a, hex, index, strip, readfile, preadn, g32i, p32i, g16, suffix, prefix, join, hasstr: import util;
+	warn, rev, pid, kill, l2a, hex, index, strip, readfile, preadn, g32i, p32i, g16, suffix, prefix, join, hasstr: import util;
 
 dflag = 0;
 version: con 0;
@@ -39,6 +41,8 @@ init()
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
 	random = load Random Random->PATH;
+	rand = load Rand Rand->PATH;
+	rand->init(sys->millisec()^sys->pctl(0, nil));
 	kr = load Keyring Keyring->PATH;
 	bufio = load Bufio Bufio->PATH;
 	tables = load Tables Tables->PATH;
@@ -571,6 +575,12 @@ getstr(b: ref Bee, k: string, def: string): string
 	return string bb.a;
 }
 
+checktrackurl(s: string): string
+{
+	(nil, err) := Url.unpack(s);
+	return err;
+}
+
 Torrent.open(path: string): (ref Torrent, string)
 {
 	d := readfile(path, -1);
@@ -584,6 +594,37 @@ Torrent.open(path: string): (ref Torrent, string)
 	bannoun := b.gets("announce"::nil);
 	if(bannoun == nil)
 		return (nil, sprint("%s: missing/bad announce field", path));
+	err = checktrackurl(string bannoun.a);
+	if(err != nil)
+		return (nil, sprint("%s: bad tracker %#q: %s", path, string bannoun.a, err));
+
+	announces: array of array of string;
+	al := b.get("announce-list"::nil);
+	if(al != nil)
+	pick a := al {
+	List =>
+		announces = array[len a.a] of array of string;
+		for(i := 0; i < len a.a; i++)
+			pick l := a.a[i] {
+			List =>
+				announces[i] = array[len l.a] of string;
+				for(j := 0; j < len l.a; j++)
+					pick s := l.a[j] {
+					String =>
+						url := announces[i][j] = string s.a;
+						err = checktrackurl(url);
+						if(err != nil)
+							return (nil, sprint("%s: bad tracker %#q: %s", path, url, err));
+					* =>
+						return (nil, sprint("%s: bad type in list in announce-list", path));
+					}
+				randomize(announces[i]);
+			* =>
+				return (nil, sprint("%s: bad list in announce-list", path));
+			}
+	* =>
+		return (nil, sprint("%s: bad type for announce-list", path));
+	}
 
 	binfo := b.get("info"::nil);
 	if(binfo == nil)
@@ -660,7 +701,7 @@ Torrent.open(path: string): (ref Torrent, string)
 	private := getint(b, "private", 0);
 	createdby := getstr(b, "created by", "");
 	createtime := getint(b, "creation date", 0);
-	t := ref Torrent (string bannoun.a, piecelen, infohash, len pieces, pieces, files, name, length, private, createdby, createtime);
+	t := ref Torrent (string bannoun.a, announces, piecelen, infohash, len pieces, pieces, files, name, length, private, createdby, createtime);
 	return (t, nil);
 }
 
@@ -711,7 +752,25 @@ Torrent.pack(t: self ref Torrent): array of byte
 		files := beekey("files", beelist(rev(fl)));
 		info = beedict(list of {name, files, piecelen, pieces});
 	}
-	b := beedict(list of {beekey("announce", beestr(t.announce)), beekey("info", info)});
+
+	bannounces: ref Bee.List;
+	if(t.announces != nil) {
+		l: list of ref Bee;
+		for(i = 0; i < len t.announces; i++) {
+			ll: list of ref Bee;
+			for(j := 0; j < len t.announces[i]; j++)
+				ll = beestr(t.announces[i][j])::ll;
+			tier := beelist(rev(ll));
+			l = tier::l;
+		}
+		bannounces = beelist(rev(l));
+	}
+
+	l := beekey("info", info)::nil;
+	if(bannounces != nil)
+		l = beekey("announce-list", bannounces)::l;
+	l = beekey("announce", beestr(t.announce))::l;
+	b := beedict(l);
 	return b.pack();
 }
 
@@ -910,42 +969,128 @@ torrenthash(tx: ref Torrentx, haves: ref Bits): string
 }
 
 
-trackerget(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event, key: string): (ref Track, string)
+trackerget(tr: ref Trackreq): (ref Track, string)
 {
 	{
-		return (trackerget0(t, peerid, up, down, left, lport, event, key), nil);
+		return (trackerget0(tr), nil);
 	} exception e {
 	"track:*" =>
 		return (nil, e[len "track:":]);
 	}
 }
+
 trackerror(s: string)
 {
 	raise "track:"+s;
 }
 
-trackerget0(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event, key: string): ref Track
+trackerget0(tr: ref Trackreq): ref Track
 {
-	(url, uerr) := Url.unpack(t.announce);
-	if(uerr != nil)
-		trackerror("parsing announce url: "+uerr);
-	if(left < big 0)
-		trackerror(sprint("bogus negative 'left' %bd", left));
+	if(tr.left < big 0)
+		trackerror(sprint("bogus negative 'left' %bd", tr.left));
 
+	if(tr.t.announces == nil) {
+		say(sprint("trying single announce url %q", tr.t.announce));
+		return trackerget00(tr, tr.t.announce);
+	}
+
+	lasterror: string;
+	n := 0;
+	for(i := 0; i < len tr.t.announces; i++) {
+		tier := tr.t.announces[i];
+		for(j := 0; j < len tier; j++) {
+			{
+				n++;
+				url := tier[j];
+				say(sprint("trying %q, tier %d, elem %d", url, i, j));
+				r := trackerget00(tr, url);
+				tier[1:] = tier[:j];
+				tier[0] = url;
+				return r;
+			} exception e {
+			"track:*" =>
+				say(e);
+				lasterror = e[len "track:":];
+			}
+		}
+	}
+	trackerror(sprint("all %d trackers failed, last error: %s", n, lasterror));
+	return nil;
+}
+
+trackerget00(tr: ref Trackreq, u: string): ref Track
+{
+	(url, err) := Url.unpack(u);
+	if(err != nil)
+		trackerror("parsing announce url: "+err);
+
+	case url.scheme {
+	"udp" =>
+		return trackergetudp(tr, url);
+	"http" or
+	"https" =>
+		return trackergethttp(tr, url);
+	}
+	trackerror(sprint("url scheme %#q not supported", url.scheme));
+	return nil;
+}
+
+trackergetudp(tr: ref Trackreq, url: ref Url): ref Track
+{
+	trackerror("tracker url scheme 'udp' not yet supported");
+	return nil;
+}
+
+killer(pidc, kpidc: chan of int, rc: chan of (ref Track, string))
+{
+	opid := <-pidc;
+	kpidc <-= pid();
+	sys->sleep(15*1000);
+	kill(opid);
+	rc <-= (nil, "timeout");
+}
+
+trackergethttp(tr: ref Trackreq, url: ref Url): ref Track
+{
+	say(sprint("trackergethttp, url %q", url.pack()));
+	spawn trackergethttp0(tr, url, pidc := chan of int, kpidc := chan of int, rc := chan of (ref Track, string));
+	spawn killer(pidc, kpidc, rc);
+	(r, err) := <-rc;
+	if(err != nil)
+		trackerror(err);
+	return r;
+}
+
+trackergethttp0(tr: ref Trackreq, url: ref Url, pidc, kpidc: chan of int, rc: chan of (ref Track, string))
+{
+	pidc <-= pid();
+	kpid := <-kpidc;
+	{
+		r := trackergethttp00(tr, url);
+		kill(kpid);
+		rc <-= (r, nil);
+	} exception e {
+	"track:*" =>
+		rc <-= (nil, e[len "track:":]);
+	}
+}
+
+trackergethttp00(tr: ref Trackreq, url: ref Url): ref Track
+{
 	s := "";
-	s += "&info_hash="+encode(t.infohash, nil);
-	s += "&peer_id="+encode(peerid, "a-zA-Z0-9-");
-	s += sprint("&port=%d", lport);
-	s += sprint("&uploaded=%bd", up);
-	s += sprint("&downloaded=%bd", down);
-	s += sprint("&left=%bd", left);
+	s += "&info_hash="+encode(tr.t.infohash, nil);
+	s += "&peer_id="+encode(tr.peerid, "a-zA-Z0-9-");
+	s += sprint("&port=%d", tr.lport);
+	s += sprint("&uploaded=%bd", tr.up);
+	s += sprint("&downloaded=%bd", tr.down);
+	s += sprint("&left=%bd", tr.left);
 	s += "&compact=1";
 	s += "&numwant=200";
 	s += "&no_peer_id=1";
-	if(key != nil)
-		s += "&key="+key;
-	if(event != nil)
-		s += "&event="+http->encodequery(event);
+	if(tr.key != nil)
+		s += "&key="+tr.key;
+	if(tr.event != nil)
+		s += "&event="+http->encodequery(tr.event);
 	if(url.query == "")
 		url.query = "?"+s[1:];
 	else
@@ -1069,6 +1214,15 @@ sha1(d: array of byte): array of byte
 	kr->sha1(d, len d, digest, nil);
 	return digest;
 }
+
+randomize[T](a: array of T)
+{
+	for(i := 0; i < len a; i++) {
+		j := rand->rand(len a);
+		(a[i], a[j]) = (a[j], a[i]);
+	}
+}
+
 
 say(s: string)
 {

@@ -37,7 +37,7 @@ include "bitarray.m";
 	Bits, Bititer: import bitarray;
 include "bittorrent.m";
 	bt: Bittorrent;
-	Bee, Msg, File, Torrent, Filex, Torrentx, Track, Trackpeer: import bt;
+	Bee, Msg, File, Torrent, Filex, Torrentx, Trackreq, Track, Trackpeer: import bt;
 include "../../lib/bittorrentpeer.m";
 	btp: Bittorrentpeer;
 	State, Traffic, Piecepeer, Piece, Peer, Newpeer, Newpeers, Bigtab, Queue, Chunk, Chunkwrite, Req, Reqs, Read, Link, List, Progress, Peerevent, Eventfid: import btp;
@@ -2249,7 +2249,8 @@ track()
 {
 	for(;;) {
 		(up, down, left, lport, event) := <-trackreqc;
-		trackc <-= bt->trackerget(state.t, localpeerid, up, down, left, lport, event, trackerkey);
+		tr := ref Trackreq (state.t, localpeerid, up, down, left, lport, event, trackerkey);
+		trackc <-= bt->trackerget(tr);
 	}
 }
 

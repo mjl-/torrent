@@ -72,6 +72,7 @@ Bittorrent: module
 
 	Torrent: adt {
 		announce:	string;
+		announces:	array of array of string;  # nil when absent
 		piecelen:	int;
 		infohash:	array of byte;
 		piececount:	int;
@@ -115,6 +116,17 @@ Bittorrent: module
 	torrenthash:	fn(tx: ref Torrentx, haves: ref Bitarray->Bits): string;
 
 
+	Trackreq: adt {
+		t:	ref Torrent;
+		peerid:	array of byte;
+		up,
+		down,
+		left:	big;
+		lport:	int;
+		event,
+		key:	string;
+	};
+
 	Trackpeer: adt {
 		ip:	string;
 		port:	int;
@@ -127,6 +139,6 @@ Bittorrent: module
 		b:	ref Bee;
 	};
 
-	trackerget:	fn(t: ref Torrent, peerid: array of byte, up, down, left: big, lport: int, event, key: string): (ref Track, string);
+	trackerget:	fn(tr: ref Trackreq): (ref Track, string);
 	genpeerid:	fn(): array of byte;
 };

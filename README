@@ -47,15 +47,18 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- stopping & starting does not fix up all the state.
-- multiple tracker support (bep 12)
-- udp tracker support (bep 15)
+- put age in connection in Qpeers, and show it in wm/torrent
+- stopping & starting does not fix up all the state
 
 - once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.
 
 - write manual page
 
+- allow downloading of a subset of files, perhaps with priority
+- implement rarest-first scheme?
+- handle multiple torrent files at once?  allows for better use of bandwidth
 - support magnet uri's? (bep 9)
+- udp tracker support (bep 15)
 - http seeding (bep 17 and/or bep 19)
 
 ## torrent/track

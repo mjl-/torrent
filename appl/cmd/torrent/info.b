@@ -58,6 +58,7 @@ init(nil: ref Draw->Context, args: list of string)
 		fail(sprint("%s: %s", hd args, err));
 
 	print("announce url:   %s\n", t.announce);
+	print("announce url's: %s\n", aafmt(t.announces));
 	print("piece length:   %s (%d bytes)\n", sizefmt(big t.piecelen), t.piecelen);
 	print("pieces:         %d\n", t.piececount);
 	print("total length:   %s (%bd bytes)\n", sizefmt(t.length), t.length);
@@ -73,6 +74,26 @@ init(nil: ref Draw->Context, args: list of string)
 		f := t.files[i];
 		print("%10s  %s\n", sizefmt(f.length), f.path);
 	}
+}
+
+afmt(a: array of string): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += ","+a[i];
+	if(s != nil)
+		s = s[1:];
+	return s;
+}
+
+aafmt(a: array of array of string): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += "; "+afmt(a[i]);
+	if(s != nil)
+		s = s[2:];
+	return s;
 }
 
 say(s: string)

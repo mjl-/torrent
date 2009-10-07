@@ -10,6 +10,8 @@ include "bufio.m";
 include "arg.m";
 include "keyring.m";
 	kr: Keyring;
+include "string.m";
+	str: String;
 include "bitarray.m";
 include "bittorrent.m";
 	bt: Bittorrent;
@@ -37,6 +39,7 @@ init(nil: ref Draw->Context, args: list of string)
 	bufio = load Bufio Bufio->PATH;
 	arg := load Arg Arg->PATH;
 	kr = load Keyring Keyring->PATH;
+	str = load String String->PATH;
 	bt = load Bittorrent Bittorrent->PATH;
 	bt->init();
 	http = load Http Http->PATH;
@@ -44,10 +47,12 @@ init(nil: ref Draw->Context, args: list of string)
 	util = load Util0 Util0->PATH;
 	util->init();
 
+	announces: list of list of string;
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-vf] [-d dir] [-p piecelen] tracker file ...");
+	arg->setusage(arg->progname()+" [-vf] [-d dir] [-p piecelen] [-a 'tracker ...'] tracker file ...");
 	while((c := arg->opt()) != 0)
 		case c {
+		'a' =>	announces = str->unquoted(arg->arg())::announces;
 		'd' =>	name = arg->arg();
 		'f' =>	fflag++;
 		'p' =>	piecelen = int sizeparse(arg->arg());
@@ -65,9 +70,10 @@ init(nil: ref Draw->Context, args: list of string)
 	paths := tl args;
 
 	if(!fflag) {
-		(url, err) := Url.unpack(announce);
-		if(err != nil || url.scheme != "http" && url.scheme != "https")
-			fail(sprint("bad announce url %#q: %s", announce, err));
+		checkannounce(announce);
+		for(l := announces; l != nil; l = tl l)
+			for(ll := hd l; ll != nil; ll = tl ll)
+				checkannounce(hd ll);
 	}
 
 	if(len paths > 1 && name == nil)
@@ -110,7 +116,12 @@ file:
 	}
 	hashes := l2a(rev(lhash));
 
-	t := ref Torrent (announce, piecelen, nil, len hashes, hashes, files, name, total, 0, nil, 0);
+	nannounces := array[len announces] of array of string;
+	i = 0;
+	for(l := rev(announces); l != nil; l = tl l)
+		nannounces[i++] = l2a(hd l);
+
+	t := ref Torrent (announce, nannounces, piecelen, nil, len hashes, hashes, files, name, total, 0, nil, 0);
 	d := t.pack();
 	if(sys->write(sys->fildes(1), d, len d) != len d)
 		fail(sprint("write: %r"));
@@ -121,6 +132,13 @@ file:
 		warn(sprint("total %s (%bd bytes), in %d pieces", sizefmt(total), total, len hashes));
 		warn(hex(hash));
 	}
+}
+
+checkannounce(s: string)
+{
+	(url, err) := Url.unpack(s);
+	if(err != nil || url.scheme != "http" && url.scheme != "https" && url.scheme != "udp")
+		fail(sprint("bad announce url %#q: %s", s, err));
 }
 
 nbits(i: int): int
