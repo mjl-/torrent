@@ -47,16 +47,15 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 ## torrent/peer
 
-- over time we drop to zero connections, it seems we are not redialing known peers.
 - stopping & starting does not fix up all the state.
-- udp tracker support (bep 15)
 - multiple tracker support (bep 12)
-- support magnet uri's? (bep 9)
+- udp tracker support (bep 15)
 
 - once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.
 
 - write manual page
 
+- support magnet uri's? (bep 9)
 - http seeding (bep 17 and/or bep 19)
 
 ## torrent/track

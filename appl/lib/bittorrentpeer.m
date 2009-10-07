@@ -95,7 +95,6 @@ Bittorrentpeer: module
 		done:		int;
 
 		new:		fn(): ref Newpeers;
-		add:		fn(n: self ref Newpeers, tp: Bittorrent->Trackpeer);
 		addmany:	fn(n: self ref Newpeers, tps: array of Bittorrent->Trackpeer);
 		addlistener:	fn(n: self ref Newpeers, addr: string, peerid: array of byte): ref Newpeer;
 		markself:	fn(n: self ref Newpeers, ip: string);

@@ -522,8 +522,15 @@ dostyx(mm: ref Tmsg)
 		Qpeerstracker =>
 			if(m.offset == big 0) {
 				s := "";
-				for(f := newpeers.peers(); f != nil; f = f.next)
-					s += sprint("%q %q\n", f.e.addr, hex(f.e.peerid));
+				for(f := newpeers.peers(); f != nil; f = f.next) {
+					n := f.e;
+					st := "";
+					if(n.state & btp->Plistener) st += "l";
+					if(n.state & btp->Pdialing) st += "d";
+					if(n.state & btp->Pconnected) st += "c";
+					if(n.state & btp->Pseeding) st += "s";
+					s += sprint("%q %q %d %d %s\n", n.addr, hex(n.peerid), n.time, n.waittime, st);
+				}
 				fid.data = array of byte s;
 			}
 			srv.reply(styxservers->readbytes(m, fid.data));
@@ -1674,6 +1681,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 		if(p.isdone()) {
 			putevent(ref Peerevent.Done (p.id));
 			peerbox.nseeding++;
+			newpeers.seeding(p.np);
 		} else
 			for(ll := peereventpieces(p.id, p.rhave); ll != nil; ll = tl ll)
 				putevent(hd ll);

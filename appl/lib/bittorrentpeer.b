@@ -419,26 +419,25 @@ newpeersdel(n: ref Newpeers, np: ref Newpeer)
 			return newpeersdelindex(n, i);
 }
 
-newpeercmp(a, b: ref Newpeer, done: int): int
+newpeercmp(a, b: ref Newpeer, n: ref Newpeers): int
 {
-	mask := Pdialing|Pconnected|Plistener;
-	if(!done)
-		mask |= Pseeding;
-	if((a.state & mask) == (b.state & mask))
-		return a.time-b.time;
-	if((a.state & mask) == 0)
+	ar := newpeerready(n, a);
+	br := newpeerready(n, b);
+	if(ar && !br)
 		return -1;
-	return 1;
+	if(!ar && br)
+		return 1;
+	return a.time-b.time;
 }
 
-newpeerge(a, b: ref Newpeer, done: int): int
+newpeerge(a, b: ref Newpeer, n: ref Newpeers): int
 {
-	return newpeercmp(a, b, done) >= 0;
+	return newpeercmp(a, b, n) >= 0;
 }
 
 newpeerssort(n: ref Newpeers)
 {
-	inssort(n.p[:n.np], newpeerge, n.done);
+	inssort(n.p[:n.np], newpeerge, n);
 }
 
 Newpeerslowat: con 1000;
@@ -479,11 +478,6 @@ Newpeers.new(): ref Newpeers
 	return ref Newpeers (nil, array[0] of ref Newpeer, 0, 0);
 }
 
-Newpeers.add(n: self ref Newpeers, tp: Trackpeer)
-{
-	return n.addmany(array[] of {tp});
-}
-
 Newpeers.addmany(n: self ref Newpeers, tps: array of Trackpeer)
 {
 	now := daytime->now();
@@ -492,7 +486,7 @@ next:
 		tp := tps[i];
 		for(l := newpeersfindip(n, tp.ip); l != nil; l = tl l) {
 			onp := hd l;
-			if(!(onp.state & Plistener))
+			if((onp.state & Plistener) == 0)
 				continue next;
 		}
 		np := ref Newpeer (sprint("%s!%d", tp.ip, tp.port), tp.ip, tp.port, tp.peerid, now, 0, 0, nil, nil);
@@ -523,7 +517,7 @@ Newpeers.markself(n: self ref Newpeers, ip: string)
 	n.localips = ip::n.localips;
 	for(l := newpeersfindip(n, ip); l != nil; l = tl l) {
 		np := hd l;
-		if(!(np.state & Pconnected) && !(np.state & Pdialing))
+		if((np.state & Pconnected) == 0 && (np.state & Pdialing) == 0)
 			newpeersdel(n, np);
 	}
 }
@@ -531,14 +525,7 @@ Newpeers.markself(n: self ref Newpeers, ip: string)
 Newpeers.markdone(n: self ref Newpeers)
 {
 	n.done = 1;
-	i := 0;
-	while(i < n.np) {
-		np := n.p[i];
-		if((np.state & Pseeding) && (np.state & (Pdialing|Plistener) == 0))
-			newpeersdelindex(n, i);
-		else
-			i++;
-	}
+	newpeerssort(n);
 }
 
 Newpeers.peers(n: self ref Newpeers): ref List[ref Newpeer]
@@ -690,9 +677,10 @@ Newpeers.disconnectfaulty(n: self ref Newpeers, np: ref Newpeer, err: string): i
 	return np.time;
 }
 
-Newpeers.seeding(nil: self ref Newpeers, np: ref Newpeer)
+Newpeers.seeding(n: self ref Newpeers, np: ref Newpeer)
 {
 	np.state |= Pseeding;
+	newpeerssort(n);
 }
 
 Newpeers.isfaulty(n: self ref Newpeers, ip: string): int
@@ -874,11 +862,11 @@ randomize[T](a: array of T)
 	}
 }
 
-inssort[T](a: array of T, ge: ref fn(a, b: T, done: int): int, done: int)
+inssort[T, R](a: array of T, ge: ref fn(a, b: T, r: R): int, r: R)
 {
 	for(i := 1; i < len a; i++) {
 		tmp := a[i];
-		for(j := i; j > 0 && ge(a[j-1], tmp, done); j--)
+		for(j := i; j > 0 && ge(a[j-1], tmp, r); j--)
 			a[j] = a[j-1];
 		a[j] = tmp;
 	}
