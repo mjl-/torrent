@@ -250,7 +250,7 @@ init(nil: ref Draw->Context, args: list of string)
 	peereventlast.next = ref List[ref Peerevent];
 
 	sys->pctl(Sys->NEWPGRP, nil);
-	writefile(sprint("/prog/%d/ctl", pid()), -1, array of byte "restricted");
+	writefile(sprint("/prog/%d/ctl", pid()), 0, array of byte "restricted");
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-dns] [-m ratio] [-r maxuprate] [-R maxdownrate] [-t maxuptotal] [-T maxdowntotal] torrentfile");
@@ -881,7 +881,7 @@ statestr(choking, interested: int): string
 
 done(): int
 {
-	return state.have.n == state.have.have;
+	return state.have.total == state.have.have;
 }
 
 trackreqstop(up, down, left: big, listenport: int)
@@ -1286,7 +1286,7 @@ schedulepiece(p: ref Peer, pc: ref Piece, nblocks: int): int
 if(dflag) say(sprint("schedule peer %d: first block for peer on piece %d, making Piecepeer", p.id, pc.index));
 		canrequest := pc.have.clone();
 		canrequest.invert();
-		pcp = ref Piecepeer (p.id, canrequest, Bits.new(pc.have.n));
+		pcp = ref Piecepeer (p.id, canrequest, Bits.new(pc.have.total));
 		pc.peers.add(p.id, pcp);
 	}
 
@@ -1644,8 +1644,8 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 		if(m.index >= state.t.piececount)
 			return peerdrop(p, 1, sprint("'have' for invalid piece %d", m.index));
 		if(p.rhave.get(m.index))
-			return peerdrop(p, 1, sprint("already had piece %d (has %d/%d)", m.index, p.rhave.have, p.rhave.n));
-		if(dflag) say(sprint("peer %d has %d/%d pieces, has piece %d", p.id, p.rhave.have, p.rhave.n, m.index));
+			return peerdrop(p, 1, sprint("already had piece %d (has %d/%d)", m.index, p.rhave.have, p.rhave.total));
+		if(dflag) say(sprint("peer %d has %d/%d pieces, has piece %d", p.id, p.rhave.have, p.rhave.total, m.index));
 
 		putevent(ref Peerevent.Piece (p.id, m.index));
 		p.rhave.set(m.index);
@@ -1678,7 +1678,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 				p.lwant.clear((hd l).index);
 				p.canschedule.clear((hd l).index);
 			}
-		if(dflag) say(sprint("peer %d has %d/%d pieces, from bitfield", p.id, p.rhave.have, p.rhave.n));
+		if(dflag) say(sprint("peer %d has %d/%d pieces, from bitfield", p.id, p.rhave.have, p.rhave.total));
 
 		if(p.isdone()) {
 			putevent(ref Peerevent.Done (p.id));
@@ -1731,7 +1731,7 @@ if(dflag) say(sprint("<- peer %d: %s", p.id, mm.text()));
 			(hd l).canrequest.clear(block);
 		if(!hasint(pc.peersgiven, p.id))
 			pc.peersgiven = p.id::pc.peersgiven;
-		putprogress(ref Progress.Block (p.id, pc.index, block, pc.have.have, pc.have.n));
+		putprogress(ref Progress.Block (p.id, pc.index, block, pc.have.have, pc.have.total));
 
 		p.unchokeblocks++;
 
@@ -1847,7 +1847,6 @@ if(dflag > 2) say("<-roundc");
 if(dflag > 2) say("<-swarmc");
 		if(stopped)
 			return;
-		say("swarm tick");
 		now := daytime->now();
 		sendtime := now-Keepalivesend;
 		recvtime := now-Keepaliverecv;
@@ -2085,7 +2084,7 @@ if(dflag > 2) say("<-verifyc");
 		}
 		state.have.set(pc.index);
 		totalleft -= big state.t.piecelength(pc.index);
-		putprogress(ref Progress.Piece (pc.index, state.have.have, state.have.n));
+		putprogress(ref Progress.Piece (pc.index, state.have.have, state.have.total));
 		for(fl := filesdone(pc.index); fl != nil; fl = tl fl) {
 			f := hd fl;
 			putprogress(ref Progress.Filedone (f.index, f.path, f.f.path));
@@ -2290,7 +2289,7 @@ listener(aconn: Sys->Connection)
 }
 
 
-# we are allowed to pass `max' bytes per second.
+# pass `max' bytes per second.
 limiter(c: chan of (int, chan of int), maxc: chan of int, max: int)
 {
 	maxallow := min(max, Netiounit);
@@ -2302,7 +2301,6 @@ limiter(c: chan of (int, chan of int), maxc: chan of int, max: int)
 		
 	(want, respc) := <-c =>
 		if(max <= 0) {
-			# no rate limiting, let traffic pass
 			respc <-= want;
 			continue;
 		}
@@ -2310,7 +2308,6 @@ limiter(c: chan of (int, chan of int), maxc: chan of int, max: int)
 		give := min(maxallow, want);
 		respc <-= give;
 
-		# don't give out more bandwidth until this portion has run out
 		msec := 1000*give/max;
 		t0 := sys->millisec();
 		msec -= util->max(0, min(1000, t0-last));

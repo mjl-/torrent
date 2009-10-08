@@ -4,8 +4,8 @@ Bitarray: module
 
 	Bits: adt {
 		d:	array of byte;
-		n:	int;
 		have:	int;
+		total:	int;
 
 		new:		fn(n: int): ref Bits;
 		mk:		fn(n: int, d: array of byte): (ref Bits, string);

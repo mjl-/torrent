@@ -25,10 +25,10 @@ nbits(b: byte): int
 
 clearhigh(b: ref Bits)
 {
-	if((b.n&7) == 0)
+	if((b.total&7) == 0)
 		return;
-	n := b.n&7;
-	b.d[(b.n-1)>>3] &= ~(~(byte 0)>>n);
+	n := b.total&7;
+	b.d[(b.total-1)>>3] &= ~(~(byte 0)>>n);
 }
 
 bytebit(i: int): byte
@@ -37,9 +37,9 @@ bytebit(i: int): byte
 }
 
 
-Bits.new(n: int): ref Bits
+Bits.new(total: int): ref Bits
 {
-	return ref Bits(array[(n+8-1)>>3] of {* => byte 0}, n, 0);
+	return ref Bits(array[(total+8-1)>>3] of {* => byte 0}, total, 0);
 }
 
 Bits.mk(n: int, d: array of byte): (ref Bits, string)
@@ -60,7 +60,7 @@ Bits.clone(b: self ref Bits): ref Bits
 {
 	d := array[len b.d] of byte;
 	d[:] = b.d;
-	return ref Bits(d, b.n, b.have);
+	return ref Bits(d, b.total, b.have);
 }
 
 Bits.get(b: self ref Bits, i: int): int
@@ -80,7 +80,7 @@ Bits.setall(b: self ref Bits)
 {
 	b.d = array[len b.d] of {* => byte ~0};
 	clearhigh(b);
-	b.have = b.n;
+	b.have = b.total;
 }
 
 Bits.clear(b: self ref Bits, i: int)
@@ -101,7 +101,7 @@ Bits.invert(b: self ref Bits)
 {
 	for(i := 0; i < len b.d; i++)
 		b.d[i] = ~b.d[i];
-	b.have = b.n-b.have;
+	b.have = b.total-b.have;
 }
 
 Bits.clearbits(b: self ref Bits, o: ref Bits)
@@ -115,7 +115,7 @@ Bits.clearbits(b: self ref Bits, o: ref Bits)
 
 Bits.nand(a, na: ref Bits): ref Bits
 {
-	r := ref Bits(array[len a.d] of byte, a.n, 0);
+	r := ref Bits(array[len a.d] of byte, a.total, 0);
 	for(i := 0; i < len a.d; i++) {
 		r.d[i] = a.d[i]&~na.d[i];
 		r.have += nbits(r.d[i]);
@@ -130,7 +130,7 @@ Bits.isempty(b: self ref Bits): int
 
 Bits.isfull(b: self ref Bits): int
 {
-	return b.have == b.n;
+	return b.have == b.total;
 }
 
 Bits.bytes(b: self ref Bits): array of byte
@@ -157,7 +157,7 @@ Bits.rand(b: self ref Bits): int
 Bits.all(b: self ref Bits): list of int
 {
 	l: list of int;
-	for(i := b.n-1; i >= 0; i--)
+	for(i := b.total-1; i >= 0; i--)
 		if(b.get(i))
 			l = i::l;
 	return l;
@@ -176,7 +176,7 @@ Bits.inviter(b: self ref Bits): ref Bititer
 Bits.text(b: self ref Bits): string
 {
 	s := "";
-	for(i := 0; i < b.n; i++) {
+	for(i := 0; i < b.total; i++) {
 		if(b.get(i))
 			s[len s] = '1';
 		else
@@ -193,13 +193,13 @@ Bits.text(b: self ref Bits): string
 Bititer.next(b: self ref Bititer): int
 {
 	if(b.inv) {
-		while(b.seen < b.b.n-b.b.have && ++b.last < b.b.n)
+		while(b.seen < b.b.total-b.b.have && ++b.last < b.b.total)
 			if(!b.b.get(b.last)) {
 				b.seen++;
 				return b.last;
 			}
 	} else {
-		while(b.seen < b.b.have && ++b.last < b.b.n)
+		while(b.seen < b.b.have && ++b.last < b.b.total)
 			if(b.b.get(b.last)) {
 				b.seen++;
 				return b.last;

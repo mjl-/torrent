@@ -37,8 +37,8 @@ init(nil: ref Draw->Context, args: list of string)
 	for(args = arg->argv(); args != nil; args = tl args)
 		case (hd args)[0] {
 		'p' =>
-			sys->print("n=%d have=%d set=(", b.n, b.have);
-			for(i := 0; i < b.n; i++)
+			sys->print("total=%d have=%d set=(", b.total, b.have);
+			for(i := 0; i < b.total; i++)
 				if(b.get(i))
 					sys->print("%d ", i);
 			sys->print(")\n");
@@ -47,7 +47,7 @@ init(nil: ref Draw->Context, args: list of string)
 			b = Bits.new(n);
 		'm' =>
 			err: string;
-			(b, err) = Bits.mk(b.n, b.d);
+			(b, err) = Bits.mk(b.total, b.d);
 			if(err != nil)
 				fail("bits.mk: "+err);
 		'o' =>

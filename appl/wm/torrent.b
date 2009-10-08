@@ -524,7 +524,7 @@ setstate()
 	stategrid := list of {
 	l2(sprint("%-12s", "stopped"),		string s.stopped),
 	l2("eta",		etastr(s.eta)),
-	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces, %d hash fails", prog.pieces.have*100/prog.pieces.n, sizefmt(s.left), prog.pieces.have, prog.pieces.n, s.hashfails)),
+	l2("progress",		sprint("%3d%%, %s left, %d/%d pieces, %d hash fails", prog.pieces.have*100/prog.pieces.total, sizefmt(s.left), prog.pieces.have, prog.pieces.total, s.hashfails)),
 	l2("total",		sprint("%5s   up, %5s   down, ratio: %s ", sizefmt(s.up), sizefmt(s.down), ratio(s.up, s.down))),
 	l2("rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.upr), sizefmt(big s.downr))),
 	l2("meta rate",		sprint("%5s/s up, %5s/s down", sizefmt(big s.metaupr), sizefmt(big s.metadownr))),
@@ -810,7 +810,7 @@ peerword(t: array of string): int
 			# we haven't seen anything from peer yet, this is part of state
 			p.done = 1;
 			p.pieces.setall();
-			for(i := 0; i < p.pieces.n; i++)
+			for(i := 0; i < p.pieces.total; i++)
 				barhave(availbar, i);
 			barflush(availbar);
 		}
@@ -1147,7 +1147,7 @@ setfiles()
 	for(i := 0; i < len info.files; i++) {
 		f := info.files[i];
 		p := f.pieces;
-		filegrid = l3(sprint("%s", sizefmt(f.length)), sprint("%3d%% %d/%d", 100*p.have/p.n, p.have, p.n), f.path)::filegrid;
+		filegrid = l3(sprint("%s", sizefmt(f.length)), sprint("%3d%% %d/%d", 100*p.have/p.total, p.have, p.total), f.path)::filegrid;
 	}
 	tkgrid(".v.f.c.g", rev(filegrid));
 	setscrollregion(".v.f.c", ".v.f.c.g");
