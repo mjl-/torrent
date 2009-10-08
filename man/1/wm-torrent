@@ -1,0 +1,59 @@
+.TH WM-TORRENT 1
+.SH NAME
+wm/torrent \- graphical interface to torrent/peer
+.SH SYNOPSIS
+.B wm/torrent
+[
+.B -d
+]
+.I /mnt/torrent
+.SH DESCRIPTION
+.B Wm/torrent
+is a Tk interface to the styx file system exported by
+.IR torrentpeer (4).
+It shows progress and the state of the transfer in various views.
+The main view has two bars that show availability of pieces, locally
+and distributed among the peers.  It has buttons for starting
+and stopping the
+.I torrent/peer 's
+transfer, and a button that causes a new list of peers to be fetched
+(`track').  Progress and state is shown by an estimated time of
+arrival, number of bytes transferred and remaining, the current
+download and upload rate, the number and kind of peers connected,
+etc.  It also has text fields with the configured maximum data
+exchange ratio, maximum bandwidth in both directions and maximum
+total amount in both directions.  These values can be set by modifying
+the value and pressing return.
+.PP
+The `files' view shows the file names in the torrent, their size
+and their progress.  The `peers' view shows most relevant information
+about connected peers:  their upload/download rates, total amount
+of data transferred, their progress and their choked/interested
+state, the number of requests both sides have scheduled, the age
+of the connection, the `peer id' (which indicates which software
+the peer is using) and the ip address and port of the connection.
+The `badpeers' view lists peers that are currently not allowed to
+connect, typically because they exhibited (potentially) malicious
+behaviour.
+.PP
+The last three views, `torrentlog', `peerlog', and `errors' are
+for debugging.  `Torrentlog' contains the lines read
+from torrent/peer's
+.I progress
+file, `peerlog' the lines from the
+.I peerevents
+file, and errors only the errors.
+.PP
+All views are updated when a change is read from the
+.I progress
+or 
+.I peerevents
+file.  The main and peers view are refreshed every 3 seconds as
+well.  After setting a configuration option, a new value is read from
+torrent/peer.
+.SH SOURCE
+.B /appl/wm/torrent.b
+.SH SEE ALSO
+.IR torrentcreate (1),
+.IR torrenttrack (1),
+.IR torrentpeer (4).

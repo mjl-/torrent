@@ -50,7 +50,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 - stopping & starting does not fix up all the state
 
-- write manual page
 - once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.
 
 

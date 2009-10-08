@@ -1,0 +1,459 @@
+.TH TORRENTPEER 4
+.SH NAME
+torrent/peer \- bittorrent peer
+.SH SYNOPSIS
+mount {
+.B torrent/peer
+[
+.B -dns
+] [
+.B -m
+.I ratio
+] [
+.B -r
+.I maxuprate
+] [
+.B -R
+.I maxdownrate
+] [
+.B -t
+.I maxuptotal
+] [
+.B -T
+.I maxdowntotal
+]
+.I torrent
+} mtpt
+.SH DESCRIPTION
+.B Torrent/peer
+is an implementation of the bittorrent protocol.  Given a
+.I torrent
+file, it connects to the tracker(s) specified in it to fetch a list
+of peers, dials those peers and exchanges (downloads and
+uploads) the data described in the torrent file.  Incoming connections
+are listened for as well.  A new list of peers is fetched periodically
+and new peers are dialed and accepted to keep the pool of connected
+peers filled.
+Torrent/peer serves the styx protocol.  Its files provide information
+about the progress of the exchange and allows controlling it.  The
+maximum upload and download bandwidth, the maximum total amount of
+bytes transferred in both directions and the maximum upload/download
+ratio can be set.
+
+.SS Options
+.TP
+.B -d
+Print debugging information to stderr.  Use multiple times for more
+verbosity.
+.TP
+.B -n
+Do not sanitize file names.  By default the file names specified in the
+torrent file are sanitized:  special characters and whitespace
+replaced by underscores.  With this option the original file names
+are created or opened.
+.TP
+.B -s
+Start up `stopped'.  Data exchange is started immediately at start up
+without this option.
+.TP
+.BI -m " ratio"
+Set the maximum
+.I ratio
+of uploaded/downloaded bytes.  When this ratio is reached and
+all pieces have been downloaded, all data transfer is stopped.
+.TP
+.BI -r " maxuprate"
+Set the maximum used bandwidth used for uploading, per second.  The
+value is a
+.IR size ,
+see below.  Torrent/peer does not upload more per second.  The
+default value `0.0' disables the limit.  Note that the value is for
+TCP-application data, i.e. the bittorrent protocol, not counting TCP/IP
+overhead.
+.TP
+.BI -R " maxdownrate"
+Like
+.BR -r ,
+but for the download bandwidth.
+.TP
+.BI -t " maxuptotal"
+Set the maximum total bytes uploaded.  When this is reached, data
+exchange is stopped, regardless of whether downloading has finished.
+The value is a
+.IR size .
+The default value `-1' allows unlimited data transferred.
+.TP
+.BI -T " maxdowntotal"
+Like
+.BR -t ,
+but for data downloaded.
+
+.SS Sizes
+Sizes in torrent/peer are normally returned from styx files in
+bytes.  Where sizes are written, e.g. to the
+.I ctl
+file, the suffix `k' for kilobyte, `m' for megabyte, `g' for gigabyte
+and so on are recognized.
+
+.SS Features
+Torrent/peer attempts to stay connected to between 80 and 85 peers,
+receiving data from any peer that is willing to give data.  The
+trackers from the torrent file are periodically queried for more
+peers.  The first three requests are done in quick succession, to
+get a big pool of peers quickly.  Torrent/peer itself sends data
+to at most three peers at a time, those that give back most bandwidth.
+An additional randomly selected peer receives data too, to give it
+an incentive to start sending data back.  A pool of peer addresses
+is maintained.  When in need of connections, addresses from that
+pool are dialed.  At most fifteen connection attempts are in progress
+at one time and some time is kept between the start of two connection
+attempts.
+
+As part of the protocol, peers exchange information about which
+pieces they have completed.  They also indicate whether they are
+interested and willing to send data.  This is essentially protocol
+overhead, and counted as `meta' data by torrent/peer.  Non-urgent
+messages are delayed for a short time.  For example, completion
+of a piece has to be mentioned to all connected peers.  Instead of
+sending up to 80 messages immediately, the messages are scheduled
+with a small delay between each message.  This also increases the
+chance multiple such messages can be sent in a single TCP/IP packet,
+reducing overhead.
+
+Downloaded data is kept in memory until chunks of up to 128KB before
+they are written to disk.  Hopefully they will end up on disk in
+consecutive blocks, reducing seek times and file system fragmentation
+(depending on the file system in use) and making later reading
+faster.
+Data to be uploaded is read from disk.  Up to four reads can be
+scheduled, ensuring data for sending is available.  Peers typically
+requests blocks of a piece sequentially, allowing the data to be
+read from disk sequentially.  Data is read from disk in chunks of
+up to 128k when the upload rate is high enough for them
+to be consumed quickly.
+
+Blocks of a piece are normally requested and received in order.
+The SHA-1 hash of the piece is kept up to date as long as blocks
+do come in in order.  Otherwise, when the last block is on disk, a
+separate thread reads the remaining data of the piece from disk and
+completes the SHA-1 calculation.
+
+Torrent/peer stores progress in a separate file, a bit array with
+the pieces that have been downloaded and verified.  It is updated
+after a piece has been completed.  This file is read at start up,
+eliminating the need to verify hashes of all pieces.  The name of
+this file is `.state' appended to the name of the torrent file.
+
+Potentially abusive peers are refused connection for some time.
+E.g. when a peer sent misleading information about the pieces it
+had, or when a peer sent invalid data.
+
+.SS Styx files
+
+.TP
+.B ctl
+Reads return values of configuration parameters, one per line.  Each
+line has two tokens, the first is the name of the parameter, the
+second the value.  The values can be changed by writing a line with
+parameter and value to the ctl file.  The following parameters can
+be changed:
+.IR maxratio ,
+.IR maxuprate ,
+.IR maxdownrate ,
+.IR maxuptotal ,
+.IR maxdowntotal ,
+.IR debugpeer ,
+.I debuglib
+and
+.IR debugpeerlib .
+.TP
+.B info
+Can only be read, returning lines with two quoted string tokens each:
+.IR torrentpath ,
+path of the torrent file.
+.IR infohash ,
+the unique identifier of the data exchanged in the torrent.
+.IR announce ,
+the address of the tracker.
+.IR announces ,
+the addresses of the trackers in case the torrent file uses the
+``multi tracker extension''.
+.IR piecelen ,
+the length of a piece.
+.IR piececount ,
+the number of pieces.
+.IR length ,
+the total length of the data described in the torrent file.
+.TP
+.B state
+Can only be read, returning information about the current state of
+data exchange, one key/value pair on a line.  Current transfer
+rates, total bytes transferred and remaining, an estimated time of
+arrival, number of peers and `seeds' (peers that have all data),
+number of peers torrent/peer initiated connection to, number of
+peers that have data we still want, are sending data to us, peers
+we know of, etc.
+.TP
+.B files
+For reading only.  Returns the files described in the torrent file,
+one per line.  Each line has five quoted strings:  a sanitized file
+name, the original file name as specified in the torrent file, the
+length of the file, and the first and last piece that has bytes for
+the file.
+.TP
+.B peers
+For reading only, returning information about peers, one line with
+quoted strings per peer.  The format of the lines is:
+.br
+.IR "id address peeridhex " in/out "localstate remotestate lastunchoke npeerpieces createtime " up " total rate " down " total rate " metaup " total rate " metadown " total rate " reqs " localreqs remotereqs"
+.br
+.I Id
+is the unique connection id,
+.I peeridhex
+a client-chosen software identifier.
+The local and remote
+.I state
+is an empty string with optionally the characters `c'
+.I (choking)
+and `i'
+.I (interested)
+in them.
+.I Lastunchoke
+is the unix epoch time of the last time the peer was unchoked.
+.I Npeerpieces
+the number of pieces the peer has.
+.I Createtime
+the time the connection was made.
+Local and remote
+.I reqs
+is the number of requests currently queued.
+.TP
+.B peerstracker
+For reading only, returns lines with known peers from the address
+pool.  The format of a lines is:
+.I "ip!port peeridhex nextusetime backofftime state"
+.I Peeridhex
+may be an empty string
+.I Nextusetime
+is the unix epoch time the peer may be dialed again.  Incoming
+connections from the address are accepted even before
+.IR nextusetime .
+.I Backofftime
+is the last back off time for the peer.  Each consecutive failed
+connection attempt exponentially increases the back off time.
+.TP
+.B peersbad
+For reading only, returns lines with peers that have shown bad
+behaviour.  The format of the lines is:
+.I "ip!port nextusetime peeridhex reason"
+.I Reason
+is the error string that caused this address to be banned.
+.I Nextusetime
+is the unix epoch time a connection from this address is accepted
+or initiated.
+
+.PP More styx files
+Two more styx files are exported:
+.B progress
+and
+.BR peerevents .
+These read-only files block until an event occurs.  They return one
+or more lines per read, each line a list of quoted strings.  The
+first token indicates the type of event.
+
+.SS progress
+The following lines can be returned:
+.TP
+.I endofstate
+When
+.B progress
+is opened, lines indicating the current state is queued to be
+returned.  The last line queued is `endofstate'.  Reads up to this
+line will not blocks, reads after this line will.
+.TP
+.I done
+All pieces have been downloaded and verified.
+.TP
+.I started
+Data exchange started.
+.TP
+.I stopped
+Data exchange stopped.
+.TP
+.I newctl
+A configuration parameter changed, typically returned after a write
+to the ctl file.
+.TP
+.I "piece index have total"
+Piece
+.I index
+has been downloaded and verified.
+.I Have
+of 
+.I total
+pieces are not stored locally.
+.TP
+.I "block peer index blockindex blockhave blocktotal"
+Block
+.I blockindex
+from piece
+.I index
+has been received from
+.IR peer ,
+bringing the block totals to
+.I blockhave
+of
+.I blocktotal
+of the piece.
+.TP
+.I "pieces index ..."
+Multiple pieces are downloaded and verified.  These lines are normally
+returned as part of the state, before `endofstate'.
+.TP
+.I "blocks index blockindex ..."
+Multiple blocks
+.I "blockindex ..."
+of piece
+.I index
+have been received.  Returned as part of the state.
+.TP
+.I "filedone fileindex sanepath origpath"
+.I Fileindex
+is indexes the file from
+.BR files .
+.I sanepath
+and
+.I origpath
+are the sanitized and original path of the file
+.TP
+.I "tracker interval waittime npeers trackerurl error"
+A tracker request has been completed.
+.I Interval
+is the interval between tracker requests, as requested by the tracker.
+.I Waittime
+the time until the next tracker request.
+.I Npeers
+the number of peers received in the request, only valid if
+.I error
+is empty.
+.I Trackerurl
+is the url of the tracker used, only valid if
+.I error
+is empty.
+.I Error
+is an error message in case of a failed tracker request.
+.TP
+.I "error msg"
+For various errors, e.g. when connections to peers break.  These
+are usually non-fatal.
+.TP
+.I "hashfail index"
+Verification of downloaded piece
+.I index
+failed.  A peer sent invalid
+blocks, the piece is downloaded again.
+
+.SS peerevents
+The following lines can be returned:
+.TP
+.I endofstate
+Like
+.I progress'
+`endofstate', the line after initial state, before starting to block
+on reads.
+.TP
+.I "dialing address"
+.I Address
+is now being dialed.
+.TP
+.I "tracker address"
+.I Address
+has been added to the pool of addresses of peers.
+.TP
+.I "new address id peeridhex dialed"
+A new peer is now connected.
+.I Dialed
+is a number, only `0' means the connection was not dialed.
+.TP
+.I "gone id"
+Peer
+.I id
+is no longer connected.
+.TP
+.I "bad ip nextusetime peeridhex reason"
+A peer from
+.I ip
+has misbehaved and is banned until
+.I nextusetime
+for non-empty string
+.IR reason .
+.TP
+.I "state id localstate remotestate"
+The connection state changed.  Local and remote
+.I state
+give the new state, an string that is `c'
+.I (choked)
+and/or `i'
+.I (interested)
+in it, or is empty.
+.TP
+.I "piece id index"
+Peer
+.I id
+completed piece
+.IR index .
+.TP
+.I "pieces id index ..."
+.Peer
+.I id
+completed pieces
+.IR "index ..." .
+This is normally sent as part of the state or when a new peer connects.
+.TP
+.I "done id"
+Peer
+.I id
+has completed all pieces.
+
+.SH EXAMPLE
+To start torrent/peer for a torrent file:
+.EX
+	mkdir /mnt/torrent
+	mount {torrent/peer $home/some.torrent} /mnt/torrent
+	wm/torrent /mnt/torrent
+.EE
+
+.SH SEE ALSO
+.IR wm-torrent (1),
+.IR torrentcreate (1),
+.IR torrenttrack (1).
+.br
+``BEP 3 - The BitTorrent Protocol Specification'',
+.br
+``BEP 7 - IPv6 Tracker Extension'',
+.br
+``BEP 12 - Multitracker Metadata Extension''.
+.br
+``BEP 23 - Tracker Returns Compact Peer Lists''.
+
+.SH SOURCE
+.B /appl/cmd/torrent/peer.b
+.br
+.B /appl/lib/bittorrentpeer.m
+.br
+.B /appl/lib/bittorrentpeer.b
+.br
+.B /module/bittorrent.m
+.br
+.B /appl/lib/bittorrent.b
+.SH BUGS
+The next piece to request from a peer is always selected at random.
+Rarest first should probably be used.
+.br
+`Magnet' URI's are not supported, and the bittorrent extensions
+protocol message is not supported either:  The torrent file cannot
+be downloaded by torrent/peer.
+.br
+Torrent/peer works on only a single torrent at a time.
+.br
+UDP tracker extensions are not supported.

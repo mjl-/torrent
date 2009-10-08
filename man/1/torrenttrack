@@ -71,10 +71,14 @@ httpd -a net!*!80 -s /announce net!localhost!4020 GET /lib/empty
 .EE
 .SH SOURCE
 .B /appl/cmd/torrent/track.b
+.br
+.B /module/bittorrent.m
+.br
+.B /appl/lib/bittorrent.b
 .SH SEE ALSO
-.IR torrentpeer (1),
 .IR torrentcreate (1),
-.IR shttpd (1).
+.IR torrentpeer (4),
+.IR shttpd (8),
 .br
 ``BEP 23 - Tracker Returns Compact Peer Lists'',
 .br

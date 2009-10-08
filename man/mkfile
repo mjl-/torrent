@@ -3,5 +3,7 @@
 MAN=\
 	1/torrenttrack\
 	1/torrentcreate\
+	4/torrentpeer\
+	1/wm-torrent\
 
 <mkman
