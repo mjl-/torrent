@@ -98,6 +98,7 @@ dialtoken := 1;
 dialtokenc: chan of int;
 delaytoken := 1;
 delaytokenc: chan of int;
+tracktoken := 1;
 islistening := 0;	# whether listener() is listening
 nhashfails := 0;
 totalleft:	big;
@@ -129,7 +130,7 @@ maxdowntotal	:= big -1;
 
 # tracker
 trackkickc:	chan of int;
-trackreqc:	chan of (big, big, big, int, string);  # up, down, left, listenport, event
+trackreqc:	chan of ref Trackreq;
 trackc:		chan of (ref Track, string);
 
 # dialer/listener
@@ -283,6 +284,8 @@ init(nil: ref Draw->Context, args: list of string)
 	torrentpath = hd args;
 	err: string;
 	(state.t, err) = Torrent.open(torrentpath);
+	if(err == nil && (state.t.piecelen/Blocksize)*Blocksize != state.t.piecelen)
+		err = sprint("%s: piece length not multiple of blocksize", torrentpath);
 	if(err != nil)
 		fail(sprint("%s: %s", torrentpath, err));
 
@@ -347,7 +350,7 @@ init(nil: ref Draw->Context, args: list of string)
 	delaytokenc = chan of int;
 
 	trackkickc = chan of int;
-	trackreqc = chan of (big, big, big, int, string);
+	trackreqc = chan of ref Trackreq;
 	trackc = chan of (ref Track, string);
 
 	canlistenc = chan of int;
@@ -884,11 +887,6 @@ done(): int
 	return state.have.have == state.have.total;
 }
 
-trackreqstop(up, down, left: big, listenport: int)
-{
-	trackreqc <-= (up, down, left, listenport, "stopped");
-}
-
 stop(reason: string)
 {
 	if(stopped)
@@ -896,14 +894,18 @@ stop(reason: string)
 
 	say("stopping: "+reason);
 
-	spawn trackreqstop(trafficup.total(), trafficdown.total(), totalleft, listenport);
-	stopped = 1;
+	tracknow("stopped");
 	putprogress(ref Progress.Stopped);
 
-	# disconnect from all peers
+	stopped = 1;
 	peerbox.lucky = nil;
 	for(l := peerbox.peers; l != nil; l = tl l)
 		peerdrop(hd l, 0, "stopping");
+
+	trafficup = Traffic.new();
+	trafficdown = Traffic.new();
+	trafficmetaup = Traffic.new();
+	trafficmetadown = Traffic.new();
 }
 
 start()
@@ -915,7 +917,7 @@ start()
 	stopped = 0;
 	putprogress(ref Progress.Started);
 
-	spawn trackkick(0);
+	trackkick(0);
 	if(!islistening) {
 		canlistenc <-= 1;
 		islistening = 1;
@@ -961,7 +963,7 @@ peerdrop(p: ref Peer, faulty: int, err: string)
 
 	undolreqs(p);
 
-	if(faulty)
+	if(faulty || stopped)
 		hangup(p.fd);
 
 	diallisten();
@@ -977,7 +979,7 @@ stopwritec(c: chan of ref Chunkwrite)
 	c <-= nil;
 }
 
-dialtokengive()
+givedialtoken()
 {
 	sys->sleep(Dialinterval);
 	dialtokenc <-= 1;
@@ -987,7 +989,6 @@ givedelaytoken(ms: int)
 { 
 	sys->sleep(ms);
 	delaytokenc <-= 1;
-say(sprint("giving back delay token after %d ms", ms));
 }
 
 diallisten()
@@ -998,7 +999,7 @@ diallisten()
 		putevent(ref Peerevent.Dialing (np.addr));
 		dialtoken = 0;
 		spawn dialer(np);
-		spawn dialtokengive();
+		spawn givedialtoken();
 	}
 
 	if(!islistening && (len peerbox.peers-peerbox.ndialed < Peerslowmax/2 || len peerbox.peers < Peerslowmax)) {
@@ -1868,14 +1869,20 @@ if(dflag > 2) say("<-swarmc");
 
 	<-trackkickc =>
 if(dflag > 2) say("<-trackkickc");
+		if(!tracktoken)
+			raise "trackkick but no tracktoken?";
 		trackkickpid = -1;
-		if(stopped)
+		if(stopped) {
+			trackerevent = nil;
 			return;
-		trackreqc <-= (trafficup.total(), trafficdown.total(), totalleft, listenport, trackerevent);
+		}
+		trackreqc <-= ref Trackreq (state.t, localpeerid, trafficup.total(), trafficdown.total(), totalleft, listenport, trackerevent, trackerkey);
 		trackerevent = nil;
+		tracktoken = 0;
 
 	(tr, err) := <-trackc =>
 if(dflag > 2) say("<-trackc");
+		tracktoken = 1;
 		if(stopped)
 			return;
 
@@ -2052,6 +2059,9 @@ if(dflag > 2) say("<-diskwrittenc");
 		state.active.del(pc.index);
 		state.orphans.del(pc.index);
 
+		# note: we haven't verified the piece, and do not yet advertise this piece.
+		# marking it now prevents us from scheduling the piece on peers that connect while we are verifying.
+		state.have.set(pc.index);
 		spawn verifyhash(pc);
 
 	(pc, err) := <-verifyc =>
@@ -2068,6 +2078,7 @@ if(dflag > 2) say("<-verifyc");
 		}
 		if(err != nil) {
 			say(err);
+			state.have.clear(pc.index);
 			if(len pc.peersgiven == 1) {
 				pp := peerbox.findid(hd pc.peersgiven);
 				if(pp != nil)
@@ -2082,7 +2093,6 @@ if(dflag > 2) say("<-verifyc");
 			peerlwant(pc.index);
 			return;
 		}
-		state.have.set(pc.index);
 		totalleft -= big state.t.piecelength(pc.index);
 		putprogress(ref Progress.Piece (pc.index, state.have.have, state.have.total));
 		for(fl := filesdone(pc.index); fl != nil; fl = tl fl) {
@@ -2111,8 +2121,7 @@ if(dflag > 2) say("<-verifyc");
 			peersend(hd l, ref Msg.Have(pc.index));
 
 		if(!stopped && done()) {
-			trackerevent = "completed";
-			trackkick(0);
+			tracknow("completed");
 			newpeers.markdone();
 			for(l = peerbox.peers; l != nil; l = tl l) {
 				p := hd l;
@@ -2229,6 +2238,8 @@ swarmticker()
 trackkicktime: int;
 trackkick(n: int)
 {
+	if(!tracktoken)
+		return;
 	ntrackkicktime := daytime->now()+n;
 	if(trackkickpid >= 0) {
 		if(ntrackkicktime > trackkicktime)
@@ -2247,11 +2258,21 @@ trackkick0(n: int, pidc: chan of int)
 	trackkickc <-= 1;
 }
 
+tracknow(event: string)
+{
+	tr := ref Trackreq (state.t, localpeerid, trafficup.total(), trafficdown.total(), totalleft, listenport, event, trackerkey);
+	spawn tracknow0(tr);
+}
+
+tracknow0(tr: ref Trackreq)
+{
+	bt->trackerget(tr);
+}
+
 track()
 {
 	for(;;) {
-		(up, down, left, lport, event) := <-trackreqc;
-		tr := ref Trackreq (state.t, localpeerid, up, down, left, lport, event, trackerkey);
+		tr := <-trackreqc;
 		trackc <-= bt->trackerget(tr);
 	}
 }
