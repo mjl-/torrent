@@ -52,7 +52,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
 - once all mechanisms are implemented and features settle down, make all the accounting less cpu intensive.  torrent/peer takes lots of cpu now.
 
-
 - allow downloading of a subset of files, perhaps with priority
 - implement rarest-first scheme?
 - handle multiple torrent files at once?  allows for better use of bandwidth

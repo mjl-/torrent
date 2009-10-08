@@ -39,7 +39,7 @@ bytebit(i: int): byte
 
 Bits.new(total: int): ref Bits
 {
-	return ref Bits(array[(total+8-1)>>3] of {* => byte 0}, total, 0);
+	return ref Bits(array[(total+8-1)>>3] of {* => byte 0}, 0, total);
 }
 
 Bits.mk(n: int, d: array of byte): (ref Bits, string)
@@ -49,7 +49,7 @@ Bits.mk(n: int, d: array of byte): (ref Bits, string)
 		return (nil, "wrong number of bytes, need "+string need+", got "+string len d);
 	nd := array[len d] of byte;
 	nd[:] = d;
-	b := ref Bits(nd, n, 0);
+	b := ref Bits(nd, 0, n);
 	clearhigh(b);
 	for(i := 0; i < len b.d; i++)
 		b.have += nbits(b.d[i]);
@@ -60,7 +60,7 @@ Bits.clone(b: self ref Bits): ref Bits
 {
 	d := array[len b.d] of byte;
 	d[:] = b.d;
-	return ref Bits(d, b.total, b.have);
+	return ref Bits(d, b.have, b.total);
 }
 
 Bits.get(b: self ref Bits, i: int): int
@@ -115,7 +115,7 @@ Bits.clearbits(b: self ref Bits, o: ref Bits)
 
 Bits.nand(a, na: ref Bits): ref Bits
 {
-	r := ref Bits(array[len a.d] of byte, a.total, 0);
+	r := ref Bits(array[len a.d] of byte, 0, a.total);
 	for(i := 0; i < len a.d; i++) {
 		r.d[i] = a.d[i]&~na.d[i];
 		r.have += nbits(r.d[i]);

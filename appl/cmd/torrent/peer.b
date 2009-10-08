@@ -881,7 +881,7 @@ statestr(choking, interested: int): string
 
 done(): int
 {
-	return state.have.total == state.have.have;
+	return state.have.have == state.have.total;
 }
 
 trackreqstop(up, down, left: big, listenport: int)
