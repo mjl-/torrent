@@ -136,6 +136,7 @@ Bittorrent: module
 		interval:	int;
 		mininterval:	int;	# < 0 if absent
 		peers:	array of Trackpeer;
+		tracker:	string;
 		b:	ref Bee;
 	};
 

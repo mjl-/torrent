@@ -268,8 +268,9 @@ Bittorrentpeer: module
 		Tracker =>
 			interval,
 			next,
-			npeers:	int;
-			err:	string;
+			npeers:		int;
+			tracker:	string;
+			err:		string;
 		Error =>
 			msg:	string;
 		Hashfail =>

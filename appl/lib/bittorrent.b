@@ -1026,16 +1026,16 @@ trackerget00(tr: ref Trackreq, u: string): ref Track
 
 	case url.scheme {
 	"udp" =>
-		return trackergetudp(tr, url);
+		return trackergetudp(tr, u, url);
 	"http" or
 	"https" =>
-		return trackergethttp(tr, url);
+		return trackergethttp(tr, u, url);
 	}
 	trackerror(sprint("url scheme %#q not supported", url.scheme));
 	return nil;
 }
 
-trackergetudp(tr: ref Trackreq, url: ref Url): ref Track
+trackergetudp(tr: ref Trackreq, u: string, url: ref Url): ref Track
 {
 	trackerror("tracker url scheme 'udp' not yet supported");
 	return nil;
@@ -1050,10 +1050,10 @@ killer(pidc, kpidc: chan of int, rc: chan of (ref Track, string))
 	rc <-= (nil, "timeout");
 }
 
-trackergethttp(tr: ref Trackreq, url: ref Url): ref Track
+trackergethttp(tr: ref Trackreq, u: string, url: ref Url): ref Track
 {
 	say(sprint("trackergethttp, url %q", url.pack()));
-	spawn trackergethttp0(tr, url, pidc := chan of int, kpidc := chan of int, rc := chan of (ref Track, string));
+	spawn trackergethttp0(tr, u, url, pidc := chan of int, kpidc := chan of int, rc := chan of (ref Track, string));
 	spawn killer(pidc, kpidc, rc);
 	(r, err) := <-rc;
 	if(err != nil)
@@ -1061,12 +1061,12 @@ trackergethttp(tr: ref Trackreq, url: ref Url): ref Track
 	return r;
 }
 
-trackergethttp0(tr: ref Trackreq, url: ref Url, pidc, kpidc: chan of int, rc: chan of (ref Track, string))
+trackergethttp0(tr: ref Trackreq, u: string, url: ref Url, pidc, kpidc: chan of int, rc: chan of (ref Track, string))
 {
 	pidc <-= pid();
 	kpid := <-kpidc;
 	{
-		r := trackergethttp00(tr, url);
+		r := trackergethttp00(tr, u, url);
 		kill(kpid);
 		rc <-= (r, nil);
 	} exception e {
@@ -1075,7 +1075,7 @@ trackergethttp0(tr: ref Trackreq, url: ref Url, pidc, kpidc: chan of int, rc: ch
 	}
 }
 
-trackergethttp00(tr: ref Trackreq, url: ref Url): ref Track
+trackergethttp00(tr: ref Trackreq, u: string, url: ref Url): ref Track
 {
 	s := "";
 	s += "&info_hash="+encode(tr.t.infohash, nil);
@@ -1146,7 +1146,7 @@ trackergethttp00(tr: ref Trackreq, url: ref Url): ref Track
 			}
 			p[i] = tp;
 		}
-		return ref Track (int interval.i, mininterval, p, b);
+		return ref Track (int interval.i, mininterval, p, u, b);
 
 	String =>
 		say("received compact form tracker response");
@@ -1159,7 +1159,7 @@ trackergethttp00(tr: ref Trackreq, url: ref Url): ref Track
 			(port, nil) := g16(peers.a, o+4);
 			p[i++] = Trackpeer(ipstr, port, nil);
 		}
-		return ref Track (int interval.i, mininterval, p, b);
+		return ref Track (int interval.i, mininterval, p, u, b);
 	}
 	trackerror("bad response, bad type for key peers");
 	return nil;

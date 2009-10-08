@@ -457,6 +457,7 @@ dostyx(mm: ref Tmsg)
 				s += sprint("torrentpath %q\n", torrentpath);
 				s += sprint("infohash %s\n", hex(t.infohash));
 				s += sprint("announce %q\n", t.announce);
+				s += sprint("announces %q\n", aafmt(t.announces));
 				s += sprint("piecelen %d\n", t.piecelen);
 				s += sprint("piececount %d\n", t.piececount);
 				s += sprint("length %bd\n", t.length);
@@ -794,7 +795,7 @@ putprogressstate(l: ref List[ref Progress])
 	}
 	t := trackereventlast;
 	if(t == nil)
-		t = ref Progress.Tracker (-1, -1, -1, nil);
+		t = ref Progress.Tracker (-1, -1, -1, nil, nil);
 	t.next = nexttrack-daytime->now();
 	l = next(l, t);
 	l = next(l, ref Progress.Endofstate);
@@ -1897,9 +1898,12 @@ if(dflag > 2) say("<-trackc");
 		nexttrack = daytime->now()+interval;
 
 		npeers := 0;
-		if(tr != nil)
+		tracker: string;
+		if(tr != nil) {
 			npeers = len tr.peers;
-		trackereventlast = ref Progress.Tracker (interval, interval, npeers, err);
+			tracker = tr.tracker;
+		}
+		trackereventlast = ref Progress.Tracker (interval, interval, npeers, tracker, err);
 		putprogress(trackereventlast);
 
 		if(err != nil)
@@ -2938,6 +2942,22 @@ ipport(s: string): (string, int)
 	if(portstr != nil)
 		portstr = portstr[1:];
 	return (ip, int portstr);
+}
+
+aafmt(a: array of array of string): string
+{
+	s := "";
+	for(i := 0; i < len a; i++) {
+		s += "; ";
+		r := "";
+		for(j := 0; j < len a[i]; j++)
+			r += ","+a[i][j];
+		if(r != nil)
+			s += r[1:];
+	}
+	if(s != nil)
+		s = s[len "; ":];
+	return s;
 }
 
 hangup(fd: ref Sys->FD)

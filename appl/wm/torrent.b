@@ -47,7 +47,8 @@ File: adt {
 Info: adt {
 	torrentpath,
 	infohash,
-	tracker:	string;
+	tracker,
+	trackers:	string;
 	piecelen,
 	npieces:	int;
 	length:		big;
@@ -129,6 +130,7 @@ Tracker: adt {
 	interval,
 	next,
 	npeers:	int;
+	tracker,
 	err:	string;
 };
 
@@ -387,6 +389,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	infogrid := list of {
 	l2(sprint("%-12s", "infohash"),	info.infohash),
 	l2("tracker",	info.tracker),
+	l2("trackers",	info.trackers),
 	l2("pieces",	sprint("%d, %s each", info.npieces, sizefmt(big info.piecelen))),
 	l2("length",	sprint("%s (%bd bytes)", sizefmt(info.length), info.length)),
 	};
@@ -609,12 +612,12 @@ trackerstr(): string
 	t := lasttracker;
 	if(t == nil)
 		return "n/a";
-	s := sprint("interval %d, ", t.interval);
+	s := sprint("interval %ds", t.interval);
 	if(t.err != nil)
 		s += t.err;
-	else
-		s += sprint("%d peers", t.npeers);
 	s += sprint(", next in %4ds", max(0, t.next-daytime->now()));
+	if(t.err == nil)
+		s += sprint(", %d peers from %s", t.npeers, t.tracker);
 	return s;
 }
 
@@ -655,7 +658,7 @@ progresswords := array[] of {
 ("pieces",	-1),
 ("blocks",	-2),
 ("filedone",	3),
-("tracker",	4),
+("tracker",	5),
 ("error",	1),
 ("hashfail",	1),
 };
@@ -704,7 +707,7 @@ progressword(t: array of string): int
 		setfiles();
 		return 1;
 	"tracker" =>
-		lasttracker = ref Tracker (getint(t[1]), daytime->now()+getint(t[2]), getint(t[3]), t[4]);
+		lasttracker = ref Tracker (getint(t[1]), daytime->now()+getint(t[2]), getint(t[3]), t[4], t[5]);
 		return 1;
 	"error" =>
 		lasterror = t[1];
@@ -992,6 +995,7 @@ readinfo(): ref Info
 		"torrentpath" =>	i.torrentpath = arg;
 		"infohash" =>	i.infohash = arg;
 		"announce" =>	i.tracker = arg;
+		"announces" =>	i.trackers = arg;
 		"piecelen" =>	i.piecelen = getint(arg);
 		"piececount" =>	i.npieces = getint(arg);
 		"length" =>	i.length = getbig(arg);

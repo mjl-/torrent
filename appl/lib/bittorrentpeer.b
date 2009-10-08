@@ -390,6 +390,13 @@ newpeerready(n: ref Newpeers, np: ref Newpeer): int
 	return (np.state & (Pdialing|Pconnected|Plistener)) == 0 && np.time <= daytime->now();
 }
 
+newpeerreadycmp(n: ref Newpeers, np: ref Newpeer): int
+{
+	if(n.done && (np.state & Pseeding))
+		return 0;
+	return (np.state & (Pdialing|Pconnected|Plistener)) == 0;
+}
+
 newpeersfindip(n: ref Newpeers, ip: string): list of ref Newpeer
 {
 	l: list of ref Newpeer;
@@ -421,8 +428,8 @@ newpeersdel(n: ref Newpeers, np: ref Newpeer)
 
 newpeercmp(a, b: ref Newpeer, n: ref Newpeers): int
 {
-	ar := newpeerready(n, a);
-	br := newpeerready(n, b);
+	ar := newpeerreadycmp(n, a);
+	br := newpeerreadycmp(n, b);
 	if(ar && !br)
 		return -1;
 	if(!ar && br)
@@ -764,7 +771,7 @@ Progress.text(pp: self ref Progress): string
 			for(l := p.l; l != nil; l = tl l)
 				s += " "+string hd l;
 	Filedone =>	s += sprint(" %d %q %q", p.index, p.path, p.origpath);
-	Tracker =>	s += sprint(" %d %d %d %q", p.interval, p.next, p.npeers, p.err);
+	Tracker =>	s += sprint(" %d %d %d %q %q", p.interval, p.next, p.npeers, p.tracker, p.err);
 	Error =>	s += sprint(" %q", p.msg);
 	Hashfail =>	s += sprint(" %d", p.index);
 	* =>	raise "missing case";
