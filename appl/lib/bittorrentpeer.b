@@ -737,6 +737,8 @@ Traffic.rate(t: self ref Traffic): int
 {
 	tm := now();
 	reclaim(t, tm);
+	if(tm == t.time0)
+		return 0;
 	return int (big t.winsum*big 1000/big min(int (tm-t.time0), TrafficHistsecs*1000));
 }
 

@@ -1973,8 +1973,10 @@ if(dflag > 2) say("<-newpeerc");
 				newpeers.dialfailed(np, 0, "already connected");
 		} else if(newpeers.isfaulty(ip)) {
 			say(sprint("connected to faulty ip %s", ip));
-			if(dialed)
+			if(dialed) {
+				newpeers.connected(np);
 				newpeers.disconnectfaulty(np, "connected to faulty ourselves");
+			}
 		} else {
 			if(dialed)
 				newpeers.connected(np);

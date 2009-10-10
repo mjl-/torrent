@@ -614,7 +614,7 @@ trackerstr(): string
 		return "n/a";
 	s := sprint("interval %ds", t.interval);
 	if(t.err != nil)
-		s += t.err;
+		s += ", "+t.err;
 	s += sprint(", next in %4ds", max(0, t.next-daytime->now()));
 	if(t.err == nil)
 		s += sprint(", %d peers from %s", t.npeers, t.tracker);
