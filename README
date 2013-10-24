@@ -2,6 +2,11 @@
 
 in development.  don't expect things to work yet.
 
+fwiw, it *does* appear to work though at the moment, at least at a
+basic level... I tested a torrent download as confirmation that the
+udp tracker support is working and it completed with no
+issues. -sandbender
+
 
 # intro
 
@@ -36,6 +41,9 @@ the latest version can be found at
 all files are in the public domain.  this code has been written by
 mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 
+udp tracker support added by Rudy X. Desjardins, reachable at rudy at
+sandbenders dot ca.
+
 
 # todo
 
@@ -54,7 +62,6 @@ mechiel lukkien, reachable at mechiel@ueber.net or mechiel@xs4all.nl.
 - implement rarest-first scheme?
 - handle multiple torrent files at once?  allows for better use of bandwidth
 - support magnet uri's? (bep 9)
-- udp tracker support (bep 15)
 - http seeding (bep 17 and/or bep 19)
 
 ## torrent/track
