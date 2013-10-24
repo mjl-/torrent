@@ -31,6 +31,8 @@ include "bittorrent.m";
 include "util0.m";
 	util: Util0;
 	warn, rev, pid, kill, l2a, hex, index, strip, readfile, preadn, g32i, p32i, g16, suffix, prefix, join, hasstr: import util;
+include "dial.m";
+    dial: Dial;
 
 dflag = 0;
 version: con 0;
@@ -53,6 +55,7 @@ init()
 	bitarray = load Bitarray Bitarray->PATH;
 	util = load Util0 Util0->PATH;
 	util->init();
+    dial = load Dial Dial->PATH;
 }
 
 Bee.find(bb: self ref Bee, s: string): ref Bee
@@ -1035,10 +1038,203 @@ trackerget00(tr: ref Trackreq, u: string): ref Track
 	return nil;
 }
 
+unpackint(b: array of byte, l: int): int
+{
+    d := 0;
+
+    for ( i := 0; i < l; i ++ )
+        d += (int b[l - i - 1]) << (i * 8);
+
+    return d;
+}
+
+unpack16i(b: array of byte): int { return unpackint(b, 2); }
+unpack32i(b: array of byte): int { return unpackint(b, 4); }
+
+packint(d, l: int): array of byte
+{
+    a := array[l] of byte;
+
+    for ( i := 0; i < l; i ++ )
+        a[i] = byte ((d >> ((l * 8 - 8) - (8 * i))) & 255);
+
+    return a;
+}
+
+pack16i(d: int): array of byte { return packint(d, 2); }
+pack32i(d: int): array of byte { return packint(d, 4); }
+
+pack64i(d: big): array of byte
+{
+    a := array[8] of byte;
+
+    for ( i := 0; i < 8; i ++ )
+        a[i] = byte ((d >> (56 - (8 * i))) & big 255);
+
+    return a;
+}
+
+fillbytes(sstart, dstart, length: int, src, dst: array of byte)
+{
+    for ( i := 0; i < length; i ++ )
+        dst[dstart + i] = src[sstart + i];
+}
+
 trackergetudp(tr: ref Trackreq, u: string, url: ref Url): ref Track
 {
-	trackerror("tracker url scheme 'udp' not yet supported");
-	return nil;
+    # UDP support based on udp tracker protocol spec at:
+    #   http://www.bittorrent.org/beps/bep_0015.html
+    #   http://www.rasterbar.com/products/libtorrent/udp_tracker_protocol.html
+
+    say(sprint("trackergetudp, url %q", url.pack()));
+    
+    spawn trackergetudp0(tr, u, url, pidc := chan of int, kpidc := chan of int, rc := chan of (ref Track, string));
+
+    # udp tracker protocol specifies a (15 * request number) backoff for re-transmitting messages... so we can re-use
+    # the http tracker killer function, which simply kills the tracker comm process after 15 seconds with a timeout err
+    spawn killer(pidc, kpidc, rc);
+
+    (r, err) := <-rc;
+    if (err != nil)
+        trackerror(err);
+
+    return r;
+}
+
+ipntos(ip: int): string
+{
+    # There's probably a builtin function for this... somewhere... but searching through inferno/limbo man pages, blindly,
+    # is questionable at best and I didn't wanna spend too much time just looking for it when writing a simple function
+    # would be faster... if anyone knows a better way/existing function to use, please let me know! -sandbender
+
+    o := array[4] of int;
+
+    o[0] = (int (ip / 16777216)) % 256;
+    o[1] = (int (ip / 65536)) % 256;
+    o[2] = (int (ip / 256)) % 256;
+    o[3] = (int ip) % 256;
+
+    return sprint("%d.%d.%d.%d", o[0], o[1], o[2], o[3]);
+}
+
+trackergetudp0(tr: ref Trackreq, u: string, url: ref Url, pidc: chan of int, kpidc: chan of int, rc: chan of (ref Track, string))
+{
+    # Not the cleanest or DRYest function I've ever written... but once again, I was going for speed of implementation here
+    # and NOT elegance... ie: I wanted to use this to d/l UDP-tracker-based torrents ;) This code should be pretty stable, just
+    # ugly :D -sandbender
+
+    pidc <-= pid();
+    kpid := <-kpidc;
+    {
+        txid := random->randombuf(Random->ReallyRandom, 4);
+
+        # connect request...
+        reqstruct := array[16] of byte;
+
+        fillbytes(0, 0, 8, pack64i(16r41727101980), reqstruct);   # udp protocol identifier
+        fillbytes(0, 8, 4, pack32i(0), reqstruct);   # 0 == connect action
+        fillbytes(0, 12, 4, txid, reqstruct);
+
+        # 'connect' to udp tracker...
+        cn := dial->dial(sprint("udp!%s!%s", url.host, url.port), "");
+        if (cn == nil)
+            trackerror(sprint("Could not connect to UDP host %s:%s", url.host, url.port));
+
+        # send the connect request
+        if ( 16 != sys->write(cn.dfd, reqstruct, 16) )
+            trackerror("Problem sending 'connect' udp datagram!");
+
+        # parse response
+        res := array[16] of byte;
+        if ( 16 != sys->read(cn.dfd, res, 16) )
+            trackerror("Problem - 'connect' response too small/broken!");
+
+        if ( 0 != unpack32i(res[0:4]) )
+            trackerror("Problem - 'connect' response has wrong action type!");
+
+        if ( unpack32i(txid) != unpack32i(res[4:8]) )
+            trackerror("Problem - 'connect' response has wrong txid!");
+
+        cxid := res[8:];
+
+        # announce request...
+        annstruct := array[98] of byte;
+        txid = random->randombuf(Random->ReallyRandom, 4);
+
+        fillbytes(0, 0, 8, cxid, annstruct);
+        fillbytes(0, 8, 4, pack32i(1), annstruct);   # 1 == announce action
+        fillbytes(0, 12, 4, txid, annstruct);
+        fillbytes(0, 16, 20, tr.t.infohash, annstruct);
+        fillbytes(0, 36, 20, tr.peerid, annstruct);
+        fillbytes(0, 56, 8, pack64i(tr.down), annstruct);
+        fillbytes(0, 64, 8, pack64i(tr.left), annstruct);
+        fillbytes(0, 72, 8, pack64i(tr.up), annstruct);
+
+        if (tr.event != nil) {
+            case tr.event {
+                "completed" =>
+                    fillbytes(0, 80, 4, pack32i(1), annstruct);
+                "started" =>
+                    fillbytes(0, 80, 4, pack32i(2), annstruct);
+                "stopped" =>
+                    fillbytes(0, 80, 4, pack32i(3), annstruct);
+                * =>
+                    fillbytes(0, 80, 4, pack32i(0), annstruct);
+            }
+        } else
+            fillbytes(0, 80, 4, pack32i(0), annstruct);   # event default 0
+
+        fillbytes(0, 84, 4, pack32i(0), annstruct);   # ip address... 0 == origin
+        fillbytes(0, 88, 4, array of byte tr.key, annstruct);
+        fillbytes(0, 92, 4, pack32i(200), annstruct);
+        fillbytes(0, 96, 2, pack16i(tr.lport), annstruct);
+
+        # send the announce request...
+        sent := sys->write(cn.dfd, annstruct, 98);
+        if ( 98 != sent )
+            trackerror(sprint("Problem sending 'announce' udp datagram! %d", sent));
+
+        # parse response
+        res2 := array[2048] of byte;   # Grab biggest UDP packet we can... highly unlikely that anyone's MTU is bigger than this
+        announce_read := sys->read(cn.dfd, res2, 2048);
+        if ( 20 > announce_read )
+            trackerror("Not enough data came back from announce request!");
+
+        if ( 1 != unpack32i(res2[0:4]) )
+            trackerror("Bad action type in response to announce request!");
+
+        if ( unpack32i(txid) != unpack32i(res2[4:8]) )
+            trackerror("Bad txid in announce response!");
+
+        interval := unpack32i(res2[8:12]);
+        leechers := unpack32i(res2[12:16]);
+        seeders := unpack32i(res2[16:20]);
+
+        num_to_track := announce_read - 20;   # bytes left for peer info
+        num_to_track = num_to_track - (num_to_track % 6);   # ignore final incomplete peer info if present
+        num_to_track = num_to_track / 6;  # 6 bytes / peer
+
+        peers := array[num_to_track] of Trackpeer;
+
+        pres := array[6] of byte;
+        for ( i := 0; i < num_to_track; i ++ ) {
+            fillbytes(20 + (i * 6), 0, 6, res2, pres);
+
+            tp: Trackpeer;
+
+            tp.ip = ipntos(unpack32i(pres[0:4]));
+            tp.port = unpack16i(pres[4:6]);
+
+            peers[i] = tp;
+        }
+
+        kill(kpid);
+        rc <-= (ref Track(interval, interval, peers, u, nil), nil);
+
+    } exception e {
+        "*" =>
+            rc <-= (nil, sprint("udp tracker error: %s", e));
+    }
 }
 
 killer(pidc, kpidc: chan of int, rc: chan of (ref Track, string))
